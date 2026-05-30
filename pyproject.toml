@@ -1,27 +1,34 @@
 [project]
-name = "scraperv2"
-version = "0.1.0"
-description = "Shared web scraping library: rate-limited async HTTP with obscura render fallback, article/link extraction, RSS/sitemap/discovery, and caching."
+name = "eujin"
+version = "0.2.0"
+description = "Adaptive multi-role poller with jitter (poll HTTP/RSS/JSON/commands/callables) plus a shared web-scraping toolkit (fetch/extract/cache/sources)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Muk Chunpongtong" }]
-dependencies = [
+# Core (engine + adaptive/jitter primitives + callable/command roles) is
+# dependency-free. Web roles and the scrape toolkit need the `web` extra.
+dependencies = []
+
+[project.optional-dependencies]
+web = [
     "aiohttp>=3.10",
     "selectolax>=0.3",
     "trafilatura>=1.12",
     "feedparser>=6.0",
 ]
-
-[project.optional-dependencies]
+yaml = ["pyyaml>=6.0"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+eujin = "eujin.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["scraperv2"]
+packages = ["eujin"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
