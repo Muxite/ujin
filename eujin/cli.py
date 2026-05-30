@@ -93,6 +93,13 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_api(args: argparse.Namespace) -> int:
+    from eujin.service import serve
+
+    serve(host=args.host, port=args.port, config_path=args.targets)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(prog="eujin", description=__doc__)
@@ -105,6 +112,13 @@ def main(argv: list[str] | None = None) -> int:
     p_sweep = sub.add_parser("sweep", help="poll all targets once")
     p_sweep.add_argument("targets")
     p_sweep.set_defaults(func=_cmd_sweep)
+
+    p_api = sub.add_parser("api", help="serve the REST + WebSocket API")
+    p_api.add_argument("targets", nargs="?", default=None,
+                       help="optional targets.yaml to preload")
+    p_api.add_argument("--host", default="0.0.0.0")
+    p_api.add_argument("--port", type=int, default=8900)
+    p_api.set_defaults(func=_cmd_api)
 
     args = parser.parse_args(argv)
     return args.func(args)

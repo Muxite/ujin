@@ -1,0 +1,216 @@
+% article class because we want to fully customize the page and not use a cv template
+\documentclass[a4paper,11pt]{article}
+
+%----------------------------------------------------------------------------------------
+%FONT
+%----------------------------------------------------------------------------------------
+
+% % fontspec allows you to use TTF/OTF fonts directly
+% \usepackage{fontspec}
+% \defaultfontfeatures{Ligatures=TeX}
+
+% % modified for ShareLaTeX use
+% \setmainfont[
+% SmallCapsFont = Fontin-SmallCaps.otf,
+% BoldFont = Fontin-Bold.otf,
+% ItalicFont = Fontin-Italic.otf
+% ]
+% {Fontin.otf}
+
+%----------------------------------------------------------------------------------------
+%PACKAGES
+%----------------------------------------------------------------------------------------
+\usepackage{url}
+\usepackage{parskip} 
+\usepackage[a4paper,left=1cm,right=1cm,top=1.0cm,bottom=1.0cm]{geometry}
+%other packages for formatting
+\RequirePackage{color}
+\RequirePackage{graphicx}
+\usepackage[usenames,dvipsnames]{xcolor}
+\usepackage[scale=0.9]{geometry}
+
+%tabularx environment
+\usepackage{tabularx}
+
+%for lists within experience section
+\usepackage{enumitem}
+\setlist[itemize]{label=\textcolor{black}{\textbullet}}
+\setlist[itemize]{font=\color{black}}
+\renewcommand{\labelitemi}{\textcolor{black}{\textbullet}}
+
+% centered version of 'X' col. type
+\newcolumntype{C}{>{\centering\arraybackslash}X} 
+
+%to prevent spillover of tabular into next pages
+\usepackage{supertabular}
+\usepackage{tabularx}
+\newlength{\fullcollw}
+\setlength{\fullcollw}{0.47\textwidth}
+
+%custom \section
+\usepackage{titlesec}
+\usepackage{multicol}
+\usepackage{multirow}
+
+%CV Sections inspired by: 
+%http://stefano.italians.nl/archives/26
+\titleformat{\section}{\Large\scshape\raggedright}{}{0em}{}[\titlerule]
+\titlespacing{\section}{0pt}{6pt}{6pt}
+
+%for publications
+\usepackage[style=authoryear,sorting=ynt, maxbibnames=2]{biblatex}
+
+%Setup hyperref package (Active links disabled via draft=true)
+\usepackage[unicode, draft=true]{hyperref}
+% \definecolor{linkcolour}{rgb}{0,0.2,0.6}
+% \hypersetup{colorlinks,breaklinks,urlcolor=linkcolour,linkcolor=linkcolour}
+\addbibresource{citations.bib}
+\setlength\bibitemsep{1em}
+
+%for social icons
+\usepackage{fontawesome5}
+
+%debug page outer frames
+%\usepackage{showframe}
+
+
+% job listing environments
+\newenvironment{jobshort}[2]
+    {
+    \begin{tabularx}{\linewidth}{@{}l X r@{}}
+    \textbf{#1} & \hfill &  #2 \\[3.75pt]
+    \end{tabularx}
+    }
+    {
+    }
+
+\newenvironment{joblong}[2]
+    {
+    \begin{tabularx}{\linewidth}{@{}l X r@{}}
+    \textbf{#1} & \hfill &  #2 \\[3.75pt]
+    \end{tabularx}
+    \begin{minipage}[t]{\linewidth}
+    \begin{itemize}[nosep,after=\strut, leftmargin=1em, itemsep=3pt,label=--]
+    }
+    {
+    \end{itemize}
+    \end{minipage}    
+    }
+
+
+%----------------------------------------------------------------------------------------
+%BEGIN DOCUMENT
+%----------------------------------------------------------------------------------------
+\begin{document}
+
+% non-numbered pages
+\pagestyle{empty} 
+
+%----------------------------------------------------------------------------------------
+%TITLE
+%----------------------------------------------------------------------------------------
+
+\begin{tabularx}{\linewidth}{@{}C@{}}
+\Huge{Muk Chunpongtong} \\[7.5pt]
+
+\raisebox{-0.05\height}\ github.com/muxite \ $|$ \ 
+\raisebox{-0.05\height}\ muk.chunpongtong@gmail.com \ $|$ \ 
+\raisebox{-0.05\height}\ +1\ 825\ 558\ 0137 \\
+
+\end{tabularx}
+
+
+%----------------------------------------------------------------------------------------
+%EDUCATION
+%----------------------------------------------------------------------------------------
+
+\section{Education}
+
+\begin{tabularx}{\linewidth}{@{}l X r@{}}
+\textbf{University of British Columbia (2nd Year)} & \hfill & Sept 2024 - May 2029 \\[3.75pt]
+\end{tabularx}
+\begin{minipage}[t]{\linewidth}
+Bachelor of Applied Science, Computer Engineering \hfill \textbf{Overall average: 84.2\%}
+\end{minipage}
+
+\vspace{-1mm}
+
+%----------------------------------------------------------------------------------------
+%TECHNICAL SKILLS
+%----------------------------------------------------------------------------------------
+\section{Technical Skills}
+
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{3cm} X@{}}
+Languages & Python, C/C++, Java, SQL, MATLAB, SystemVerilog, CUDA, RISC-V Assembly \\
+Libraries & OpenCV, Tensorflow, Selenium, SFML, Asyncio, PyTest, FastAPI, ReactJS \\
+Tools & Docker, AWS ECS, CMake, Bazel, Kubernetes, RabbitMQ, FPGA, ESP32, Quartus \\
+General Skills & Git, Vector Databases, Oscilloscope, Linux \& Windows CLI, SSH \\
+\end{tabularx}
+
+
+%----------------------------------------------------------------------------------------
+%WORK EXPERIENCE
+%----------------------------------------------------------------------------------------
+
+\section{Work Experience}
+
+\begin{joblong}{Teaching Assistant (APSC 160), UBC CS Department}{Oct 2025 – Jan 2026}
+\item Led weekly office hours conducting live code reviews and debugging sessions to teach problem-solving strategies.
+\item Co-hosted lab sessions for 30 students, delivering C programming mini-lectures and facilitating live Q\&A.
+\item Evaluated 300+ C assignments by manually testing code in Arduino simulator and providing targeted feedback.
+\end{joblong}
+
+\vspace{-7mm}
+
+
+%----------------------------------------------------------------------------------------
+%TECHNICAL PROJECTS
+%----------------------------------------------------------------------------------------
+
+\section{Technical Projects}
+
+\begin{joblong}{WebRAG, Autonomous Research Assistant (Full-Stack) \textit{(Personal Project)}}{Jul 2025 -- Present}
+\item Developed a scalable agentic research and reasoning assistant that decomposes queries into parallel web actions and returns structured, source-cited answers with a full website frontend.
+\item Designed a Graph-of-Thoughts planner with score-guided pruning, improving task accuracy by +26.8\% while reducing token usage by -29.3\% versus a sequential baseline.
+\item Built a benchmark runner + GDB-inspired debugger to drive experiment-based iteration on up to 34 custom scenarios, with hybrid scoring (links, key terms, LLM rubric).
+\item Added end-to-end observability across connectors and DAG nodes, logging all inputs/outputs to trace each step.
+\item Deployed on AWS: built a backend with Redis, a vector DB, ECS workers, and a custom Lambda-based autoscaler to handle concurrent requests and persistent task state.
+\end{joblong}
+
+
+
+
+\begin{joblong}{WaveSim, C++/CUDA Wave Simulation \textit{(Personal Project)}}{May 2025 - Present}
+\item Built a real-time 2D wave physics engine in C++ to simulate fluid dynamics and wave propagation for interactive visualization, using SFML for rendering and CMake for cross-platform builds.
+\item Accelerated the simulation with GPU parallel processing via CUDA, implementing the discrete wave equation and achieving 39× speedup over the CPU implementation.
+\end{joblong}
+
+\begin{joblong}{AutoSpotCV, Face Recognition Pipeline \textit{(Personal Project)}}{Jun 2024 -- Aug 2024}
+\item Built a Python face-recognition pipeline in OpenCV with automated data collection, data augmentation, and real-time inference on a custom dataset.
+  \item Implemented LBPH and a TensorFlow classifier; analyzed per-subject sensitivity scores (0.20--0.85) to identify error-prone identities and guide data collection and augmentation.
+  \item Automated collection with Selenium, capturing 1000+ labeled images and cutting manual prep by 91\%.
+\end{joblong}
+
+
+
+%----------------------------------------------------------------------------------------
+%ENGINEERING OR DESIGN STUDENT TEAMS
+%----------------------------------------------------------------------------------------
+
+
+\section{Extracurricular Student Teams}
+
+\begin{joblong}{Software Developer, UBC ThunderBots RoboCup Team \textit{(Design Team)}}{Sept 2024 -- Present}
+\item Build autonomous soccer-playing robots for international RoboCup SSL, contributed to gameplay AI and robot control in the team simulation + on-robot stack.
+\item Refactored gameplay from coroutines to FSMs in C++ (Bazel), improving maintainability and deploying smarter ball-targeting in simulation and live trials.
+\item Fixed 3 simulated Python tests, raising branch coverage by 10\% across the decision-making pipeline.
+\item Collaborated via reviews/tickets/PRs with a 20-person team to close coverage gaps.
+\end{joblong}
+
+%\begin{joblong}{President \& Cofounder, Queen Elizabeth High School Engineering Club}{Sept 2022 -- Jun 2024}
+%\item Founded and led a 40-student engineering club, planning and running hands-on projects and workshops.
+%\item Secured hundreds of dollars in school funding by pitching project proposals to faculty and the principal; delivered planters and composters with club members, expanding the community garden by 15\%.
+%\end{joblong}
+
+
+\end{document}

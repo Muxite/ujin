@@ -34,6 +34,27 @@ CLI:
 ```bash
 eujin sweep targets.yaml     # one pass; print which targets changed
 eujin serve targets.yaml     # run the engine as a daemon
+eujin api [targets.yaml]     # REST + WebSocket service on :8900
+```
+
+## Service (REST + WebSocket)
+
+`eujin.service` drives the engine over HTTP and streams change events:
+
+```
+GET  /health   GET /stats   GET /targets
+POST /targets  {kind, config, base?, min?, max?, jitter?}
+DELETE /targets/{key}        POST /sweep
+WS   /ws       -> {"event":"change","key":...,"fingerprint":...}
+```
+
+Docker:
+
+```bash
+docker compose up --build              # service on :8900
+# add a target
+curl -X POST localhost:8900/targets -H 'content-type: application/json' \
+  -d '{"kind":"http","config":{"url":"https://example.com"},"base":300}'
 ```
 
 ## How it works

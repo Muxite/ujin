@@ -18,7 +18,13 @@ web = [
     "feedparser>=6.0",
 ]
 yaml = ["pyyaml>=6.0"]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+service = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "websockets>=12.0",
+    "pyyaml>=6.0",
+]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "httpx>=0.27"]
 
 [project.scripts]
 eujin = "eujin.cli:main"
