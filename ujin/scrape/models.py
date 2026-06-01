@@ -15,18 +15,19 @@ class ScrapeRequest(BaseModel):
         description="Absolute URL to scrape. Must include scheme (http/https).",
         examples=["https://apnews.com", "https://www.reuters.com/world/"],
     )
-    mode: Literal["links", "article", "auto", "combined"] = Field(
+    mode: Literal["links", "article", "auto", "combined", "structured"] = Field(
         "links",
         description=(
             "What to extract. `links` returns the headline link-set "
             "(homepage/section pages). `article` returns cleaned body text "
             "for a single article URL. `auto` picks based on page shape. "
-            "`combined` (cycle 5) fetches RSS + HTML in parallel and merges "
+            "`combined` fetches RSS + HTML in parallel and merges "
             "the link sets by canonical URL; RSS contributes title + summary "
             "+ published, HTML contributes any breaking links not yet in "
-            "the feed."
+            "the feed. `structured` returns JSON-LD / OpenGraph / microdata "
+            "from the page in the `structured` field."
         ),
-        examples=["links", "article", "auto", "combined"],
+        examples=["links", "article", "auto", "combined", "structured"],
     )
     force_refresh: bool = Field(
         False,
@@ -300,6 +301,14 @@ class ScrapeResponse(BaseModel):
     article: Optional[ArticlePayload] = Field(
         None,
         description="Parsed article payload when `kind == 'article'`. None otherwise.",
+        examples=[None],
+    )
+    structured: Optional[dict] = Field(
+        None,
+        description=(
+            "Structured data (`jsonld`, `opengraph`, `microdata`) when "
+            "`kind == 'structured'`. None otherwise."
+        ),
         examples=[None],
     )
     final_url: Optional[str] = Field(

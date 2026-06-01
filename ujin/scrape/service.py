@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from ..extract import Article
 from ..extract.links import fingerprint_links
 from ..fetch import HttpFetcher, ObscuraFetcher
+from ..poll.base import fingerprint as _fingerprint
 from ..fetch.altpath import AltPathResult, try_rss_fallback, try_sitemap_news
 from ..sources.rss import parse_feed
 from .config import ScrapeConfig
@@ -43,13 +44,13 @@ from .scoring import NullScorer, Scorer
 logger = logging.getLogger("ujin.scrape.service")
 
 
-Mode = Literal["links", "article", "auto", "combined"]
+Mode = Literal["links", "article", "auto", "combined", "structured"]
 
 
 @dataclass
 class ScrapeResult:
     url: str
-    kind: str  # "links" | "article" | "empty"
+    kind: str  # "links" | "article" | "structured" | "empty"
     fingerprint: str
     fetched_at: float
     cached: bool
@@ -58,6 +59,7 @@ class ScrapeResult:
     strategy_used: str = "http"  # http|obscura|sitemap_news|rss|cache
     links: list[NormalizedLink] = field(default_factory=list)
     article: Optional["Article"] = None
+    structured: Optional[dict] = None
     final_url: Optional[str] = None
     note: Optional[str] = None
     next_poll_hint_secs: Optional[float] = None
@@ -174,7 +176,7 @@ class ScrapeService:
         # produced too few links to be useful (and we're in links mode).
         synth_links: Optional[list[NormalizedLink]] = None
         synth_strategy: Optional[str] = None
-        if mode != "article":
+        if mode in ("links", "auto"):
             if html is None:
                 should_try_alt = True
             elif mode == "links":
@@ -206,6 +208,32 @@ class ScrapeService:
             return self._finalize_links(
                 url, mode, synth_links, synth_strategy or "altpath",
                 loop_start, cache_key, used_renderer=used_renderer,
+            )
+
+        if mode == "structured":
+            from ..extract.structured import extract_structured
+
+            structured = extract_structured(html)
+            fingerprint = _fingerprint(structured)
+            entry = CachedEntry(
+                url=url,
+                fingerprint=fingerprint,
+                payload={"structured": structured},
+                fetched_at=time.monotonic(),
+                etag=http_meta.get("etag"),
+                last_modified=http_meta.get("last_modified"),
+            )
+            self._cache.put(cache_key, entry)
+            self._metrics.record(
+                url, success=True,
+                latency_ms=(time.monotonic() - loop_start) * 1000,
+                used_renderer=used_renderer, strategy=fetch_strategy,
+            )
+            return ScrapeResult(
+                url=url, kind="structured", fingerprint=fingerprint,
+                fetched_at=time.time(), cached=False, age_secs=0.0,
+                used_renderer=used_renderer, strategy_used=fetch_strategy,
+                structured=structured, final_url=final_url,
             )
 
         if mode == "article":

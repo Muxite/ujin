@@ -43,6 +43,9 @@ class Article:
     published: Optional[str]
     language: Optional[str]
     top_image: Optional[str]
+    # Structured data (JSON-LD / microdata / OpenGraph) when requested; the
+    # generic article path leaves it None to stay backward-compatible.
+    structured: Optional[dict] = None
 
 
 def _looks_like_index_url(url: str) -> bool:

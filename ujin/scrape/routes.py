@@ -84,6 +84,7 @@ def _result_to_response(result) -> ScrapeResponse:
             for l in result.links
         ],
         article=article,
+        structured=getattr(result, "structured", None),
         final_url=result.final_url,
         note=result.note,
         next_poll_hint_secs=getattr(result, "next_poll_hint_secs", None),

@@ -67,11 +67,20 @@ class HttpFetcher:
         self._host_locks: dict[str, asyncio.Semaphore] = {}
         self._lock_creation = asyncio.Lock()
 
-    async def start(self) -> None:
+    async def start(self, *, session: Optional["object"] = None) -> None:
+        """Open the shared session.
+
+        ``session`` may be a :class:`ujin.session.store.SessionStore` (or any
+        object exposing a ``.jar`` aiohttp CookieJar) to persist cookies across
+        requests/runs. Stored on ``self`` so callers can ``.save()`` it later.
+        """
+        self._session_store = session
         if self._session is None:
             connector = aiohttp.TCPConnector(limit=64, ttl_dns_cache=300)
+            cookie_jar = getattr(session, "jar", None)
             self._session = aiohttp.ClientSession(
-                connector=connector, timeout=self._timeout, headers=self._headers
+                connector=connector, timeout=self._timeout, headers=self._headers,
+                cookie_jar=cookie_jar,
             )
 
     async def close(self) -> None:
@@ -96,10 +105,13 @@ class HttpFetcher:
         etag: Optional[str] = None,
         last_modified: Optional[str] = None,
         extra_headers: Optional[dict[str, str]] = None,
+        proxy: Optional[str] = None,
     ) -> HttpResponse:
         """Issue GET with optional conditional headers.
 
-        Returns body='' and not_modified=True on HTTP 304.
+        ``proxy`` (e.g. from :class:`ujin.proxy.pool.ProxyPool`) routes this
+        request through an upstream proxy. Returns body='' and
+        not_modified=True on HTTP 304.
         """
         if self._session is None:
             await self.start()
@@ -120,7 +132,8 @@ class HttpFetcher:
         start = loop.time()
         async with sem:
             async with self._session.get(
-                url, headers=cond_headers or None, allow_redirects=True
+                url, headers=cond_headers or None, allow_redirects=True,
+                proxy=proxy,
             ) as resp:
                 elapsed_ms = int((loop.time() - start) * 1000)
                 if resp.status == 304:
