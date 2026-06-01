@@ -1,7 +1,7 @@
-"""eujin command line.
+"""ujin command line.
 
-  eujin serve targets.yaml      run the poll engine as a daemon
-  eujin sweep targets.yaml      one pass; print which targets changed
+  ujin serve targets.yaml      run the poll engine as a daemon
+  ujin sweep targets.yaml      one pass; print which targets changed
 
 targets.yaml::
 
@@ -24,25 +24,25 @@ import sys
 from pathlib import Path
 from typing import Any
 
-log = logging.getLogger("eujin.cli")
+log = logging.getLogger("ujin.cli")
 
 
 def _build_pollable(kind: str, cfg: dict[str, Any]):
     if kind == "http":
-        from eujin.poll.http import HttpPollable
+        from ujin.poll.http import HttpPollable
 
         return HttpPollable(cfg["url"], render=cfg.get("render", False))
     if kind == "rss":
-        from eujin.poll.rss import RssPollable
+        from ujin.poll.rss import RssPollable
 
         return RssPollable(cfg["url"])
     if kind == "api":
-        from eujin.poll.api import ApiPollable
+        from ujin.poll.api import ApiPollable
 
         return ApiPollable(cfg["url"], method=cfg.get("method", "GET"),
                            json_path=cfg.get("json_path"), headers=cfg.get("headers"))
     if kind == "command":
-        from eujin.poll.command import CommandPollable
+        from ujin.poll.command import CommandPollable
 
         return CommandPollable(cfg["argv"])
     raise ValueError(f"unknown target kind: {kind!r}")
@@ -51,8 +51,8 @@ def _build_pollable(kind: str, cfg: dict[str, Any]):
 def _load(path: str):
     import yaml
 
-    from eujin.adapt.concurrency import TokenBucket
-    from eujin.engine import PollEngine
+    from ujin.adapt.concurrency import TokenBucket
+    from ujin.engine import PollEngine
 
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     defaults = data.get("defaults", {})
@@ -80,7 +80,7 @@ def _load(path: str):
 
 def _cmd_serve(args: argparse.Namespace) -> int:
     engine = _load(args.targets)
-    log.info("eujin serve: %d target(s)", len(engine.targets))
+    log.info("ujin serve: %d target(s)", len(engine.targets))
     asyncio.run(engine.run())
     return 0
 
@@ -94,7 +94,7 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
 
 
 def _cmd_api(args: argparse.Namespace) -> int:
-    from eujin.service import serve
+    from ujin.service import serve
 
     serve(host=args.host, port=args.port, config_path=args.targets)
     return 0
@@ -102,7 +102,7 @@ def _cmd_api(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    parser = argparse.ArgumentParser(prog="eujin", description=__doc__)
+    parser = argparse.ArgumentParser(prog="ujin", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_serve = sub.add_parser("serve", help="run the poll engine (daemon)")

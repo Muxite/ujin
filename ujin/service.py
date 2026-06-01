@@ -1,4 +1,4 @@
-"""eujin service — drive the poll engine over REST + WebSocket.
+"""ujin service — drive the poll engine over REST + WebSocket.
 
 REST controls the engine (add/list/remove targets, sweep, stats); a WebSocket
 streams change events live as targets change. The engine runs as a background
@@ -13,7 +13,7 @@ Endpoints:
   POST   /sweep           run one pass now; returns per-target change flags
   WS     /ws              stream {"event":"change", "key":..., "fingerprint":...}
 
-Build with :func:`create_app` to embed, or run ``eujin api`` / :func:`serve`.
+Build with :func:`create_app` to embed, or run ``ujin api`` / :func:`serve`.
 Needs the ``service`` extra (fastapi, uvicorn, websockets).
 """
 from __future__ import annotations
@@ -34,7 +34,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     _HAVE_FASTAPI = False
 
-log = logging.getLogger("eujin.service")
+log = logging.getLogger("ujin.service")
 
 
 class AddTarget(BaseModel):
@@ -80,11 +80,11 @@ class _Hub:
 def create_app(config_path: str | None = None, *, run_engine: bool = True) -> Any:
     if not _HAVE_FASTAPI:  # pragma: no cover
         raise RuntimeError(
-            "eujin service needs the 'service' extra: pip install 'eujin[service]'"
+            "ujin service needs the 'service' extra: pip install 'ujin[service]'"
         )
 
-    from eujin.cli import _build_pollable, _load
-    from eujin.engine import PollEngine
+    from ujin.cli import _build_pollable, _load
+    from ujin.engine import PollEngine
 
     engine: PollEngine = _load(config_path) if config_path else PollEngine()
     hub = _Hub()
@@ -118,7 +118,7 @@ def create_app(config_path: str | None = None, *, run_engine: bool = True) -> An
                 except asyncio.CancelledError:
                     pass
 
-    app = FastAPI(title="eujin", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="ujin", version="0.2.0", lifespan=lifespan)
 
     @app.get("/health")
     def health() -> dict[str, Any]:

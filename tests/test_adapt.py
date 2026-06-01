@@ -5,10 +5,10 @@ import random
 
 import pytest
 
-from eujin.adapt import jitter
-from eujin.adapt.backoff import Backoff, CircuitBreaker
-from eujin.adapt.concurrency import AIMDLimiter, TokenBucket
-from eujin.adapt.interval import AdaptiveInterval
+from ujin.adapt import jitter
+from ujin.adapt.backoff import Backoff, CircuitBreaker
+from ujin.adapt.concurrency import AIMDLimiter, TokenBucket
+from ujin.adapt.interval import AdaptiveInterval
 
 
 # -- AdaptiveInterval -------------------------------------------------------- #

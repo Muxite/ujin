@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 
-from eujin.poll.base import PollResult, decide_changed, fingerprint
+from ujin.poll.base import PollResult, decide_changed, fingerprint
 
 
 class RssPollable:
@@ -19,9 +19,9 @@ class RssPollable:
 
     async def poll(self, prev: PollResult | None) -> PollResult:
         try:
-            from eujin.sources.rss import parse_feed
+            from ujin.sources.rss import parse_feed
         except ImportError:
-            return PollResult.failure("feedparser required: pip install 'eujin[web]'")
+            return PollResult.failure("feedparser required: pip install 'ujin[web]'")
 
         start = time.monotonic()
         try:

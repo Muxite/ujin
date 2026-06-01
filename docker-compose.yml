@@ -1,11 +1,11 @@
-# eujin poll-engine service. REST + WebSocket on :8900.
+# ujin poll-engine service. REST + WebSocket on :8900.
 #   docker compose up --build
 # Add targets at runtime via REST (POST /targets) or preload a targets.yaml by
 # uncommenting the volume + command below.
 services:
-  eujin:
+  ujin:
     build: .
-    image: eujin:latest
+    image: ujin:latest
     ports:
       - "8900:8900"
     # volumes:

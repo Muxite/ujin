@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import random
 
-from eujin.adapt.concurrency import TokenBucket
-from eujin.engine import PollEngine
-from eujin.poll.callable import CallablePollable
+from ujin.adapt.concurrency import TokenBucket
+from ujin.engine import PollEngine
+from ujin.poll.callable import CallablePollable
 
 
 class FakeTime:

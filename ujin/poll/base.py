@@ -1,6 +1,6 @@
 """Poll contracts: what it means to be pollable, and the result shape.
 
-A *pollable* is anything eujin can check repeatedly for change — an HTTP page, an
+A *pollable* is anything ujin can check repeatedly for change — an HTTP page, an
 RSS feed, a JSON API, a shell command, or an arbitrary Python callable. Each poll
 returns a :class:`PollResult` carrying a content ``fingerprint`` so the engine can
 tell whether anything changed and adapt its cadence accordingly.
@@ -19,7 +19,7 @@ from typing import Any, Protocol, runtime_checkable
 def fingerprint(data: Any) -> str:
     """Stable sha256 of arbitrary data (bytes/str/JSON-able) for change detection.
 
-    Mirrors the fingerprint idea in ``eujin.cache.store.CachedEntry`` but works on
+    Mirrors the fingerprint idea in ``ujin.cache.store.CachedEntry`` but works on
     any payload: bytes as-is, str utf-8, everything else via canonical JSON.
     """
     if isinstance(data, (bytes, bytearray)):
@@ -58,7 +58,7 @@ class PollResult:
 
 @runtime_checkable
 class Pollable(Protocol):
-    """Anything eujin can poll.
+    """Anything ujin can poll.
 
     ``key`` is a stable identity used for state/persistence. ``poll`` receives the
     previous :class:`PollResult` (or ``None`` on first poll) so it can do

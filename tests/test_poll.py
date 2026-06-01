@@ -1,9 +1,9 @@
 """Pollable roles (offline) + base fingerprint/change logic."""
 from __future__ import annotations
 
-from eujin.poll.base import PollResult, decide_changed, fingerprint
-from eujin.poll.callable import CallablePollable
-from eujin.poll.command import CommandPollable
+from ujin.poll.base import PollResult, decide_changed, fingerprint
+from ujin.poll.callable import CallablePollable
+from ujin.poll.command import CommandPollable
 
 
 def test_fingerprint_stable_and_distinct():

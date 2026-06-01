@@ -1,6 +1,6 @@
 """Error backoff and a circuit breaker.
 
-When a target errors (timeout, 5xx) or is rate-limited (429), eujin should slow
+When a target errors (timeout, 5xx) or is rate-limited (429), ujin should slow
 down rather than keep hammering. :class:`Backoff` produces an exponentially
 growing delay that honors a provider-supplied ``retry_after``. :class:`CircuitBreaker`
 trips after repeated failures so a dead target is skipped entirely until a probe.

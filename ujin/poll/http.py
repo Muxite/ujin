@@ -1,6 +1,6 @@
 """HttpPollable — poll a web page for change.
 
-Uses :class:`eujin.fetch.http.HttpFetcher` (per-host concurrency + conditional
+Uses :class:`ujin.fetch.http.HttpFetcher` (per-host concurrency + conditional
 GET). On each poll it sends the previous ETag/Last-Modified; an HTTP 304 is a
 cheap "unchanged". Otherwise the body is fingerprinted and compared. Optional
 obscura render for JS/anti-bot pages.
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 
-from eujin.poll.base import PollResult, decide_changed, fingerprint
+from ujin.poll.base import PollResult, decide_changed, fingerprint
 
 
 class HttpPollable:
@@ -29,7 +29,7 @@ class HttpPollable:
 
     async def _get_fetcher(self):
         if self._fetcher is None:
-            from eujin.fetch.http import HttpFetcher
+            from ujin.fetch.http import HttpFetcher
 
             self._fetcher = HttpFetcher()
             await self._fetcher.start()
@@ -43,7 +43,7 @@ class HttpPollable:
 
         try:
             if self.render:
-                from eujin.fetch.obscura import ObscuraFetcher
+                from ujin.fetch.obscura import ObscuraFetcher
 
                 html = await ObscuraFetcher().render_html(self.url)
                 body, status, et, lm = html, 200, None, None

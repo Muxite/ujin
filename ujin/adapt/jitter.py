@@ -1,4 +1,4 @@
-"""Jitter strategies — the "stable, not spiky" half of eujin.
+"""Jitter strategies — the "stable, not spiky" half of ujin.
 
 Without jitter, many targets on the same cadence drift into phase and fire
 together, producing periodic load spikes. Randomizing each delay spreads work

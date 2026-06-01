@@ -2,7 +2,7 @@
 
 Back off targets that aren't changing; speed up targets that are. This keeps the
 engine responsive to active sources while not hammering static ones — the
-"adaptive" half of eujin. Pure and deterministic (no clock), so it's trivially
+"adaptive" half of ujin. Pure and deterministic (no clock), so it's trivially
 testable.
 """
 from __future__ import annotations

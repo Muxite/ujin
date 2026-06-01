@@ -1,7 +1,7 @@
 """CallablePollable — poll any Python function. The most general role.
 
-Wrap any sync or async callable; eujin fingerprints its return value to detect
-change. This is what makes eujin "poll ANYTHING": a DB row count, a file's mtime,
+Wrap any sync or async callable; ujin fingerprints its return value to detect
+change. This is what makes ujin "poll ANYTHING": a DB row count, a file's mtime,
 a queue depth, an in-process metric — anything you can express as a function.
 """
 from __future__ import annotations
@@ -11,7 +11,7 @@ import inspect
 import time
 from typing import Any, Awaitable, Callable
 
-from eujin.poll.base import PollResult, decide_changed, fingerprint
+from ujin.poll.base import PollResult, decide_changed, fingerprint
 
 
 class CallablePollable:

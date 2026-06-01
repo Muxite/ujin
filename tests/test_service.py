@@ -1,4 +1,4 @@
-"""eujin REST + WebSocket service. Skips if fastapi isn't installed."""
+"""ujin REST + WebSocket service. Skips if fastapi isn't installed."""
 from __future__ import annotations
 
 import pytest
@@ -6,7 +6,7 @@ import pytest
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from eujin.service import create_app  # noqa: E402
+from ujin.service import create_app  # noqa: E402
 
 
 @pytest.fixture

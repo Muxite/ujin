@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-from eujin.poll.base import PollResult, decide_changed, fingerprint
+from ujin.poll.base import PollResult, decide_changed, fingerprint
 
 
 class CommandPollable:

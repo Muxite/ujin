@@ -20,13 +20,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from eujin.adapt import jitter as _jitter
-from eujin.adapt.backoff import Backoff, CircuitBreaker
-from eujin.adapt.concurrency import TokenBucket
-from eujin.adapt.interval import AdaptiveInterval
-from eujin.poll.base import Pollable, PollResult
+from ujin.adapt import jitter as _jitter
+from ujin.adapt.backoff import Backoff, CircuitBreaker
+from ujin.adapt.concurrency import TokenBucket
+from ujin.adapt.interval import AdaptiveInterval
+from ujin.poll.base import Pollable, PollResult
 
-log = logging.getLogger("eujin.engine")
+log = logging.getLogger("ujin.engine")
 
 OnChange = Callable[[str, PollResult], Awaitable[None] | None]
 

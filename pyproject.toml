@@ -1,5 +1,5 @@
 [project]
-name = "eujin"
+name = "ujin"
 version = "0.2.0"
 description = "Adaptive multi-role poller with jitter (poll HTTP/RSS/JSON/commands/callables) plus a shared web-scraping toolkit (fetch/extract/cache/sources)."
 readme = "README.md"
@@ -27,14 +27,14 @@ service = [
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "httpx>=0.27"]
 
 [project.scripts]
-eujin = "eujin.cli:main"
+ujin = "ujin.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["eujin"]
+packages = ["ujin"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from eujin.poll.base import PollResult, decide_changed, fingerprint
+from ujin.poll.base import PollResult, decide_changed, fingerprint
 
 
 def _dig(obj: Any, path: str | None) -> Any:
@@ -51,7 +51,7 @@ class ApiPollable:
         try:
             import aiohttp
         except ImportError:
-            return PollResult.failure("aiohttp required: pip install 'eujin[web]'")
+            return PollResult.failure("aiohttp required: pip install 'ujin[web]'")
 
         start = time.monotonic()
         try:
