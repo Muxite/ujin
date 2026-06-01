@@ -100,6 +100,14 @@ def _cmd_api(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_scrape_serve(args: argparse.Namespace) -> int:
+    from ujin.scrape.app import serve
+    from ujin.scrape.config import ScrapeConfig
+
+    serve(host=args.host, port=args.port, config=ScrapeConfig.from_env())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(prog="ujin", description=__doc__)
@@ -119,6 +127,13 @@ def main(argv: list[str] | None = None) -> int:
     p_api.add_argument("--host", default="0.0.0.0")
     p_api.add_argument("--port", type=int, default=8900)
     p_api.set_defaults(func=_cmd_api)
+
+    p_scrape = sub.add_parser(
+        "scrape-serve", help="serve the rich scrape HTTP API (/scrape /feed ...)"
+    )
+    p_scrape.add_argument("--host", default="0.0.0.0")
+    p_scrape.add_argument("--port", type=int, default=8901)
+    p_scrape.set_defaults(func=_cmd_scrape_serve)
 
     args = parser.parse_args(argv)
     return args.func(args)
