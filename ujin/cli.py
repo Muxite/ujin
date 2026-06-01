@@ -45,6 +45,11 @@ def _build_pollable(kind: str, cfg: dict[str, Any]):
         from ujin.poll.command import CommandPollable
 
         return CommandPollable(cfg["argv"])
+    if kind == "site":
+        from ujin.poll.site import SitePollable
+
+        return SitePollable(cfg["url"], cfg.get("selectors"),
+                            render=cfg.get("render", False))
     raise ValueError(f"unknown target kind: {kind!r}")
 
 
@@ -108,6 +113,31 @@ def _cmd_scrape_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_watch(args: argparse.Namespace) -> int:
+    """Watch one URL's selected regions; log or webhook on change."""
+    from ujin.diff.events import CallbackSink, WebhookSink
+    from ujin.engine import PollEngine
+    from ujin.poll.site import SitePollable
+
+    pollable = SitePollable(args.url, args.selector or None, render=args.render)
+    if args.webhook:
+        on_change = WebhookSink(args.webhook)
+    else:
+        def _log(event) -> None:
+            log.info("CHANGED %s regions=%s fp=%s",
+                     event.key, event.regions or "(whole-page)",
+                     (event.fingerprint or "")[:12])
+
+        on_change = CallbackSink(_log)
+
+    engine = PollEngine()
+    engine.add(pollable, base=args.base, min_interval=args.min,
+               max_interval=args.max, on_change=on_change)
+    log.info("ujin watch: %s (%d selector(s))", args.url, len(args.selector or []))
+    asyncio.run(engine.run())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(prog="ujin", description=__doc__)
@@ -134,6 +164,21 @@ def main(argv: list[str] | None = None) -> int:
     p_scrape.add_argument("--host", default="0.0.0.0")
     p_scrape.add_argument("--port", type=int, default=8901)
     p_scrape.set_defaults(func=_cmd_scrape_serve)
+
+    p_watch = sub.add_parser(
+        "watch", help="watch a URL's regions for change (adaptive, jittered)"
+    )
+    p_watch.add_argument("url")
+    p_watch.add_argument("--selector", action="append", default=[],
+                         help="CSS selector to watch (repeatable; omit for whole page)")
+    p_watch.add_argument("--webhook", default=None,
+                         help="POST change events here (default: log)")
+    p_watch.add_argument("--render", action="store_true",
+                         help="render via obscura before extracting")
+    p_watch.add_argument("--base", type=float, default=60.0)
+    p_watch.add_argument("--min", type=float, default=5.0)
+    p_watch.add_argument("--max", type=float, default=3600.0)
+    p_watch.set_defaults(func=_cmd_watch)
 
     args = parser.parse_args(argv)
     return args.func(args)
