@@ -49,6 +49,11 @@ class ScrapeConfig:
     nitter_pool_path: str = ""
     x_allow_brave: bool = True
 
+    # When true, the scrape app wires a corroboration store, an x-trends
+    # refresh loop, and a BreakingScorer (news-trading semantics). Off by
+    # default — the generic app uses NullScorer.
+    enable_breaking_scorer: bool = False
+
     # Trends / corroboration (used only when a BreakingScorer is wired).
     corroboration_window_secs: int = 1800
     corroboration_min_hosts: int = 3
@@ -82,6 +87,7 @@ class ScrapeConfig:
         "batch_max_items": "BATCH_MAX_ITEMS",
         "nitter_pool_path": "NITTER_POOL_PATH",
         "x_allow_brave": "X_ALLOW_BRAVE",
+        "enable_breaking_scorer": "UJIN_BREAKING_SCORER",
         "corroboration_window_secs": "CORROBORATION_WINDOW_SECS",
         "corroboration_min_hosts": "CORROBORATION_MIN_HOSTS",
         "corroboration_max_hosts_for_full_score": "CORROBORATION_MAX_HOSTS",

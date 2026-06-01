@@ -12,7 +12,9 @@ either or both.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
@@ -23,6 +25,7 @@ from .config import ScrapeConfig
 from .host_overrides import HostOverrideRegistry
 from .metrics import HostMetrics
 from .routes import router as core_router
+from .routes_social import router as social_router
 from .scoring import NullScorer, Scorer
 from .service import ScrapeService
 
@@ -48,7 +51,6 @@ def create_scrape_app(
         ) from exc
 
     cfg = config or ScrapeConfig.from_env()
-    the_scorer = scorer or NullScorer()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -69,6 +71,67 @@ def create_scrape_app(
             if cfg.per_host_config_path
             else HostOverrideRegistry()
         )
+
+        # Optional nitter pool for the X chain's free leg.
+        nitter_pool = None
+        if cfg.nitter_pool_path:
+            from ..sources.social import NitterPool
+
+            nitter_pool = NitterPool.from_yaml(cfg.nitter_pool_path)
+            logger.info("nitter pool: %d mirrors", len(nitter_pool.mirrors))
+
+        # Resolve the scorer. An explicit `scorer` wins; otherwise wire a
+        # BreakingScorer (+ corroboration store + x-trends loop) when enabled,
+        # else stay generic with NullScorer.
+        corroboration = None
+        trends_task: Optional[asyncio.Task] = None
+        the_scorer: Scorer
+        if scorer is not None:
+            the_scorer = scorer
+        elif cfg.enable_breaking_scorer:
+            from ..sources.social import fetch_x_trends
+            from ..trends import BreakingScorer, CorroborationStore, Weights
+
+            corroboration = CorroborationStore(
+                window_secs=cfg.corroboration_window_secs,
+                max_entries=cfg.headline_ring_max,
+                min_hosts_for_corroboration=cfg.corroboration_min_hosts,
+                max_hosts_for_full_score=cfg.corroboration_max_hosts_for_full_score,
+            )
+            trends_state = {"terms": [], "fetched_at": 0.0}
+
+            async def _refresh_trends_loop():
+                while True:
+                    try:
+                        result = await fetch_x_trends("united-states", 30)
+                        trends_state["terms"] = [
+                            t.tag.lstrip("#") for t in result.items if t.tag
+                        ]
+                        trends_state["fetched_at"] = time.time()
+                        logger.info(
+                            "x-trends refreshed: %d terms via %s",
+                            len(trends_state["terms"]), result.source,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("x-trends refresh failed: %s", exc)
+                    await asyncio.sleep(300.0)
+
+            trends_task = asyncio.create_task(_refresh_trends_loop())
+            the_scorer = BreakingScorer(
+                overrides=overrides,
+                corroboration=corroboration,
+                trend_terms_provider=lambda: list(trends_state["terms"]),
+                weights=Weights(
+                    source_rank=cfg.tier_weight_source_rank,
+                    lede_marker=cfg.tier_weight_lede_marker,
+                    recency=cfg.tier_weight_recency,
+                    corroboration=cfg.tier_weight_corroboration,
+                    trend_overlap=cfg.tier_weight_trend_overlap,
+                ),
+                breaking_threshold=cfg.breaking_threshold,
+            )
+        else:
+            the_scorer = NullScorer()
 
         disk: DiskCache | None = None
         if cfg.disk_cache_path:
@@ -101,14 +164,19 @@ def create_scrape_app(
         app.state.overrides = overrides
         app.state.service = service
         app.state.disk_cache = disk
-        # M4 hooks — populated when social/trends are wired.
-        app.state.nitter_pool = None
-        app.state.corroboration = None
+        app.state.nitter_pool = nitter_pool
+        app.state.corroboration = corroboration
 
         logger.info("ujin scrape service ready")
         try:
             yield
         finally:
+            if trends_task is not None:
+                trends_task.cancel()
+                try:
+                    await trends_task
+                except (asyncio.CancelledError, Exception):
+                    pass
             if disk is not None:
                 try:
                     disk.flush_from(list(cache.items()))
@@ -120,6 +188,7 @@ def create_scrape_app(
 
     app = FastAPI(title="ujin-scrape", version="0.3.0", lifespan=lifespan)
     app.include_router(core_router)
+    app.include_router(social_router)
     return app
 
 
