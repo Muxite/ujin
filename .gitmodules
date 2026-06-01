@@ -1,0 +1,3 @@
+[submodule "ujin/obscura"]
+	path = ujin/obscura
+	url = https://github.com/Muxite/obscura.git

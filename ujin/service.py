@@ -118,7 +118,7 @@ def create_app(config_path: str | None = None, *, run_engine: bool = True) -> An
                 except asyncio.CancelledError:
                     pass
 
-    app = FastAPI(title="ujin", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="ujin", version="0.3.0", lifespan=lifespan)
 
     @app.get("/health")
     def health() -> dict[str, Any]:

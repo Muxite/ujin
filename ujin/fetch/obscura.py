@@ -22,6 +22,7 @@ import asyncio
 import contextlib
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 
@@ -40,22 +41,47 @@ class ObscuraResult:
     elapsed_ms: int
 
 
-def _obscura_bin() -> str:
-    return os.environ.get("OBSCURA_BIN", "obscura")
+def _bundled_binary() -> Optional[str]:
+    """Path to the obscura binary built from the bundled ``ujin/obscura``
+    submodule, if it exists. ``ujin obscura-build`` produces it."""
+    candidate = (
+        Path(__file__).resolve().parents[1] / "obscura" / "target" / "release" / "obscura"
+    )
+    return str(candidate) if candidate.is_file() else None
 
 
 def _obscura_url() -> Optional[str]:
     return os.environ.get("OBSCURA_URL")
 
 
+def _obscura_bin() -> str:
+    """Resolve the binary path. Order: explicit OBSCURA_BIN env, then the
+    bundled submodule build, then bare ``obscura`` (found on PATH)."""
+    explicit = os.environ.get("OBSCURA_BIN")
+    if explicit:
+        return explicit
+    bundled = _bundled_binary()
+    if bundled:
+        return bundled
+    return "obscura"
+
+
 def obscura_available() -> bool:
-    """Synchronous check: is obscura reachable (binary on PATH or URL set)?"""
+    """Synchronous check: is obscura reachable?
+
+    True when an HTTP service URL is configured, or a binary resolves —
+    explicit OBSCURA_BIN, the bundled submodule build, or ``obscura`` on PATH.
+    """
     import shutil
 
-    url = _obscura_url()
-    if url:
+    if _obscura_url():
         return True  # assume HTTP endpoint is up when URL is configured
-    return shutil.which(_obscura_bin()) is not None
+    explicit = os.environ.get("OBSCURA_BIN")
+    if explicit:
+        return shutil.which(explicit) is not None or Path(explicit).is_file()
+    if _bundled_binary():
+        return True
+    return shutil.which("obscura") is not None
 
 
 class ObscuraFetcher:

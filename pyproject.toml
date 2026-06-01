@@ -1,16 +1,17 @@
 [project]
 name = "ujin"
-version = "0.2.0"
-description = "Adaptive multi-role poller with jitter (poll HTTP/RSS/JSON/commands/callables) plus a shared web-scraping toolkit (fetch/extract/cache/sources)."
+version = "0.3.0"
+description = "The ultimate scraper-poller: adaptive multi-role poller with jitter, a rich scrape HTTP service (HTTP→obscura→sitemap→RSS fallback chain), site-change detection, social/trends sources, and a bundled headless renderer."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Muk Chunpongtong" }]
 # Core (engine + adaptive/jitter primitives + callable/command roles) is
-# dependency-free. Web roles and the scrape toolkit need the `web` extra.
+# dependency-free. Everything heavier is layered behind the extras below.
 dependencies = []
 
 [project.optional-dependencies]
+# HTTP + parsing toolkit (fetch/extract/cache/sources).
 web = [
     "aiohttp>=3.10",
     "selectolax>=0.3",
@@ -18,13 +19,25 @@ web = [
     "feedparser>=6.0",
 ]
 yaml = ["pyyaml>=6.0"]
+# Poller control service + the scrape HTTP surface need a web framework.
 service = [
+    "ujin[web,yaml]",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "websockets>=12.0",
-    "pyyaml>=6.0",
+    "pydantic>=2",
 ]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "httpx>=0.27"]
+# The rich scrape HTTP service (/scrape /feed /sitemap /discover ...).
+scrape = ["ujin[web,yaml,service]"]
+# Social + trends sources (X/Mastodon/Truth/Twitter, corroboration).
+social = ["ujin[web,yaml]"]
+# Site-change detection (selector-scoped diff + webhook sink).
+diff = ["ujin[web]"]
+# Cookie/session persistence + proxy rotation.
+sessions = ["ujin[web]"]
+# Everything.
+all = ["ujin[web,yaml,service,scrape,social,diff,sessions]"]
+dev = ["ujin[all]", "pytest>=8.0", "pytest-asyncio>=0.23", "httpx>=0.27"]
 
 [project.scripts]
 ujin = "ujin.cli:main"
@@ -35,6 +48,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ujin"]
+# The obscura submodule is a Rust crate vendored inside the package dir. It
+# must NEVER ship in the wheel — `pip install ujin` stays pure-python and never
+# triggers a cargo build. The renderer is built separately via `ujin obscura-build`.
+exclude = ["ujin/obscura"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

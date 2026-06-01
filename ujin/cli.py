@@ -113,6 +113,31 @@ def _cmd_scrape_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_obscura_build(args: argparse.Namespace) -> int:
+    """Init the bundled obscura submodule and build the release binary.
+
+    This is the only step that needs the Rust toolchain; it is never run at
+    pip-install time. The first build compiles V8 and is slow (~15-20 min).
+    """
+    import subprocess
+
+    repo_root = Path(__file__).resolve().parents[1].parent
+    submodule = repo_root / "ujin" / "obscura"
+    log.info("initializing obscura submodule at %s", submodule)
+    subprocess.run(
+        ["git", "submodule", "update", "--init", "ujin/obscura"],
+        cwd=repo_root, check=True,
+    )
+    if not (submodule / "Cargo.toml").exists():
+        log.error("obscura submodule has no Cargo.toml at %s", submodule)
+        return 1
+    log.info("building obscura (cargo build --release) — first build is slow")
+    subprocess.run(["cargo", "build", "--release"], cwd=submodule, check=True)
+    binary = submodule / "target" / "release" / "obscura"
+    log.info("obscura built: %s", binary)
+    return 0
+
+
 def _cmd_watch(args: argparse.Namespace) -> int:
     """Watch one URL's selected regions; log or webhook on change."""
     from ujin.diff.events import CallbackSink, WebhookSink
@@ -179,6 +204,11 @@ def main(argv: list[str] | None = None) -> int:
     p_watch.add_argument("--min", type=float, default=5.0)
     p_watch.add_argument("--max", type=float, default=3600.0)
     p_watch.set_defaults(func=_cmd_watch)
+
+    p_obs = sub.add_parser(
+        "obscura-build", help="init + build the bundled obscura renderer (needs cargo)"
+    )
+    p_obs.set_defaults(func=_cmd_obscura_build)
 
     args = parser.parse_args(argv)
     return args.func(args)
