@@ -3,3 +3,11 @@ __pycache__
 *.pyc
 .pytest_cache
 cv.tex
+dist/
+build/
+*.egg-info/
+.venv/
+# Rust build output — never needed in the build context. (The obscura source
+# IS sent, because the ujin-full target's Rust stage compiles it.)
+ujin/obscura/target/
+**/target/

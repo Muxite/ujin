@@ -1,14 +1,55 @@
-# ujin poll-engine service. REST + WebSocket on :8900.
-#   docker compose up --build
-# Add targets at runtime via REST (POST /targets) or preload a targets.yaml by
-# uncommenting the volume + command below.
+# ujin services.
+#
+#   docker compose up --build                 # poller (:8900) + scrape API (:8901)
+#   docker compose --profile render up --build # also build the obscura-enabled
+#                                              # scrape service (slow first build)
+#
+# The default services use the pure-python `ujin` build target (fast). The
+# `render` profile builds `ujin-full`, which bakes the obscura headless renderer
+# in for JS-heavy / anti-bot pages (binary mode via OBSCURA_BIN).
+
 services:
-  ujin:
-    build: .
+  # Adaptive poll engine — REST + WebSocket control plane.
+  ujin-poller:
+    build:
+      context: .
+      target: ujin
     image: ujin:latest
+    command: ["api", "--host", "0.0.0.0", "--port", "8900"]
     ports:
       - "8900:8900"
-    # volumes:
-    #   - ./targets.yaml:/app/targets.yaml:ro
-    # command: ["api", "/app/targets.yaml", "--host", "0.0.0.0", "--port", "8900"]
+    restart: unless-stopped
+
+  # Rich scrape HTTP service — /scrape /feed /sitemap /discover /social/* ...
+  ujin-scrape:
+    build:
+      context: .
+      target: ujin
+    image: ujin:latest
+    command: ["scrape-serve", "--host", "0.0.0.0", "--port", "8901"]
+    environment:
+      # Generic by default. Set UJIN_BREAKING_SCORER=1 for news-trading scoring,
+      # SEARCH_API_KEY for the Brave-backed social legs, etc.
+      - UJIN_BREAKING_SCORER=${UJIN_BREAKING_SCORER:-}
+      - SEARCH_API_KEY=${SEARCH_API_KEY:-}
+    ports:
+      - "8901:8901"
+    init: true            # reap any obscura/browser <defunct> subprocesses
+    restart: unless-stopped
+
+  # Opt-in: scrape service WITH the obscura renderer baked in (slow first build:
+  # cargo compiles V8). Same API on :8901, published here as :8902.
+  ujin-scrape-render:
+    profiles: ["render"]
+    build:
+      context: .
+      target: ujin-full
+    image: ujin:full
+    command: ["scrape-serve", "--host", "0.0.0.0", "--port", "8901"]
+    environment:
+      - UJIN_BREAKING_SCORER=${UJIN_BREAKING_SCORER:-}
+      - SEARCH_API_KEY=${SEARCH_API_KEY:-}
+    ports:
+      - "8902:8901"
+    init: true
     restart: unless-stopped

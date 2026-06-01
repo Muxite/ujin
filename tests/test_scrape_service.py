@@ -168,6 +168,32 @@ async def test_obscura_fallback_when_http_4xx():
     assert result.links == []
 
 
+async def test_structured_mode_extracts_and_survives_304():
+    """mode=structured returns the structured dict, and a 304 revalidation
+    serves it back as kind=structured (not mis-rendered as links)."""
+    home = "https://site.example.com/"
+    html = ('<html><head><meta property="og:title" content="Hello">'
+            '</head><body></body></html>')
+    cache = ScrapeCache()
+    # First fetch: real extraction.
+    http = FakeHttp({home: HttpResponse(url=home, status=200, body=html,
+                                        etag='"v1"', final_url=home)})
+    svc = _service(http, cache=cache)
+    r1 = await svc.scrape(home, mode="structured")
+    assert r1.kind == "structured"
+    assert r1.structured["opengraph"]["og:title"] == "Hello"
+
+    # Second fetch: server returns 304 → served from cache, still structured.
+    http304 = FakeHttp({home: HttpResponse(url=home, status=200, body=html,
+                                           final_url=home)}, not_modified=True)
+    svc2 = ScrapeService(http=http304, obscura=FakeObscura(), cache=cache,
+                         policy=HostPolicy(cooldown_secs=60), config=ScrapeConfig())
+    r2 = await svc2.scrape(home, mode="structured")
+    assert r2.cached is True
+    assert r2.kind == "structured"
+    assert r2.structured["opengraph"]["og:title"] == "Hello"
+
+
 async def test_fetch_failure_raises_when_nothing_extractable():
     """HTTP 403 + obscura unavailable + no sitemap → fetch failure raises."""
     home = "https://dead.example.com/"

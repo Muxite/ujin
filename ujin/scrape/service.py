@@ -801,6 +801,17 @@ class ScrapeService:
                 article=entry.payload.get("article"),
                 note=note,
             )
+        if mode == "structured":
+            return ScrapeResult(
+                url=entry.url,
+                kind="structured" if entry.payload.get("structured") else "empty",
+                fingerprint=entry.fingerprint,
+                fetched_at=time.time(),
+                cached=True, age_secs=entry.age_secs,
+                used_renderer=False, strategy_used="cache",
+                structured=entry.payload.get("structured"),
+                note=note,
+            )
         return ScrapeResult(
             url=entry.url, kind="links",
             fingerprint=entry.fingerprint,
