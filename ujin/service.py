@@ -170,6 +170,28 @@ def create_app(config_path: str | None = None, *, run_engine: bool = True) -> An
             "targets": len(engine.targets),
         }
 
+    @app.get("/content")
+    def content(key: str) -> dict[str, Any]:
+        """Return the body ujin last fetched for *key*, plus change status.
+
+        Lets a consumer (e.g. hct-chron) reuse the content ujin already
+        retrieved instead of re-fetching the (anti-bot) origin itself. ``key``
+        is the target key — for HTTP targets that is the URL.
+        """
+        t = engine.targets.get(key)
+        if t is None or t.prev is None:
+            raise HTTPException(404, f"no content for {key!r}")
+        p = t.prev
+        body = p.payload.get("body", "") if isinstance(p.payload, dict) else ""
+        return {
+            "key": key,
+            "changed": p.changed,
+            "fingerprint": p.fingerprint,
+            "ts": p.ts,
+            "status": p.status,
+            "body": body or "",
+        }
+
     @app.websocket("/ws")
     async def ws(socket: WebSocket) -> None:
         await socket.accept()
