@@ -34,6 +34,7 @@ __all__ = [
     "RssPollable",
     "ApiPollable",
     "AdaptiveInterval",
+    "register",
     "__version__",
 ]
 
@@ -60,4 +61,8 @@ def __getattr__(name: str):
         from ujin.adapt.interval import AdaptiveInterval
 
         return AdaptiveInterval
+    if name == "register":
+        from ujin.registry import register
+
+        return register
     raise AttributeError(f"module 'ujin' has no attribute {name!r}")

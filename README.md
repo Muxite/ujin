@@ -57,6 +57,64 @@ ujin watch https://example.com --selector main --webhook https://hooks/me
 Fingerprints only the regions matched by your selectors, so cosmetic churn
 elsewhere doesn't trip the watcher. Drives the same adaptive engine.
 
+## Jobs — configure almost any task over REST
+
+The unified control plane turns "watch this source, filter it, send it somewhere,
+on a timer" into a single durable, restart-surviving job — **source → transforms →
+sinks → schedule** — with no code for the common cases. See [docs/JOBS.md](docs/JOBS.md).
+
+```bash
+ujin jobs-serve                              # :8902, durable sqlite jobstore
+ujin jobs-serve examples/jobs.crossref.yaml  # preload jobs from YAML
+```
+
+```bash
+# Poll the Crossref API for new papers — filtered, deduped, jittered. Pure config.
+curl -X POST localhost:8902/jobs -H 'content-type: application/json' -d '{
+  "name": "crossref",
+  "source": {"kind": "api", "config": {
+    "url": "https://api.crossref.org/works?query=quantum&rows=50",
+    "json_path": "message.items"}},
+  "transforms": [{"kind": "select", "config": {"where": {"type": "journal-article"},
+                                               "fields": ["DOI","title"]}},
+                 {"kind": "dedupe", "config": {"key": "DOI"}}],
+  "sinks": [{"kind": "jsonl", "config": {"path": "/data/crossref.jsonl"}}],
+  "schedule": {"mode": "adaptive", "base": 3600, "min": 600, "max": 86400}
+}'
+```
+
+Need something the built-ins don't cover? Drop a Python file into the mounted
+`/plugins` volume and it becomes a `plugin:<name>` source/transform/sink — see
+[docs/PLUGINS.md](docs/PLUGINS.md).
+
+## Browser automation — click "Load more" until it runs out
+
+JS-driven pages, infinite scroll, and "Load more" buttons need a real browser.
+A `browser` source runs a declarative **interaction recipe** (Playwright default,
+Selenium alternate), then feeds the fully-loaded HTML to the same extractors. The
+`load_more` action clicks until the list is exhausted — so you harvest *everything*,
+not just page one. Pair it with the `chunk` transform to hand an LLM digestible
+bites. Full guide: [docs/BROWSER.md](docs/BROWSER.md) + [recipes](docs/recipes/README.md).
+
+```bash
+docker compose --profile browser up ujin-jobs-browser   # browsers baked into ujin-browser image
+```
+
+```jsonc
+// harvest every publication behind a "Load 20 more" button, 25 per LLM call
+{ "name": "fels-pubs",
+  "source": { "kind": "browser", "config": {
+    "url": "https://www.ece.ubc.ca/~ssfels/",
+    "actions": [ { "action": "load_more", "button": "button.load-more",
+                   "results": ".publication-item", "max_clicks": 200 } ],
+    "extract": "links" } },
+  "transforms": [ { "kind": "chunk", "config": { "size": 25 } } ],
+  "sinks": [ { "kind": "forward", "config": { "url": "http://llm/ingest" } } ] }
+```
+
+The scrape service can also pin `render: "browser"` with `actions`, and supports
+`page_size`+`cursor` pagination so callers pull a big result set N items at a time.
+
 ## CLI
 
 ```bash
@@ -64,15 +122,19 @@ ujin sweep targets.yaml      # poll all targets once; print what changed
 ujin serve targets.yaml      # run the poll engine as a daemon
 ujin api [targets.yaml]      # poller control service (REST + WS) on :8900
 ujin scrape-serve            # rich scrape HTTP service on :8901
+ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
 ujin watch URL --selector …  # watch a page's regions for change
 ujin obscura-build           # build the bundled headless renderer (needs cargo)
 ```
 
 ## HTTP services
 
-Two independent FastAPI apps — run either or both. Full reference in
-[docs/API.md](docs/API.md); interactive docs at `/docs` on each.
+Three FastAPI apps — run any combination. Full reference in
+[docs/API.md](docs/API.md) and [docs/JOBS.md](docs/JOBS.md); interactive docs at `/docs` on each.
 
+- **Jobs control plane** (`:8902`): `POST /jobs` (source→transforms→sinks→schedule),
+  `GET/DELETE /jobs/{id}`, `/jobs/{id}/run|pause|resume|runs|events`, `WS /jobs/events`,
+  `/kinds`, `/metrics`, `POST /plugins/reload`. Durable + plugin-extensible.
 - **Poller control** (`:8900`): `GET /health /stats /targets`,
   `POST /targets`, `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.
 - **Scrape** (`:8901`): `POST /scrape` (modes `links|article|auto|combined|structured`),
@@ -82,12 +144,16 @@ Two independent FastAPI apps — run either or both. Full reference in
 ## Docker
 
 ```bash
-docker compose up --build                  # poller :8900 + scrape :8901 (pure-python, fast)
-docker compose --profile render up --build # also build the obscura-enabled service :8902 (slow)
+docker compose up --build                   # poller :8900 + scrape :8901 + jobs :8902 (pure-python, fast)
+docker compose --profile browser up --build # jobs+scrape on the browser image (:8902 / :8911)
+docker compose --profile render up --build  # also build the obscura-enabled service on :8912 (slow)
 ```
 The default `ujin` image is pure-python and builds in seconds (the Rust stage is
-skipped). The `ujin-full` target bakes the obscura renderer in for JS-heavy /
-anti-bot pages — its first build compiles V8 (~15–20 min).
+skipped). The `ujin-jobs` service mounts `./plugins` (drop-in custom code) and a
+named volume for its durable jobstore. The **`ujin-browser`** image (profile
+`browser`) bakes in Playwright + Chromium + Selenium/chromedriver for
+interaction-driven scraping (~1.5GB). The `ujin-full` target bakes the obscura
+renderer in for JS-heavy / anti-bot pages — its first build compiles V8 (~15–20 min).
 
 ```bash
 curl localhost:8901/health

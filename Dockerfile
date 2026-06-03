@@ -34,12 +34,38 @@ COPY ujin ./ujin
 # Drop the Rust submodule source from the image and install the rich extras.
 # The wheel build already excludes ujin/obscura, so site-packages stays pure-python.
 RUN rm -rf ujin/obscura \
-    && pip install --no-cache-dir ".[scrape,social,diff,sessions]"
+    && pip install --no-cache-dir ".[scrape,social,diff,sessions,jobs]"
 
-EXPOSE 8900 8901
+# Mount points for the unified job control plane: operator plugins + the durable
+# jobstore. Both are typically bind- or volume-mounted by compose.
+RUN mkdir -p /plugins /data
+ENV UJIN_PLUGINS_DIR=/plugins \
+    UJIN_JOBS_DB=/data/ujin-jobs.db
+
+EXPOSE 8900 8901 8902
 ENTRYPOINT ["ujin"]
-# Default to the scrape HTTP service; override for the poller (`api`) or `watch`.
+# Default to the scrape HTTP service; override for the poller (`api`), the
+# unified jobs control plane (`jobs-serve`), or `watch`.
 CMD ["scrape-serve", "--host", "0.0.0.0", "--port", "8901"]
+
+# ---- ujin + Playwright/Chromium + Selenium/chromedriver (heavy) ----
+#   docker build --target ujin-browser -t ujin:browser .
+# Built on top of the slim `ujin` stage so the default image is untouched. This
+# image is large (~1.5GB+): Chromium + its runtime libs + the Playwright browser.
+FROM ujin AS ujin-browser
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       chromium chromium-driver fonts-liberation ca-certificates \
+       libnss3 libatk-bridge2.0-0 libatk1.0-0 libcups2 libdrm2 libxkbcommon0 \
+       libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir ".[browser]" \
+    && python -m playwright install --with-deps chromium
+ENV UJIN_BROWSER_ENABLED=1 \
+    UJIN_BROWSER_ENGINE=playwright \
+    UJIN_BROWSER_HEADLESS=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    UJIN_CHROMEDRIVER=/usr/bin/chromedriver
 
 # ---- ujin + bundled obscura binary (slow build) ----
 FROM ujin AS ujin-full

@@ -28,29 +28,18 @@ log = logging.getLogger("ujin.cli")
 
 
 def _build_pollable(kind: str, cfg: dict[str, Any]):
-    if kind == "http":
-        from ujin.poll.http import HttpPollable
+    """Resolve a poll source through the plugin registry.
 
-        return HttpPollable(cfg["url"], render=cfg.get("render", False))
-    if kind == "rss":
-        from ujin.poll.rss import RssPollable
+    Built-in kinds (http/rss/api/command/site/scrape) and any plugin-registered
+    ``plugin:*`` source kinds resolve identically here, so the YAML-driven engine
+    and the jobs control plane share one code path.
+    """
+    from ujin.registry import register
 
-        return RssPollable(cfg["url"])
-    if kind == "api":
-        from ujin.poll.api import ApiPollable
-
-        return ApiPollable(cfg["url"], method=cfg.get("method", "GET"),
-                           json_path=cfg.get("json_path"), headers=cfg.get("headers"))
-    if kind == "command":
-        from ujin.poll.command import CommandPollable
-
-        return CommandPollable(cfg["argv"])
-    if kind == "site":
-        from ujin.poll.site import SitePollable
-
-        return SitePollable(cfg["url"], cfg.get("selectors"),
-                            render=cfg.get("render", False))
-    raise ValueError(f"unknown target kind: {kind!r}")
+    try:
+        return register.build_source(kind, cfg or {})
+    except KeyError as exc:
+        raise ValueError(str(exc).strip('"')) from None
 
 
 def _load(path: str):
@@ -110,6 +99,13 @@ def _cmd_scrape_serve(args: argparse.Namespace) -> int:
     from ujin.scrape.config import ScrapeConfig
 
     serve(host=args.host, port=args.port, config=ScrapeConfig.from_env())
+    return 0
+
+
+def _cmd_jobs_serve(args: argparse.Namespace) -> int:
+    from ujin.jobs.app import serve
+
+    serve(host=args.host, port=args.port, config_path=args.jobs)
     return 0
 
 
@@ -189,6 +185,15 @@ def main(argv: list[str] | None = None) -> int:
     p_scrape.add_argument("--host", default="0.0.0.0")
     p_scrape.add_argument("--port", type=int, default=8901)
     p_scrape.set_defaults(func=_cmd_scrape_serve)
+
+    p_jobs = sub.add_parser(
+        "jobs-serve", help="serve the unified job control plane (/jobs ... :8902)"
+    )
+    p_jobs.add_argument("jobs", nargs="?", default=None,
+                        help="optional jobs.yaml to preload")
+    p_jobs.add_argument("--host", default="0.0.0.0")
+    p_jobs.add_argument("--port", type=int, default=8902)
+    p_jobs.set_defaults(func=_cmd_jobs_serve)
 
     p_watch = sub.add_parser(
         "watch", help="watch a URL's regions for change (adaptive, jittered)"

@@ -18,12 +18,8 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
-from ..cache import HostPolicy, ScrapeCache
-from ..cache.disk import DiskCache
-from ..fetch import HttpFetcher, ObscuraFetcher
+from .build import build_scrape_components, close_scrape_components
 from .config import ScrapeConfig
-from .host_overrides import HostOverrideRegistry
-from .metrics import HostMetrics
 from .routes import router as core_router
 from .routes_social import router as social_router
 from .scoring import NullScorer, Scorer
@@ -54,23 +50,15 @@ def create_scrape_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        http = HttpFetcher(
-            per_host_concurrency=cfg.per_host_concurrency,
-            timeout_secs=cfg.http_timeout_secs,
-            user_agent=cfg.user_agent,
-        )
-        await http.start()
-        obscura = ObscuraFetcher(timeout_secs=cfg.fetch_timeout_secs)
-        cache = ScrapeCache(
-            max_entries=cfg.cache_max_entries, ttl_secs=cfg.cache_ttl_secs
-        )
-        policy = HostPolicy(cooldown_secs=cfg.host_cooldown_secs)
-        metrics = HostMetrics()
-        overrides = (
-            HostOverrideRegistry.from_file(cfg.per_host_config_path)
-            if cfg.per_host_config_path
-            else HostOverrideRegistry()
-        )
+        # Shared fetch/cache/policy/metrics stack (also used by the jobs
+        # control plane's `scrape` source) — see ujin.scrape.build.
+        comps = await build_scrape_components(cfg)
+        http = comps.http
+        obscura = comps.obscura
+        cache = comps.cache
+        policy = comps.policy
+        metrics = comps.metrics
+        overrides = comps.overrides
 
         # Optional nitter pool for the X chain's free leg.
         nitter_pool = None
@@ -133,16 +121,7 @@ def create_scrape_app(
         else:
             the_scorer = NullScorer()
 
-        disk: DiskCache | None = None
-        if cfg.disk_cache_path:
-            try:
-                disk = DiskCache(cfg.disk_cache_path)
-                for key, entry in disk.load_all():
-                    cache.put(key, entry)
-                logger.info("disk cache loaded from %s", cfg.disk_cache_path)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("disk cache init failed (%s); continuing without", exc)
-                disk = None
+        disk = comps.disk
 
         service = ScrapeService(
             http=http,
@@ -153,6 +132,7 @@ def create_scrape_app(
             metrics=metrics,
             overrides=overrides,
             scorer=the_scorer,
+            browser=comps.browser,
         )
 
         app.state.config = cfg
@@ -177,13 +157,7 @@ def create_scrape_app(
                     await trends_task
                 except (asyncio.CancelledError, Exception):
                     pass
-            if disk is not None:
-                try:
-                    disk.flush_from(list(cache.items()))
-                    disk.close()
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("disk cache flush failed: %s", exc)
-            await http.close()
+            await close_scrape_components(comps)
             logger.info("ujin scrape service stopped")
 
     app = FastAPI(title="ujin-scrape", version="0.3.0", lifespan=lifespan)

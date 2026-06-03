@@ -58,14 +58,51 @@ class FakeObscura:
         return ObscuraResult(url=url, html=self._html, elapsed_ms=1)
 
 
-def _service(http, *, obscura=None, cache=None, policy=None, config=None):
+def _service(http, *, obscura=None, cache=None, policy=None, config=None, browser=None):
     return ScrapeService(
         http=http,
         obscura=obscura or FakeObscura(),
         cache=cache or ScrapeCache(),
         policy=policy or HostPolicy(cooldown_secs=60),
         config=config or ScrapeConfig(),
+        browser=browser,
     )
+
+
+class FakeBrowser:
+    """Duck-typed BrowserFetcher: returns canned HTML after 'running' a recipe."""
+
+    def __init__(self, html: str):
+        from ujin.fetch.browser import BrowserResult
+
+        self._result = BrowserResult(url="", html=html, elapsed_ms=2)
+        self.calls: list[tuple[str, list]] = []
+
+    async def render(self, url, actions=None, *, results_selector=None, ctx=None):
+        self.calls.append((url, actions or []))
+        self._result.url = url
+        self._result.final_url = url
+        return self._result
+
+
+async def test_render_browser_runs_recipe_then_extracts():
+    # JSON-LD in the browser-rendered HTML proves the extractor ran on it.
+    html = (
+        '<html><head><script type="application/ld+json">'
+        '{"@type":"Person","name":"S. Fels"}'
+        "</script></head><body>loaded</body></html>"
+    )
+    browser = FakeBrowser(html)
+    svc = _service(FakeHttp({}), browser=browser)
+    result = await svc.scrape(
+        "https://news.example.com/", mode="structured", render="browser",
+        actions=[{"action": "load_more", "button": ".m", "results": ".a"}],
+    )
+    assert browser.calls and browser.calls[0][1][0]["action"] == "load_more"
+    assert result.strategy_used == "browser"
+    assert result.used_renderer is True
+    # the extractor parsed the browser-rendered JSON-LD
+    assert result.structured["jsonld"][0]["name"] == "S. Fels"
 
 
 async def test_http_to_sitemap_altpath_fallback():

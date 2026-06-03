@@ -28,6 +28,13 @@ class ScrapeConfig:
     http_timeout_secs: int = 15
     user_agent: str = "Mozilla/5.0 (compatible; ujin-scrape/0.3)"
 
+    # Browser automation (Playwright/Selenium). Off unless explicitly enabled and
+    # the backend library is installed (the ujin-browser image).
+    browser_enabled: bool = False
+    browser_engine: str = "playwright"  # playwright | selenium
+    browser_headless: bool = True
+    browser_timeout_secs: int = 30
+
     # Social (Brave search) key.
     brave_api_key: str = ""
 
@@ -76,6 +83,10 @@ class ScrapeConfig:
         "fetch_timeout_secs": "FETCH_TIMEOUT_SECS",
         "http_timeout_secs": "HTTP_TIMEOUT_SECS",
         "user_agent": "SCRAPER_USER_AGENT",
+        "browser_enabled": "UJIN_BROWSER_ENABLED",
+        "browser_engine": "UJIN_BROWSER_ENGINE",
+        "browser_headless": "UJIN_BROWSER_HEADLESS",
+        "browser_timeout_secs": "UJIN_BROWSER_TIMEOUT_SECS",
         "brave_api_key": "SEARCH_API_KEY",
         "cache_max_entries": "CACHE_MAX_ENTRIES",
         "cache_ttl_secs": "CACHE_TTL_SECS",
