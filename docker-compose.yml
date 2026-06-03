@@ -37,8 +37,76 @@ services:
     init: true            # reap any obscura/browser <defunct> subprocesses
     restart: unless-stopped
 
+  # Unified job control plane — /jobs CRUD + transforms + sinks + plugins (:8902).
+  # Jobs persist in a named volume; drop custom Python into ./plugins to extend it.
+  ujin-jobs:
+    build:
+      context: .
+      target: ujin
+    image: ujin:latest
+    command: ["jobs-serve", "--host", "0.0.0.0", "--port", "8902"]
+    environment:
+      - UJIN_PLUGINS_DIR=/plugins
+      - UJIN_JOBS_DB=/data/ujin-jobs.db
+      # Optional: set UJIN_API_KEY to require a bearer/X-API-Key on mutating routes.
+      - UJIN_API_KEY=${UJIN_API_KEY:-}
+    volumes:
+      - ./plugins:/plugins      # operator "upload code" — custom sources/sinks
+      - ujin-jobs-data:/data    # durable jobstore (survives restarts)
+    ports:
+      - "8902:8902"
+    init: true
+    restart: unless-stopped
+
+  # Opt-in (profile "browser"): the unified jobs control plane on the heavy
+  # ujin-browser image (Playwright+Chromium+Selenium). Enables the `browser`
+  # source + render="browser" so JS pages and `load_more` pagination work.
+  #   docker compose --profile browser up ujin-jobs-browser
+  ujin-jobs-browser:
+    profiles: ["browser"]
+    build:
+      context: .
+      target: ujin-browser
+    image: ujin:browser
+    command: ["jobs-serve", "--host", "0.0.0.0", "--port", "8902"]
+    environment:
+      - UJIN_BROWSER_ENABLED=1
+      - UJIN_BROWSER_ENGINE=${UJIN_BROWSER_ENGINE:-playwright}
+      - UJIN_BROWSER_HEADLESS=${UJIN_BROWSER_HEADLESS:-1}
+      - UJIN_PLUGINS_DIR=/plugins
+      - UJIN_JOBS_DB=/data/ujin-jobs.db
+      - UJIN_API_KEY=${UJIN_API_KEY:-}
+    volumes:
+      - ./plugins:/plugins
+      - ujin-jobs-data:/data
+      - ujin-browser-cache:/ms-playwright   # cache the downloaded browser binary
+    ports:
+      - "8902:8902"
+    init: true            # reap zombie chromium subprocesses
+    restart: unless-stopped
+
+  # Opt-in (profile "browser"): the scrape HTTP service on the browser image,
+  # published on :8911 so it can run alongside the slim ujin-scrape.
+  ujin-scrape-browser:
+    profiles: ["browser"]
+    build:
+      context: .
+      target: ujin-browser
+    image: ujin:browser
+    command: ["scrape-serve", "--host", "0.0.0.0", "--port", "8901"]
+    environment:
+      - UJIN_BROWSER_ENABLED=1
+      - UJIN_BROWSER_ENGINE=${UJIN_BROWSER_ENGINE:-playwright}
+      - UJIN_BROWSER_HEADLESS=${UJIN_BROWSER_HEADLESS:-1}
+    volumes:
+      - ujin-browser-cache:/ms-playwright
+    ports:
+      - "8911:8901"
+    init: true
+    restart: unless-stopped
+
   # Opt-in: scrape service WITH the obscura renderer baked in (slow first build:
-  # cargo compiles V8). Same API on :8901, published here as :8902.
+  # cargo compiles V8). Same API on :8901, published here as :8912.
   ujin-scrape-render:
     profiles: ["render"]
     build:
@@ -50,6 +118,10 @@ services:
       - UJIN_BREAKING_SCORER=${UJIN_BREAKING_SCORER:-}
       - SEARCH_API_KEY=${SEARCH_API_KEY:-}
     ports:
-      - "8902:8901"
+      - "8912:8901"
     init: true
     restart: unless-stopped
+
+volumes:
+  ujin-jobs-data:
+  ujin-browser-cache:

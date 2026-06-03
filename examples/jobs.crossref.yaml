@@ -1,0 +1,40 @@
+# Example ujin jobs preload file. Load with:
+#
+#   ujin jobs-serve examples/jobs.crossref.yaml
+#
+# Poll the Crossref API for new papers on a topic — timed + jittered, auto-filtered
+# to journal articles, change-detected, and fanned out to a webhook + a JSONL file.
+# No code: this is the whole job, expressed as configuration.
+
+jobs:
+  - name: crossref-quantum-error-correction
+    source:
+      kind: api
+      config:
+        url: "https://api.crossref.org/works?query=quantum+error+correction&sort=published&order=desc&rows=50"
+        method: GET
+        json_path: message.items          # ApiPollable narrows + fingerprints this slice
+        headers:
+          User-Agent: "ujin (mailto:you@example.com)"   # Crossref polite pool
+    transforms:
+      - kind: select                       # keep only journal articles
+        config:
+          path: payload
+          where: { type: journal-article }
+      - kind: select                       # project to the fields we care about
+        config:
+          path: payload
+          fields: [DOI, title, published, author]
+      - kind: dedupe                        # only genuinely-new DOIs
+        config: { key: DOI }
+    sinks:
+      - kind: webhook
+        config: { url: "https://hooks.example.com/papers" }
+      - kind: jsonl
+        config: { path: "/data/crossref.jsonl" }
+    schedule:
+      mode: adaptive                        # grows when quiet, shrinks on new papers
+      base: 3600
+      min: 600
+      max: 86400
+      jitter: decorrelated

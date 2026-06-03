@@ -95,8 +95,13 @@ class PollEngine:
         return target
 
     # -- one poll ---------------------------------------------------------- #
-    async def _poll_target(self, target: Target) -> PollResult:
-        """Run one poll, update adaptive state + schedule next_due. Returns result."""
+    async def poll_once(self, target: Target) -> PollResult:
+        """Run one poll, update adaptive state + schedule next_due. Returns result.
+
+        Public entry point used by the daemon loop, ``sweep()``, and by the jobs
+        scheduler to drive ``once``/``cron``/run-now jobs through the same global
+        :class:`TokenBucket` + concurrency gate.
+        """
         async with self.sem:
             await self.bucket.acquire(sleep=self.sleep)
             try:
@@ -127,6 +132,9 @@ class PollEngine:
         target.next_due = now + delay
         return result
 
+    # back-compat alias (pre-M9 callers referenced the private name)
+    _poll_target = poll_once
+
     async def _fire(self, target: Target, result: PollResult) -> None:
         if target.on_change is None:
             return
@@ -141,7 +149,7 @@ class PollEngine:
     async def sweep(self) -> list[PollResult]:
         """Poll every target once (concurrently, smoothed). Cron-friendly."""
         due = [t for t in self.targets.values() if t.breaker.allow()]
-        return await asyncio.gather(*(self._poll_target(t) for t in due))
+        return await asyncio.gather(*(self.poll_once(t) for t in due))
 
     # -- daemon loop ------------------------------------------------------- #
     async def run(self, stop: asyncio.Event | None = None, *, max_ticks: int | None = None) -> None:
@@ -154,7 +162,7 @@ class PollEngine:
                 if t.next_due <= now and t.breaker.allow()
             ]
             if ready:
-                await asyncio.gather(*(self._poll_target(t) for t in ready))
+                await asyncio.gather(*(self.poll_once(t) for t in ready))
             else:
                 nxt = min((t.next_due for t in self.targets.values()), default=now + 1.0)
                 await self.sleep(max(0.0, nxt - now))

@@ -95,6 +95,45 @@ def _result_to_response(result) -> ScrapeResponse:
     )
 
 
+def _encode_cursor(offset: int, fingerprint: str) -> str:
+    import base64
+
+    return base64.urlsafe_b64encode(f"{offset}:{fingerprint}".encode()).decode()
+
+
+def _decode_cursor(cursor: str) -> tuple[int, str]:
+    import base64
+
+    raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+    offset_s, fp = raw.split(":", 1)
+    return int(offset_s), fp
+
+
+def _paginate(resp: ScrapeResponse, page_size: int, cursor: str | None) -> ScrapeResponse:
+    """Slice the link-set to one page; pin the cursor to the fingerprint.
+
+    A stale cursor (the underlying list changed between pulls) raises 409 so the
+    caller restarts from the first page.
+    """
+    all_links = resp.links
+    resp.total = len(all_links)
+    offset = 0
+    if cursor:
+        try:
+            offset, fp = _decode_cursor(cursor)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail="invalid cursor") from exc
+        if fp != resp.fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail="cursor stale (result changed); restart without a cursor",
+            )
+    resp.links = all_links[offset:offset + page_size]
+    nxt = offset + page_size
+    resp.next_cursor = _encode_cursor(nxt, resp.fingerprint) if nxt < len(all_links) else None
+    return resp
+
+
 @router.post("/scrape", response_model=ScrapeResponse)
 async def scrape(req: ScrapeRequest, request: Request) -> ScrapeResponse:
     """Render and extract a single page (headlines or article body)."""
@@ -107,13 +146,20 @@ async def scrape(req: ScrapeRequest, request: Request) -> ScrapeResponse:
             mode=req.mode,
             force_refresh=req.force_refresh,
             enrich_html_top_n=req.enrich_html_top_n,
+            render=req.render,
+            actions=req.actions,
         )
     except HostCooldown as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    return _result_to_response(result)
+    resp = _result_to_response(result)
+    if req.page_size is not None:
+        resp = _paginate(resp, req.page_size, req.cursor)
+    return resp
 
 
 def _error_response(url: str, exc: Exception) -> ScrapeResponse:

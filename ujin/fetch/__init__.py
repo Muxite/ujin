@@ -6,6 +6,13 @@ public surface; submodules keep their heavy imports lazy where possible.
 from __future__ import annotations
 
 from .altpath import AltPathResult, try_rss_fallback, try_sitemap_news
+from .browser import (
+    BrowserError,
+    BrowserFetcher,
+    BrowserResult,
+    BrowserTimeout,
+    browser_available,
+)
 from .http import HttpFetcher, HttpResponse
 from .obscura import (
     ObscuraError,
@@ -23,6 +30,11 @@ __all__ = [
     "ObscuraError",
     "ObscuraTimeout",
     "obscura_available",
+    "BrowserFetcher",
+    "BrowserResult",
+    "BrowserError",
+    "BrowserTimeout",
+    "browser_available",
     "AltPathResult",
     "try_sitemap_news",
     "try_rss_fallback",

@@ -35,8 +35,16 @@ social = ["ujin[web,yaml]"]
 diff = ["ujin[web]"]
 # Cookie/session persistence + proxy rotation.
 sessions = ["ujin[web]"]
+# Unified job control plane (/jobs CRUD + pipeline + sinks + plugins, :8902).
+# Reuses the service web stack; the job model + store themselves are stdlib-only.
+jobs = ["ujin[service,scrape]"]
+# Browser automation (interaction recipes, load_more pagination). Playwright is
+# the default engine; selenium is the alternate. Chromium itself is NOT a pip
+# artifact — install it with `playwright install chromium` (the ujin-browser
+# image does this), so the wheel stays pure-python.
+browser = ["ujin[scrape]", "playwright>=1.44", "selenium>=4.20"]
 # Everything.
-all = ["ujin[web,yaml,service,scrape,social,diff,sessions]"]
+all = ["ujin[web,yaml,service,scrape,social,diff,sessions,jobs,browser]"]
 dev = ["ujin[all]", "pytest>=8.0", "pytest-asyncio>=0.23", "httpx>=0.27"]
 
 [project.scripts]

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>load-more fixture</title></head>
+<body>
+  <h1>Publications</h1>
+  <div id="list"></div>
+  <button id="more" class="load-more">Load 10 more</button>
+  <script>
+    // A real "load more" button: each click reveals 10 more items until 37 total,
+    // then removes the button (so load_more detects exhaustion via button_gone).
+    var loaded = 0;
+    var TOTAL = 37;
+    var PER = 10;
+    function render() {
+      var list = document.getElementById('list');
+      var next = Math.min(loaded + PER, TOTAL);
+      for (var i = loaded; i < next; i++) {
+        var a = document.createElement('a');
+        a.className = 'publication-item';
+        a.href = '/p/' + i;
+        a.textContent = 'Publication number ' + i + ' with a sufficiently long title';
+        list.appendChild(a);
+      }
+      loaded = next;
+      if (loaded >= TOTAL) {
+        var btn = document.getElementById('more');
+        if (btn) btn.remove();
+      }
+    }
+    render(); // first page is present on initial load
+    document.getElementById('more').addEventListener('click', render);
+  </script>
+</body>
+</html>

@@ -18,7 +18,7 @@ import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from ..cache import CachedEntry, HostPolicy, ScrapeCache
 from ..extract import (
@@ -81,6 +81,7 @@ class ScrapeService:
         metrics: Optional[HostMetrics] = None,
         overrides: Optional[HostOverrideRegistry] = None,
         scorer: Optional[Scorer] = None,
+        browser: Any = None,
     ):
         self._http = http
         self._obscura = obscura
@@ -90,6 +91,7 @@ class ScrapeService:
         self._metrics = metrics or HostMetrics()
         self._overrides = overrides or HostOverrideRegistry()
         self._scorer = scorer or NullScorer()
+        self._browser = browser  # optional BrowserFetcher for render="browser"
 
     async def scrape(
         self,
@@ -98,6 +100,8 @@ class ScrapeService:
         mode: Mode = "links",
         force_refresh: bool = False,
         enrich_html_top_n: int = 0,
+        render: str = "auto",
+        actions: Optional[list[dict]] = None,
     ) -> ScrapeResult:
         loop_start = time.monotonic()
 
@@ -153,13 +157,18 @@ class ScrapeService:
                     url, mode, alt.links, "rss", loop_start, cache_key
                 )
 
+        # An explicit `render=` pins the strategy (overriding the per-host
+        # override); "auto" keeps the per-host/default escalation.
+        effective_strategy = render if render != "auto" else override.strategy
+
         html, used_renderer, http_meta, final_url, not_modified, fetch_strategy = (
             await self._fetch_html(
                 url,
                 mode=mode,
                 cached=cached,
                 force_refresh=force_refresh,
-                override_strategy=override.strategy,
+                override_strategy=effective_strategy,
+                actions=actions,
             )
         )
 
@@ -605,6 +614,7 @@ class ScrapeService:
         cached: Optional[CachedEntry],
         force_refresh: bool,
         override_strategy: str = "auto",
+        actions: Optional[list[dict]] = None,
     ) -> tuple[Optional[str], bool, dict, Optional[str], bool, str]:
         """Return (html, used_renderer, http_meta, final_url, not_modified, strategy)."""
         etag = cached.etag if cached and not force_refresh else None
@@ -616,7 +626,20 @@ class ScrapeService:
         final_url: Optional[str] = None
         strategy = "http"
 
-        if override_strategy != "obscura":
+        # Browser strategy: run the interaction recipe and snapshot HTML. Pinned
+        # via render="browser"; never an automatic fallback (it's expensive).
+        if override_strategy == "browser":
+            if self._browser is None:
+                logger.warning("render='browser' but no browser fetcher wired for %s", url)
+                return None, True, http_meta, final_url or url, False, "browser"
+            try:
+                r = await self._browser.render(url, actions or [])
+                return r.html, True, http_meta, r.final_url or url, False, "browser"
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("browser render failed for %s: %s", url, exc)
+                return None, True, http_meta, final_url or url, False, "browser"
+
+        if override_strategy not in ("obscura",):
             try:
                 resp = await self._http.get(
                     url, etag=etag, last_modified=last_modified

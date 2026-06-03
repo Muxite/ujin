@@ -49,6 +49,44 @@ class ScrapeRequest(BaseModel):
         ),
         examples=[0, 5],
     )
+    render: Literal["auto", "http", "obscura", "browser"] = Field(
+        "auto",
+        description=(
+            "Pin the fetch strategy. `auto` keeps the per-host/default "
+            "escalation (HTTP → obscura). `browser` runs the `actions` recipe "
+            "in a real browser (Playwright/Selenium) and snapshots the result — "
+            "use it for JS-driven pages and `load_more` pagination."
+        ),
+        examples=["auto", "browser"],
+    )
+    actions: Optional[list[dict]] = Field(
+        None,
+        description=(
+            "Browser interaction recipe (used when `render='browser'`). A list "
+            "of steps like `{'action':'load_more','button':'.more',"
+            "'results':'.item','max_clicks':200}` or click/scroll/fill/wait_for_selector."
+        ),
+        examples=[[{"action": "load_more", "button": "button.load-more",
+                    "results": ".publication-item", "max_clicks": 200}]],
+    )
+    page_size: Optional[int] = Field(
+        None,
+        ge=1,
+        description=(
+            "When set, return only this many links/items and a `next_cursor` "
+            "for the next page — so an LLM ingests a large result set in bites. "
+            "Omit for the full list (default)."
+        ),
+        examples=[25, 50],
+    )
+    cursor: Optional[str] = Field(
+        None,
+        description=(
+            "Opaque pagination cursor from a prior response's `next_cursor`. "
+            "Pinned to the result fingerprint; a stale cursor (the underlying "
+            "list changed) yields HTTP 409."
+        ),
+    )
 
 
 class LinkItem(BaseModel):
@@ -343,6 +381,21 @@ class ScrapeResponse(BaseModel):
             "the response crosses the breaking threshold."
         ),
         examples=[0.0, 0.45, 0.85],
+    )
+    total: Optional[int] = Field(
+        None,
+        description=(
+            "Total number of links/items available (before pagination). "
+            "Set only when `page_size` was requested."
+        ),
+        examples=[None, 137],
+    )
+    next_cursor: Optional[str] = Field(
+        None,
+        description=(
+            "Cursor for the next page; pass it back as `cursor`. None when this "
+            "is the last page or pagination was not requested."
+        ),
     )
 
 

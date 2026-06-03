@@ -61,12 +61,15 @@ class _Hub:
         self._conns.discard(ws)
 
     async def broadcast(self, key: str, result: Any) -> None:
-        event = {
+        await self.broadcast_event({
             "event": "change",
             "key": key,
             "fingerprint": result.fingerprint,
             "ts": result.ts,
-        }
+        })
+
+    async def broadcast_event(self, event: dict[str, Any]) -> None:
+        """Send an arbitrary JSON event to every connected socket."""
         dead = []
         for ws in list(self._conns):
             try:
