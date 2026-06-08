@@ -55,9 +55,62 @@ def _preload_specs(path: str) -> list:
     return [JobSpec.from_dict(d) for d in (raw or [])]
 
 
+def _specs_from_workflow_file(path) -> list:
+    """Parse one workflow file into JobSpecs, deriving stable ids from the stem.
+
+    A workflow file is the same declarative shape as a job. The filename stem is
+    the **workflow id** (and default name) so the same file maps to the same
+    workflow across restarts/redeploys — unless the file sets an explicit ``id``.
+    A file may also hold a list / ``{jobs: [...]}``; entries without an ``id``
+    fall back to ``<stem>-<index>`` to stay deterministic.
+    """
+    import yaml
+
+    from .model import JobSpec
+
+    from pathlib import Path
+
+    path = Path(path)
+    stem = path.stem
+    data = yaml.safe_load(open(path, encoding="utf-8")) or {}
+
+    # Single-job mapping (no top-level `jobs:` list) -> the whole file is one job.
+    if isinstance(data, dict) and "jobs" not in data:
+        d = dict(data)
+        d.setdefault("id", stem)
+        d.setdefault("name", stem)
+        return [JobSpec.from_dict(d)]
+
+    raw = data.get("jobs", data) if isinstance(data, dict) else data
+    specs = []
+    for i, entry in enumerate(raw or []):
+        d = dict(entry)
+        d.setdefault("id", stem if len(raw) == 1 else f"{stem}-{i}")
+        d.setdefault("name", d["id"])
+        specs.append(JobSpec.from_dict(d))
+    return specs
+
+
+def _load_workflows_dir(path: str) -> list:
+    """Load every ``*.yaml``/``*.yml`` workflow file in *path* (sorted)."""
+    from pathlib import Path
+
+    root = Path(path)
+    if not root.is_dir():
+        return []
+    specs = []
+    for fp in sorted(root.glob("*.y*ml")):
+        try:
+            specs.extend(_specs_from_workflow_file(fp))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("skipping workflow file %s: %s", fp, exc)
+    return specs
+
+
 def create_jobs_app(
     config_path: str | None = None,
     *,
+    workflows_dir: str | None = None,
     scrape_config: Any = None,
     run_engine: bool = True,
 ) -> Any:
@@ -75,6 +128,7 @@ def create_jobs_app(
     from .store import JobStore
 
     db_path = os.environ.get("UJIN_JOBS_DB", "./ujin-jobs.db")
+    wf_dir = workflows_dir or os.environ.get("UJIN_WORKFLOWS_DIR", "/workflows")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -110,6 +164,19 @@ def create_jobs_app(
                     manager.create(spec)
                 except Exception as exc:  # noqa: BLE001
                     log.warning("preload job %s failed: %s", spec.name, exc)
+
+        # "Setup" phase: register every workflow file in the mounted directory.
+        # Ids are filename-derived, so re-loading upserts the same workflow rather
+        # than duplicating it. A bad file is reported, not fatal.
+        wf_status: dict[str, list] = {"dir": wf_dir, "loaded": [], "failed": []}
+        for spec in _load_workflows_dir(wf_dir):
+            try:
+                manager.create(spec)
+                wf_status["loaded"].append(spec.id)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("workflow %s failed: %s", spec.id, exc)
+                wf_status["failed"].append({"id": spec.id, "error": str(exc)})
+        app.state.workflows = wf_status
 
         app.state.engine = engine
         app.state.store = store
@@ -147,7 +214,9 @@ def create_jobs_app(
     def health() -> dict[str, Any]:
         m = app.state.manager
         return {"ok": True, "jobs": len(m.jobs),
-                "plugins": getattr(app.state, "plugins", {"loaded": [], "failed": []})}
+                "plugins": getattr(app.state, "plugins", {"loaded": [], "failed": []}),
+                "workflows": getattr(app.state, "workflows",
+                                     {"dir": wf_dir, "loaded": [], "failed": []})}
 
     @app.get("/kinds")
     def kinds() -> dict[str, Any]:
@@ -243,6 +312,36 @@ def create_jobs_app(
             raise HTTPException(404, f"no job {job_id!r}")
         return app.state.store.events(job_id, limit=limit)
 
+    @app.get("/jobs/{job_id}/content")
+    def job_content(job_id: str) -> dict[str, Any]:
+        """Hand out the information ujin last obtained for this workflow.
+
+        Returns the most recent :class:`PollResult` payload (the body/data the
+        source produced on its last poll, changed or not) so a consumer can reuse
+        what ujin already fetched. ``payload`` is ``null`` until the first poll.
+        """
+        handle = app.state.manager.get(job_id)
+        if handle is None:
+            raise HTTPException(404, f"no job {job_id!r}")
+        p = handle.target.prev
+        return {
+            "id": job_id,
+            "name": handle.spec.name,
+            "ok": p.ok if p else None,
+            "changed": p.changed if p else None,
+            "fingerprint": p.fingerprint if p else None,
+            "ts": getattr(p, "ts", None) if p else None,
+            "status": p.status if p else None,
+            "payload": getattr(p, "payload", None) if p else None,
+        }
+
+    @app.get("/jobs/{job_id}/results")
+    def job_results(job_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Recent buffer of obtained results (one entry per changed poll)."""
+        if app.state.manager.get(job_id) is None:
+            raise HTTPException(404, f"no job {job_id!r}")
+        return app.state.store.results(job_id, limit=limit)
+
     @app.websocket("/jobs/events")
     async def jobs_events(socket: WebSocket) -> None:
         await socket.accept()
@@ -267,7 +366,14 @@ def create_jobs_app(
     return app
 
 
-def serve(host: str = "0.0.0.0", port: int = 8902, config_path: str | None = None) -> None:
+def serve(
+    host: str = "0.0.0.0",
+    port: int = 8902,
+    config_path: str | None = None,
+    workflows_dir: str | None = None,
+) -> None:
     import uvicorn
 
-    uvicorn.run(create_jobs_app(config_path), host=host, port=port)
+    uvicorn.run(
+        create_jobs_app(config_path, workflows_dir=workflows_dir), host=host, port=port
+    )

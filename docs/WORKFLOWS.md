@@ -1,0 +1,118 @@
+# ujin workflows — setup → collect → serve
+
+A **workflow** is a job you don't create over the API — you drop a definition file
+into a mounted directory and ujin sets it up on startup, runs it, and hands back
+whatever it obtained. It's the file-driven face of the [jobs](JOBS.md) control
+plane: same `source → transforms → sinks → schedule` shape, same engine, same
+durability. The intended use is **polling jobs / repeated tasks over similar
+sites**: configure once, let the container collect, pull the results by id.
+
+```
+ setup                      collect                     serve
+ ─────                      ───────                     ─────
+ /workflows/*.yaml   ──▶    PollEngine + cron    ──▶    GET /jobs/{id}/content
+ (+ /plugins/*.py)          (adaptive cadence)          GET /jobs/{id}/results
+                                                        WS  /jobs/events
+```
+
+## Setup — the workflows directory
+
+`UJIN_WORKFLOWS_DIR` (default `/workflows`) is scanned on startup. In the
+container it's a mounted volume:
+
+```yaml
+# docker-compose.yml (ujin-jobs)
+volumes:
+  - ./workflows:/workflows    # workflow files  (id = filename stem)
+  - ./plugins:/plugins        # custom capabilities (plugin:* kinds)
+```
+
+Each `*.yaml` / `*.yml` file is **one workflow**. The **filename stem is the
+workflow id** (and default name), so `crossref-papers.yaml` becomes workflow
+`crossref-papers`. Because the id is stable, re-deploying or restarting **upserts
+the same workflow** rather than duplicating it.
+
+```yaml
+# /workflows/crossref-papers.yaml   ->  workflow id "crossref-papers"
+source:
+  kind: api
+  config:
+    url: "https://api.crossref.org/works?query=quantum&rows=50"
+    json_path: message.items
+transforms:
+  - kind: dedupe
+    config: { key: DOI }
+sinks:
+  - kind: sqlite           # record change events durably
+schedule:
+  mode: adaptive
+  base: 3600
+  min: 600
+  max: 86400
+```
+
+- A file with no top-level `jobs:` key is the single workflow (the whole mapping).
+- Set `id:` inside the file to override the stem.
+- A file may also hold a `jobs: [...]` list / top-level list; entries without an
+  `id` fall back to `<stem>-<index>` so ids stay deterministic.
+- Validation is eager: an unknown source/transform/sink kind lands in the
+  `failed` list (see `GET /health`) instead of aborting startup.
+
+Run it locally without Docker:
+
+```bash
+ujin jobs-serve --workflows ./examples/workflows      # or set UJIN_WORKFLOWS_DIR
+```
+
+`GET /health` reports what was set up:
+
+```json
+{ "ok": true, "jobs": 2,
+  "workflows": { "dir": "/workflows", "loaded": ["crossref-papers", "example-page"], "failed": [] } }
+```
+
+## Collect — the container does the job
+
+Each workflow is driven by the same [adaptive engine](../README.md#how-it-works)
+as any job: the interval grows while a site is quiet and shrinks when content
+changes, smoothed by a global token bucket + per-host concurrency. `adaptive`,
+`cron`, and `once` schedule modes all apply. Run a workflow immediately with
+`POST /jobs/{id}/run`; pause/resume with `POST /jobs/{id}/pause|resume`.
+
+## Serve — hand out what ujin obtained
+
+Ask for the collected data by workflow id, over REST or WebSocket:
+
+| Endpoint | Returns |
+|---|---|
+| `GET /jobs/{id}/content` | the **latest** obtained payload (the body/data from the last poll, changed or not), with `ok/changed/fingerprint/ts/status`. `payload` is `null` until the first poll. |
+| `GET /jobs/{id}/results?limit=N` | the **recent buffer** — one entry per *changed* poll (`{ts, fingerprint, payload}`), newest first, capped per workflow. |
+| `GET /jobs/{id}/runs` | run history (metadata: ok/changed/error/strategy). |
+| `GET /jobs/{id}/events` | persisted change events (from a `sqlite` sink). |
+| `WS /jobs/events` | live change notices across all workflows. |
+
+```bash
+curl -X POST localhost:8902/jobs/crossref-papers/run
+curl localhost:8902/jobs/crossref-papers/content     # latest obtained data
+curl localhost:8902/jobs/crossref-papers/results     # recent buffer
+```
+
+`content` reuses what ujin already fetched (handy when the origin is rate-limited
+or anti-bot), mirroring the poller's [`GET /content`](../README.md#http-services).
+
+## Adding capabilities
+
+Workflows are assembled from **capabilities** — the source/transform/sink kinds in
+the registry. Two ways to extend the menu:
+
+- **Drop a plugin** into `/plugins` and reference it as `plugin:<name>` — see
+  [PLUGINS.md](PLUGINS.md). No rebuild; `POST /plugins/reload` to refresh.
+- **Edit ujin in-tree** — add a built-in kind via `@register.source/transform/
+  sink` and `pip install -e .`. Sibling projects in active development are
+  expected to grow ujin this way; see [CAPABILITIES.md](CAPABILITIES.md).
+
+## Examples
+
+`examples/workflows/` ships runnable workflow files:
+`crossref-papers.yaml` (adaptive API poll) and `example-page.yaml` (a minimal HTTP
+poll). Copy them into your mounted `./workflows` directory to try them.

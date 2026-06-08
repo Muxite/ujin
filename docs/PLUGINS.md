@@ -4,6 +4,9 @@ When a built-in source/transform/sink doesn't cover your case, drop a Python fil
 into the plugin directory and ujin will load it and expose what it registers as
 new `plugin:<name>` kinds usable in any job.
 
+> Want a first-class, reusable kind instead of a `plugin:*` drop-in (e.g. a
+> sibling project growing ujin in-tree)? See [CAPABILITIES.md](CAPABILITIES.md).
+
 > **Trust model:** plugins run **in-process with no sandbox** — arbitrary code
 > execution by design. Only mount code you trust. If the control plane is
 > network-exposed, gate it with `UJIN_API_KEY` (see [JOBS.md](JOBS.md#auth-optional)).

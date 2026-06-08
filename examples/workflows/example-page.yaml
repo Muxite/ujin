@@ -1,0 +1,17 @@
+# Minimal workflow: poll one HTTP page and hand back what was obtained.
+#
+# Workflow id = `example-page` (the filename stem). After it runs, the fetched
+# body is available at GET /jobs/example-page/content.
+
+source:
+  kind: http
+  config:
+    url: "https://example.com/"
+sinks:
+  - kind: sqlite          # record change events durably
+schedule:
+  mode: adaptive
+  base: 300
+  min: 60
+  max: 3600
+  jitter: decorrelated

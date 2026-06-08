@@ -47,12 +47,14 @@ services:
     command: ["jobs-serve", "--host", "0.0.0.0", "--port", "8902"]
     environment:
       - UJIN_PLUGINS_DIR=/plugins
+      - UJIN_WORKFLOWS_DIR=/workflows
       - UJIN_JOBS_DB=/data/ujin-jobs.db
       # Optional: set UJIN_API_KEY to require a bearer/X-API-Key on mutating routes.
       - UJIN_API_KEY=${UJIN_API_KEY:-}
     volumes:
-      - ./plugins:/plugins      # operator "upload code" — custom sources/sinks
-      - ujin-jobs-data:/data    # durable jobstore (survives restarts)
+      - ./plugins:/plugins        # operator "upload code" — custom capabilities
+      - ./workflows:/workflows    # workflow definition files (id = file stem)
+      - ujin-jobs-data:/data      # durable jobstore (survives restarts)
     ports:
       - "8902:8902"
     init: true
@@ -74,10 +76,12 @@ services:
       - UJIN_BROWSER_ENGINE=${UJIN_BROWSER_ENGINE:-playwright}
       - UJIN_BROWSER_HEADLESS=${UJIN_BROWSER_HEADLESS:-1}
       - UJIN_PLUGINS_DIR=/plugins
+      - UJIN_WORKFLOWS_DIR=/workflows
       - UJIN_JOBS_DB=/data/ujin-jobs.db
       - UJIN_API_KEY=${UJIN_API_KEY:-}
     volumes:
       - ./plugins:/plugins
+      - ./workflows:/workflows
       - ujin-jobs-data:/data
       - ujin-browser-cache:/ms-playwright   # cache the downloaded browser binary
     ports:

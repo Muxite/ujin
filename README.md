@@ -83,9 +83,16 @@ curl -X POST localhost:8902/jobs -H 'content-type: application/json' -d '{
 }'
 ```
 
+Prefer files over API calls? Drop workflow definitions into the mounted
+`./workflows` directory — each file is one workflow, the **filename stem is its
+id**, and ujin sets it up on startup, runs it, and hands back what it obtained at
+`GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). See
+[docs/WORKFLOWS.md](docs/WORKFLOWS.md).
+
 Need something the built-ins don't cover? Drop a Python file into the mounted
 `/plugins` volume and it becomes a `plugin:<name>` source/transform/sink — see
-[docs/PLUGINS.md](docs/PLUGINS.md).
+[docs/PLUGINS.md](docs/PLUGINS.md). Sibling projects can also extend ujin in-tree
+with first-class kinds — see [docs/CAPABILITIES.md](docs/CAPABILITIES.md).
 
 ## Browser automation — click "Load more" until it runs out
 
@@ -133,8 +140,10 @@ Three FastAPI apps — run any combination. Full reference in
 [docs/API.md](docs/API.md) and [docs/JOBS.md](docs/JOBS.md); interactive docs at `/docs` on each.
 
 - **Jobs control plane** (`:8902`): `POST /jobs` (source→transforms→sinks→schedule),
-  `GET/DELETE /jobs/{id}`, `/jobs/{id}/run|pause|resume|runs|events`, `WS /jobs/events`,
+  `GET/DELETE /jobs/{id}`, `/jobs/{id}/run|pause|resume|runs|events`,
+  `/jobs/{id}/content` + `/jobs/{id}/results` (hand out obtained data), `WS /jobs/events`,
   `/kinds`, `/metrics`, `POST /plugins/reload`. Durable + plugin-extensible.
+  File-driven workflows load from `./workflows` — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 - **Poller control** (`:8900`): `GET /health /stats /targets`,
   `POST /targets`, `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.
 - **Scrape** (`:8901`): `POST /scrape` (modes `links|article|auto|combined|structured`),
@@ -149,8 +158,9 @@ docker compose --profile browser up --build # jobs+scrape on the browser image (
 docker compose --profile render up --build  # also build the obscura-enabled service on :8912 (slow)
 ```
 The default `ujin` image is pure-python and builds in seconds (the Rust stage is
-skipped). The `ujin-jobs` service mounts `./plugins` (drop-in custom code) and a
-named volume for its durable jobstore. The **`ujin-browser`** image (profile
+skipped). The `ujin-jobs` service mounts `./workflows` (file-driven workflow
+definitions), `./plugins` (drop-in custom code), and a named volume for its
+durable jobstore. The **`ujin-browser`** image (profile
 `browser`) bakes in Playwright + Chromium + Selenium/chromedriver for
 interaction-driven scraping (~1.5GB). The `ujin-full` target bakes the obscura
 renderer in for JS-heavy / anti-bot pages — its first build compiles V8 (~15–20 min).

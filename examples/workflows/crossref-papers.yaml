@@ -1,0 +1,47 @@
+# A ujin *workflow*: one declarative job assembled from built-in capabilities.
+#
+# Drop this file into the mounted workflows directory (./workflows -> /workflows)
+# and ujin loads it on startup. The filename stem is the **workflow id**, so this
+# becomes workflow `crossref-papers` — query it at:
+#
+#   GET  /jobs/crossref-papers              summary + runtime state
+#   GET  /jobs/crossref-papers/content      the data ujin last obtained
+#   GET  /jobs/crossref-papers/results      recent buffer (one per change)
+#   POST /jobs/crossref-papers/run          run now
+#
+# No `id:`/`name:` here on purpose — both default to the stem. Set `id:` to
+# override. A file may also hold a top-level `jobs: [...]` list for several
+# workflows; entries then default to `<stem>-<index>`.
+#
+# To use a custom capability, drop a plugin in ./plugins and reference it as a
+# `plugin:<name>` kind (e.g. `kind: plugin:hello`) — see docs/PLUGINS.md.
+
+source:
+  kind: api
+  config:
+    url: "https://api.crossref.org/works?query=quantum+error+correction&sort=published&order=desc&rows=50"
+    method: GET
+    json_path: message.items
+    headers:
+      User-Agent: "ujin (mailto:you@example.com)"   # Crossref polite pool
+transforms:
+  - kind: select
+    config:
+      path: payload
+      where: { type: journal-article }
+  - kind: select
+    config:
+      path: payload
+      fields: [DOI, title, published, author]
+  - kind: dedupe
+    config: { key: DOI }
+sinks:
+  - kind: sqlite          # persist change events (observability)
+  - kind: jsonl
+    config: { path: "/data/crossref.jsonl" }
+schedule:
+  mode: adaptive          # grows when quiet, shrinks on new papers
+  base: 3600
+  min: 600
+  max: 86400
+  jitter: decorrelated

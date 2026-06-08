@@ -52,7 +52,19 @@ CREATE TABLE IF NOT EXISTS job_events (
     event_json  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_job ON job_events(job_id, ts DESC);
+CREATE TABLE IF NOT EXISTS job_results (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id       TEXT NOT NULL,
+    ts           REAL NOT NULL,
+    fingerprint  TEXT,
+    payload_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_results_job ON job_results(job_id, ts DESC);
 """
+
+# How many obtained results to retain per job (the "recent buffer" the
+# /jobs/{id}/results endpoint hands out). Older rows are pruned on each insert.
+RESULTS_CAP = 50
 
 
 class JobStore:
@@ -114,6 +126,7 @@ class JobStore:
         with self._lock:
             cur = self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
             self._conn.execute("DELETE FROM job_runs WHERE job_id = ?", (job_id,))
+            self._conn.execute("DELETE FROM job_results WHERE job_id = ?", (job_id,))
             self._conn.commit()
             return cur.rowcount > 0
 
@@ -206,6 +219,51 @@ class JobStore:
                 out.append(json.loads(blob))
             except Exception:  # noqa: BLE001
                 continue
+        return out
+
+    # -- obtained results (the "collect" buffer; capped per job) ----------- #
+    def record_result(
+        self,
+        job_id: str,
+        *,
+        ts: float,
+        fingerprint: str | None,
+        payload: Any,
+    ) -> None:
+        """Append one obtained result, then prune to the newest RESULTS_CAP."""
+        blob = json.dumps(payload, default=str, sort_keys=True)
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO job_results (job_id, ts, fingerprint, payload_json)"
+                " VALUES (?, ?, ?, ?)",
+                (job_id, ts, fingerprint, blob),
+            )
+            # Keep only the newest RESULTS_CAP rows for this job.
+            self._conn.execute(
+                """DELETE FROM job_results
+                   WHERE job_id = ? AND id NOT IN (
+                       SELECT id FROM job_results WHERE job_id = ?
+                       ORDER BY ts DESC, id DESC LIMIT ?
+                   )""",
+                (job_id, job_id, RESULTS_CAP),
+            )
+            self._conn.commit()
+
+    def results(self, job_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT ts, fingerprint, payload_json FROM job_results"
+                " WHERE job_id = ? ORDER BY ts DESC, id DESC LIMIT ?",
+                (job_id, limit),
+            )
+            rows = cur.fetchall()
+        out: list[dict[str, Any]] = []
+        for ts, fingerprint, blob in rows:
+            try:
+                payload = json.loads(blob)
+            except Exception:  # noqa: BLE001
+                continue
+            out.append({"ts": ts, "fingerprint": fingerprint, "payload": payload})
         return out
 
     # -- internal ---------------------------------------------------------- #

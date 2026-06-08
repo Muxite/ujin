@@ -36,10 +36,12 @@ COPY ujin ./ujin
 RUN rm -rf ujin/obscura \
     && pip install --no-cache-dir ".[scrape,social,diff,sessions,jobs]"
 
-# Mount points for the unified job control plane: operator plugins + the durable
-# jobstore. Both are typically bind- or volume-mounted by compose.
-RUN mkdir -p /plugins /data
+# Mount points for the unified job control plane: operator plugins (capabilities),
+# the workflow definition files, and the durable jobstore. All are typically bind-
+# or volume-mounted by compose.
+RUN mkdir -p /plugins /data /workflows
 ENV UJIN_PLUGINS_DIR=/plugins \
+    UJIN_WORKFLOWS_DIR=/workflows \
     UJIN_JOBS_DB=/data/ujin-jobs.db
 
 EXPOSE 8900 8901 8902

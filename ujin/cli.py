@@ -105,7 +105,8 @@ def _cmd_scrape_serve(args: argparse.Namespace) -> int:
 def _cmd_jobs_serve(args: argparse.Namespace) -> int:
     from ujin.jobs.app import serve
 
-    serve(host=args.host, port=args.port, config_path=args.jobs)
+    serve(host=args.host, port=args.port, config_path=args.jobs,
+          workflows_dir=args.workflows)
     return 0
 
 
@@ -191,6 +192,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_jobs.add_argument("jobs", nargs="?", default=None,
                         help="optional jobs.yaml to preload")
+    p_jobs.add_argument("--workflows", default=None,
+                        help="directory of workflow files to load (default: "
+                             "$UJIN_WORKFLOWS_DIR or /workflows)")
     p_jobs.add_argument("--host", default="0.0.0.0")
     p_jobs.add_argument("--port", type=int, default=8902)
     p_jobs.set_defaults(func=_cmd_jobs_serve)

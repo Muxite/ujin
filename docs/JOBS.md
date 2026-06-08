@@ -77,7 +77,7 @@ in-memory `POST /targets` left open.
 ## REST surface (`:8902`)
 
 ```
-GET    /health                  {ok, jobs, plugins}
+GET    /health                  {ok, jobs, plugins, workflows}
 GET    /kinds                   available source/transform/sink kinds
 GET    /metrics                 engine stats + per-job + plugin status
 GET    /jobs                    list job summaries
@@ -88,9 +88,14 @@ POST   /jobs/{id}/run           run now (one-shot poll + pipeline)
 POST   /jobs/{id}/pause | /resume
 GET    /jobs/{id}/runs?limit=N  run history
 GET    /jobs/{id}/events?limit=N  events persisted by the `sqlite` sink
+GET    /jobs/{id}/content       latest obtained payload (the data ujin last got)
+GET    /jobs/{id}/results?limit=N  recent buffer of obtained results (per change)
 WS     /jobs/events             live change stream (all jobs)
 POST   /plugins/reload          re-import plugins -> {loaded, failed}
 ```
+
+File-driven jobs (**workflows**) also load from `UJIN_WORKFLOWS_DIR` on startup
+(id = filename stem). See [WORKFLOWS.md](WORKFLOWS.md).
 
 Every change also emits a compact `{"event":"change","job_id",...}` on
 `WS /jobs/events`, independent of whether the job has a `ws` sink.

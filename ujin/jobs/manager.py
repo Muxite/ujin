@@ -97,14 +97,23 @@ class JobManager:
         """on_change that records a (changed) run, then runs the pipeline."""
 
         async def _cb(key: str, result: PollResult) -> None:
+            ts = getattr(result, "ts", time.time())
             self.store.record_run(
                 spec.id,
-                started_at=getattr(result, "ts", time.time()),
+                started_at=ts,
                 finished_at=time.time(),
                 ok=result.ok,
                 changed=result.changed,
                 fingerprint=result.fingerprint,
                 strategy=getattr(getattr(result, "payload", None), "strategy_used", None),
+            )
+            # Capture the obtained payload into the durable "collect" buffer so
+            # consumers can pull it back by workflow id via /jobs/{id}/results.
+            # on_change fires only when content actually changed, so we don't
+            # store identical bodies on every poll.
+            self.store.record_result(
+                spec.id, ts=ts, fingerprint=result.fingerprint,
+                payload=getattr(result, "payload", None),
             )
             # compact notice on the global /jobs/events stream (independent of
             # whether the job also configured a `ws` sink)
