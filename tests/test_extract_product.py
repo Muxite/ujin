@@ -75,3 +75,51 @@ def test_dedupe_by_source_id():
     products = extract_products(_CARD_HTML + _CARD_HTML,
                                 "https://www.amazon.com/s?k=x")
     assert len(products) == 1  # duplicate ASIN collapsed
+
+
+_BRAND_THEN_TITLE_HTML = """
+<html><body>
+<div data-component-type="s-search-result" data-asin="B0BRANDED">
+  <h2 class="a-size-base-plus"><span>Logitech</span></h2>
+  <h2 class="a-size-medium"><a class="a-link-normal" href="/x">
+    <span>Logitech MX Master 3S Wireless Performance Mouse</span></a></h2>
+  <img class="s-image" src="https://m.media-amazon.com/images/I/abc.jpg"/>
+  <span class="a-price"><span class="a-offscreen">$99.99</span></span>
+</div>
+</body></html>
+"""
+
+
+_SPONSORED_HTML = """
+<html><body>
+<div data-component-type="s-search-result" data-asin="B0SPONSORED">
+  <span class="puis-sponsored-label-text">Sponsored</span>
+  <h2><a class="a-link-normal" href="/x"><span>Off-target Sponsored Mouse</span></a></h2>
+  <img class="s-image" src="https://m.media-amazon.com/images/I/spon.jpg"/>
+  <span class="a-price"><span class="a-offscreen">$19.99</span></span>
+</div>
+<div data-component-type="s-search-result" data-asin="B0ORGANIC">
+  <h2><a class="a-link-normal" href="/y"><span>The Real Organic Product</span></a></h2>
+  <img class="s-image" src="https://m.media-amazon.com/images/I/org.jpg"/>
+  <span class="a-price"><span class="a-offscreen">$99.99</span></span>
+</div>
+</body></html>
+"""
+
+
+def test_skips_sponsored_by_default():
+    products = extract_products(_SPONSORED_HTML, "https://www.amazon.com/s?k=mouse")
+    assert [p.source_id for p in products] == ["B0ORGANIC"]
+    # Opt out to keep sponsored cards.
+    keep = extract_products(_SPONSORED_HTML, "https://www.amazon.com/s?k=mouse",
+                            skip_sponsored=False)
+    assert {p.source_id for p in keep} == {"B0SPONSORED", "B0ORGANIC"}
+
+
+def test_title_picks_full_over_brand():
+    products = extract_products(_BRAND_THEN_TITLE_HTML, "https://www.amazon.com/s?k=mouse")
+    assert len(products) == 1
+    p = products[0]
+    # Not the bare brand "Logitech" — the longer full product title wins.
+    assert p.title == "Logitech MX Master 3S Wireless Performance Mouse"
+    assert p.url == "https://www.amazon.com/dp/B0BRANDED"  # canonicalized

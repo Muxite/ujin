@@ -47,11 +47,41 @@ class Product:
 _AMAZON_SELECTORS = {
     "card": "div[data-component-type='s-search-result']",
     "id_attr": "data-asin",
-    "title": "h2 span",
+    # Several layouts put the brand in one element and the full title in another
+    # ("Logitech" vs "Logitech MX Master 3S ..."). Gather all candidates across
+    # these selectors and keep the longest — the product title, not the brand.
+    "title": ("h2 a span", "h2 span", "h2"),
     "image": ".s-image",
     "price": ".a-price .a-offscreen",
     "link": "a.a-link-normal",
 }
+
+
+# Markers Amazon uses to flag a paid placement. Sponsored cards are usually a
+# poor match for the query (competitors, accessories), so callers can skip them.
+_SPONSORED_SELECTORS = (
+    ".puis-sponsored-label-text",
+    ".s-sponsored-label-text",
+    ".s-sponsored-label-info-icon",
+    "[data-component-type='sp-sponsored-result']",
+)
+
+
+def _is_sponsored(card) -> bool:
+    return any(card.css_first(sel) is not None for sel in _SPONSORED_SELECTORS)
+
+
+def _best_title(card, title_selectors) -> str | None:
+    """Pick the longest non-empty title candidate (avoids brand-only spans)."""
+    if isinstance(title_selectors, str):
+        title_selectors = (title_selectors,)
+    candidates: list[str] = []
+    for sel in title_selectors:
+        for node in card.css(sel):
+            text = node.text(strip=True)
+            if text:
+                candidates.append(text)
+    return max(candidates, key=len) if candidates else None
 
 _CURRENCY_SYMBOLS = {"$": "USD", "£": "GBP", "€": "EUR", "¥": "JPY", "₹": "INR"}
 # Thousands separators (comma / thin space between digit groups) are stripped
@@ -127,7 +157,9 @@ def _from_jsonld(blocks: list, *, source: str, base_url: str) -> list[Product]:
     return out
 
 
-def _from_cards(html: str, *, source: str, base_url: str, selectors: dict) -> list[Product]:
+def _from_cards(
+    html: str, *, source: str, base_url: str, selectors: dict, skip_sponsored: bool = True
+) -> list[Product]:
     try:
         from selectolax.parser import HTMLParser
     except ImportError:  # pragma: no cover - web extra missing
@@ -135,10 +167,12 @@ def _from_cards(html: str, *, source: str, base_url: str, selectors: dict) -> li
     tree = HTMLParser(html)
     out: list[Product] = []
     for card in tree.css(selectors["card"]):
-        title_node = card.css_first(selectors["title"])
+        if skip_sponsored and _is_sponsored(card):
+            continue
+        title = _best_title(card, selectors["title"])
         price_node = card.css_first(selectors["price"])
         image_node = card.css_first(selectors["image"])
-        if not (title_node and price_node and image_node):
+        if not (title and price_node and image_node):
             continue
         price_text = price_node.text(strip=True)
         cents = price_to_cents(price_text)
@@ -147,16 +181,22 @@ def _from_cards(html: str, *, source: str, base_url: str, selectors: dict) -> li
         image_url = image_node.attributes.get("src") or ""
         if not image_url:
             continue
-        link_node = card.css_first(selectors["link"])
-        href = (link_node.attributes.get("href") if link_node else None) or ""
+        source_id = card.attributes.get(selectors["id_attr"]) or None
+        if source == "amazon" and source_id:
+            # Canonical product URL — drop the noisy search-ref query string.
+            url = f"https://www.amazon.com/dp/{source_id}"
+        else:
+            link_node = card.css_first(selectors["link"])
+            href = (link_node.attributes.get("href") if link_node else None) or ""
+            url = urljoin(base_url, href) if href else None
         out.append(Product(
             source=source,
-            source_id=card.attributes.get(selectors["id_attr"]) or None,
-            title=title_node.text(strip=True),
+            source_id=source_id,
+            title=title,
             image_url=urljoin(base_url, image_url),
             price_cents=cents,
             currency=_currency_from_text(price_text),
-            url=urljoin(base_url, href) if href else None,
+            url=url,
         ))
     return out
 
@@ -167,6 +207,7 @@ def extract_products(
     *,
     source: str = "amazon",
     selectors: dict | None = None,
+    skip_sponsored: bool = True,
 ) -> list[Product]:
     """Extract normalized products from a marketplace page.
 
@@ -175,6 +216,7 @@ def extract_products(
     :param source: Value stamped on each product's ``source`` field.
     :param selectors: CSS selector overrides for the card fallback (defaults to
         Amazon search-grid selectors).
+    :param skip_sponsored: Drop paid-placement cards (usually off-target).
     :returns: List of :class:`Product` (deduped by ``source_id`` when present).
     """
     products = _from_jsonld(
@@ -183,6 +225,7 @@ def extract_products(
     products += _from_cards(
         html, source=source, base_url=base_url,
         selectors={**_AMAZON_SELECTORS, **(selectors or {})},
+        skip_sponsored=skip_sponsored,
     )
     # Dedupe: prefer the first occurrence of each source_id; keep id-less items.
     seen: set[str] = set()
