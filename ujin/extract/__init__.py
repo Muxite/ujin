@@ -11,6 +11,7 @@ from .links import (
     fingerprint_links,
     normalize_url,
 )
+from .product import Product, extract_products, price_to_cents
 from .profile import apply_article_profile, apply_link_profile
 
 __all__ = [
@@ -23,4 +24,7 @@ __all__ = [
     "fingerprint_links",
     "apply_link_profile",
     "apply_article_profile",
+    "Product",
+    "extract_products",
+    "price_to_cents",
 ]

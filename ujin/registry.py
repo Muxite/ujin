@@ -196,6 +196,30 @@ def _install_builtins(reg: Registry) -> None:
             headless=cfg.get("headless", True), ctx=ctx,
         )
 
+    def _src_amazon_search(cfg):
+        from ujin.poll.amazon import AmazonSearchPollable
+
+        # Accept a single `term` or a list of `terms`. A list builds a
+        # MultiPollable so one workflow file can sweep several queries.
+        common = dict(
+            domain=cfg.get("domain", "amazon.com"),
+            max_results=cfg.get("max_results", 1),
+            category=cfg.get("category"),
+            engine=cfg.get("engine", "auto"),
+            headless=cfg.get("headless", True),
+            proxy=cfg.get("proxy"),
+            timeout_secs=cfg.get("timeout_secs", 30),
+        )
+        terms = cfg.get("terms")
+        if terms:
+            from ujin.poll.multi import MultiPollable
+
+            return MultiPollable(
+                [AmazonSearchPollable(t, **common) for t in terms],
+                key=cfg.get("key", "amazon_search"),
+            )
+        return AmazonSearchPollable(cfg["term"], **common)
+
     reg.register_builtin("source", "http", _src_http)
     reg.register_builtin("source", "rss", _src_rss)
     reg.register_builtin("source", "api", _src_api)
@@ -203,6 +227,7 @@ def _install_builtins(reg: Registry) -> None:
     reg.register_builtin("source", "site", _src_site)
     reg.register_builtin("source", "scrape", _src_scrape)
     reg.register_builtin("source", "browser", _src_browser)
+    reg.register_builtin("source", "amazon_search", _src_amazon_search)
 
     # --- transforms ------------------------------------------------------- #
     from ujin.jobs.transforms import BUILTIN_TRANSFORMS
