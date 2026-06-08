@@ -3,7 +3,29 @@ from __future__ import annotations
 
 import pytest
 
-from ujin.extract.product import Product, extract_products, price_to_cents
+from ujin.extract.product import (
+    Product,
+    clean_product_name,
+    extract_products,
+    price_to_cents,
+)
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("737 Power Bank, 140W Max 3-Port Laptop Portable Charger, 24,000mAh", "737 Power Bank"),
+    ("WH-1000XM5 Premium Noise Canceling Headphones, Auto NC Optimizer, 30-Hour",
+     "WH-1000XM5 Premium Noise Canceling Headphones"),
+    ("Apple AirPods Pro (2nd Generation) (Renewed)", "Apple AirPods Pro"),
+    ("MX Master 3S - Performance Wireless Mouse with Ultra-Fast Scrolling", "MX Master 3S"),
+    ("Instant Pot Duo 7-in-1 Electric Pressure Cooker | 6 Quart", "Instant Pot Duo 7-in-1 Electric Pressure Cooker"),
+])
+def test_clean_product_name(raw, expected):
+    assert clean_product_name(raw) == expected
+
+
+def test_clean_product_name_word_cap():
+    long = "Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota Kappa"
+    assert clean_product_name(long, max_words=4) == "Alpha Beta Gamma Delta"
 
 
 @pytest.mark.parametrize("text,expected", [

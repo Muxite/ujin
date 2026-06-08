@@ -220,6 +220,23 @@ def _install_builtins(reg: Registry) -> None:
             )
         return AmazonSearchPollable(cfg["term"], **common)
 
+    def _src_amazon_category(cfg):
+        from ujin.poll.amazon import AmazonCategoryPollable
+
+        return AmazonCategoryPollable(
+            categories=cfg.get("categories"),
+            terms_per_poll=cfg.get("terms_per_poll", 3),
+            max_results=cfg.get("max_results", 4),
+            mutate_prob=cfg.get("mutate_prob", 0.25),
+            domain=cfg.get("domain", "amazon.com"),
+            engine=cfg.get("engine", "auto"),
+            headless=cfg.get("headless", True),
+            proxy=cfg.get("proxy"),
+            timeout_secs=cfg.get("timeout_secs", 30),
+            seed=cfg.get("seed"),
+            key=cfg.get("key", "amazon_category"),
+        )
+
     reg.register_builtin("source", "http", _src_http)
     reg.register_builtin("source", "rss", _src_rss)
     reg.register_builtin("source", "api", _src_api)
@@ -228,6 +245,7 @@ def _install_builtins(reg: Registry) -> None:
     reg.register_builtin("source", "scrape", _src_scrape)
     reg.register_builtin("source", "browser", _src_browser)
     reg.register_builtin("source", "amazon_search", _src_amazon_search)
+    reg.register_builtin("source", "amazon_category", _src_amazon_category)
 
     # --- transforms ------------------------------------------------------- #
     from ujin.jobs.transforms import BUILTIN_TRANSFORMS

@@ -53,6 +53,7 @@ class AmazonSearchPollable:
         headless: bool = True,
         proxy: str | None = None,
         timeout_secs: int = 30,
+        clean_titles: bool = True,
         key: str | None = None,
     ) -> None:
         self.term = term
@@ -63,6 +64,7 @@ class AmazonSearchPollable:
         self.headless = headless
         self.proxy = proxy or os.environ.get("PROXY_URL") or None
         self.timeout_secs = timeout_secs
+        self.clean_titles = clean_titles
         self.key = key or f"amazon:{term}"
 
     @property
@@ -136,12 +138,14 @@ class AmazonSearchPollable:
             log.warning("amazon %s: no HTML from any engine", self.term)
             return PollResult(ok=True, changed=False, fingerprint=None, payload=[])
 
-        from ujin.extract.product import extract_products
+        from ujin.extract.product import clean_product_name, extract_products
 
         products = extract_products(html, url, source="amazon")[: self.max_results]
         for p in products:
             if self.category:
                 p.category = self.category
+            if self.clean_titles:
+                p.title = clean_product_name(p.title)
         items = [dataclasses.asdict(p) for p in products]
         if not items:
             log.warning("amazon %s: page fetched (%s) but no products parsed",
@@ -153,3 +157,124 @@ class AmazonSearchPollable:
             fingerprint=fp,
             payload=items,
         )
+
+
+# Generic, brand-agnostic product queries per category. We don't care which
+# specific item comes back — any item with a name/price/picture is usable — so
+# these are common product nouns, not models. Extend freely.
+_KEYTERM_BANK: dict[str, list[str]] = {
+    "Electronics": ["wireless earbuds", "bluetooth speaker", "mechanical keyboard",
+                    "usb c charger", "gaming mouse", "webcam", "portable ssd",
+                    "smart watch", "power bank", "wifi router", "noise cancelling headphones",
+                    "tablet", "hdmi cable", "phone case"],
+    "Kitchen": ["air fryer", "coffee maker", "blender", "chef knife", "cast iron skillet",
+                "food storage containers", "electric kettle", "water bottle",
+                "cutting board", "toaster", "mixing bowls", "travel mug"],
+    "Home": ["led strip lights", "air purifier", "robot vacuum", "throw blanket",
+             "desk lamp", "picture frame", "storage bins", "wall clock",
+             "mattress topper", "shower curtain", "scented candle"],
+    "Tools": ["cordless drill", "tape measure", "screwdriver set", "tool box",
+              "work gloves", "flashlight", "level tool", "stud finder", "utility knife"],
+    "Toys": ["building blocks", "board game", "action figure", "jigsaw puzzle",
+             "remote control car", "plush toy", "card game", "play kitchen"],
+    "Beauty": ["face moisturizer", "hair dryer", "electric toothbrush", "makeup brushes",
+               "sunscreen", "beard trimmer", "nail kit", "facial cleanser"],
+    "Sports": ["yoga mat", "dumbbells", "resistance bands", "jump rope", "foam roller",
+               "running belt", "basketball", "camping chair", "hiking backpack"],
+    "Office": ["desk organizer", "mechanical pencil", "notebook", "monitor stand",
+               "label maker", "sticky notes", "desk mat", "file folders"],
+    "Apparel": ["running shoes", "backpack", "baseball cap", "wool socks",
+                "sunglasses", "winter gloves", "rain jacket", "leather belt"],
+}
+
+# Occasionally appended/prepended to drift the result set toward fresh items.
+# Mostly empty so a "change" only happens once in a while.
+_MODIFIERS = ["", "", "", "", "best", "premium", "portable", "set", "for home", "2024"]
+
+
+class AmazonCategoryPollable:
+    """Randomized, category-driven Amazon sweep.
+
+    Each poll samples a handful of generic product queries from the keyterm bank
+    (optionally restricted to ``categories``), occasionally mutating a term with a
+    random modifier so the result set drifts over time and surfaces new items.
+    Every sampled term is scraped via :class:`AmazonSearchPollable` (so engine
+    escalation, sponsored-skipping and title cleaning all apply) and the products
+    are combined + deduped into one batch tagged with their category.
+    """
+
+    def __init__(
+        self,
+        *,
+        categories: list[str] | None = None,
+        terms_per_poll: int = 3,
+        max_results: int = 4,
+        mutate_prob: float = 0.25,
+        domain: str = "amazon.com",
+        engine: str = "auto",
+        headless: bool = True,
+        proxy: str | None = None,
+        timeout_secs: int = 30,
+        seed: int | None = None,
+        key: str = "amazon_category",
+    ) -> None:
+        self.categories = [c for c in (categories or list(_KEYTERM_BANK)) if c in _KEYTERM_BANK]
+        if not self.categories:
+            self.categories = list(_KEYTERM_BANK)
+        self.terms_per_poll = max(1, int(terms_per_poll))
+        self.max_results = max(1, int(max_results))
+        self.mutate_prob = mutate_prob
+        self.domain = domain
+        self.engine = engine
+        self.headless = headless
+        self.proxy = proxy
+        self.timeout_secs = timeout_secs
+        self.key = key
+        import random as _random
+        self._rng = _random.Random(seed)
+
+    def _sample_terms(self) -> list[tuple[str, str]]:
+        """Pick (term, category) pairs for this poll, with occasional mutation."""
+        pairs = [(t, cat) for cat in self.categories for t in _KEYTERM_BANK[cat]]
+        k = min(self.terms_per_poll, len(pairs))
+        chosen = self._rng.sample(pairs, k)
+        out: list[tuple[str, str]] = []
+        for term, cat in chosen:
+            if self._rng.random() < self.mutate_prob:
+                mod = self._rng.choice(_MODIFIERS)
+                if mod:
+                    term = f"{mod} {term}" if self._rng.random() < 0.5 else f"{term} {mod}"
+            out.append((term, cat))
+        return out
+
+    async def poll(self, prev: PollResult | None) -> PollResult:
+        import asyncio
+
+        pairs = self._sample_terms()
+        log.info("amazon_category sweep: %s", [t for t, _ in pairs])
+        children = [
+            AmazonSearchPollable(
+                term, domain=self.domain, max_results=self.max_results, category=cat,
+                engine=self.engine, headless=self.headless, proxy=self.proxy,
+                timeout_secs=self.timeout_secs,
+            )
+            for term, cat in pairs
+        ]
+        results = await asyncio.gather(*(c.poll(None) for c in children),
+                                       return_exceptions=True)
+        combined: list[dict] = []
+        seen: set[str] = set()
+        for res in results:
+            if isinstance(res, Exception) or not getattr(res, "ok", False):
+                continue
+            for item in (res.payload or []):
+                sid = item.get("source_id")
+                if sid and sid in seen:
+                    continue
+                if sid:
+                    seen.add(sid)
+                combined.append(item)
+        # Always push what we found this cycle (upsert is idempotent), so
+        # last_seen_at stays fresh and new items land.
+        return PollResult(ok=True, changed=bool(combined),
+                          fingerprint=fingerprint(combined), payload=combined)

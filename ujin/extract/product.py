@@ -25,7 +25,7 @@ from urllib.parse import urljoin
 
 from .structured import extract_structured
 
-__all__ = ["Product", "extract_products", "price_to_cents"]
+__all__ = ["Product", "extract_products", "price_to_cents", "clean_product_name"]
 
 
 @dataclass
@@ -108,6 +108,37 @@ def price_to_cents(text: str | float | int | None) -> int | None:
         return int(round(float(m.group(0)) * 100))
     except ValueError:
         return None
+
+
+# Delimiters that usually separate the product name from the marketing tail of
+# a marketplace title ("Acme Widget, 3-pack, BPA-free ..." -> "Acme Widget").
+_NAME_DELIMS = (",", " - ", " – ", " — ", " | ", ": ", "; ", " • ", " w/ ", " with ")
+_BRACKETS_RE = re.compile(r"[\(\[\{][^\)\]\}]*[\)\]\}]")
+
+
+def clean_product_name(title: str, *, max_words: int = 8) -> str:
+    """Heuristically shorten a verbose marketplace title to a product name.
+
+    Non-LLM: collapse whitespace, cut at the earliest "marketing" delimiter,
+    drop bracketed asides, and cap word count. ``"WH-1000XM5 Headphones,
+    30-Hour Battery, ..." -> "WH-1000XM5 Headphones"``.
+    """
+    if not title:
+        return title
+    original = " ".join(str(title).split())
+    cut = len(original)
+    for d in _NAME_DELIMS:
+        i = original.find(d)
+        if 0 < i < cut:
+            cut = i
+    t = _BRACKETS_RE.sub("", original[:cut])
+    t = " ".join(t.split())
+    words = t.split(" ")
+    if len(words) > max_words:
+        t = " ".join(words[:max_words])
+    t = t.strip(" -–—|,:;•")
+    # Fall back to a word-capped original if cutting left nothing usable.
+    return t or " ".join(original.split()[:max_words])
 
 
 def _currency_from_text(text: str, default: str = "USD") -> str:
