@@ -90,3 +90,24 @@ def test_poll_draws_from_harvest_pool(tmp_path):
     assert len(pairs) == 2
     # With ratio 1.0, at least one term comes from the harvested pool.
     assert any(term in {"merino", "wool", "hiking", "socks"} for term, _ in pairs)
+
+
+async def test_category_poll_harvests_and_combines(monkeypatch, tmp_path):
+    """poll() without network: child scrapes are combined + titles feed the harvest pool."""
+    from ujin.poll import amazon as amz
+    from ujin.poll.base import PollResult
+
+    async def fake_child_poll(self, prev):
+        return PollResult(ok=True, changed=True, payload=[
+            {"source": "amazon", "source_id": f"id-{self.term[:4]}", "category": self.category,
+             "title": "bamboo cutting board", "price_cents": 1500},
+        ])
+
+    monkeypatch.setattr(amz.AmazonSearchPollable, "poll", fake_child_poll)
+    path = str(tmp_path / "h.json")
+    src = AmazonCategoryPollable(categories=["Kitchen"], terms_per_poll=2, mutate_prob=0.0,
+                                 seed=3, harvest=True, harvest_path=path)
+    res = await src.poll(None)
+    assert res.ok and res.payload
+    # Harvested words from the scraped titles enter the pool for future runs.
+    assert src._store is not None and ("bamboo" in src._store.pool or "cutting" in src._store.pool)

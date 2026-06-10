@@ -31,6 +31,50 @@ def test_child_pollable_uses_profile_url_and_source():
     assert child.category == "RAM"
 
 
+async def test_poll_combines_and_dedupes(monkeypatch):
+    """poll() orchestration without network: children are scraped, results deduped by id."""
+    from ujin.poll import amazon as amz
+    from ujin.poll.base import PollResult
+
+    calls: list[str] = []
+
+    async def fake_child_poll(self, prev):
+        calls.append(self.term)
+        return PollResult(ok=True, changed=True, payload=[
+            {"source": self.source, "source_id": f"u-{self.term[:4]}", "title": self.term, "price_cents": 100},
+            {"source": self.source, "source_id": "shared", "title": "dupe", "price_cents": 200},
+        ])
+
+    monkeypatch.setattr(amz.AmazonSearchPollable, "poll", fake_child_poll)
+    src = MarketplaceSearchPollable(profile="newegg", terms_per_poll=3, seed=1)
+    res = await src.poll(None)
+    assert res.ok and res.payload
+    assert len(calls) == 3
+    ids = [it["source_id"] for it in res.payload]
+    assert ids.count("shared") == 1                 # deduped across children
+
+
+async def test_amazon_search_poll_stamps_category_without_network(monkeypatch):
+    from ujin.poll.amazon import AmazonSearchPollable
+    from ujin.extract import product as prod
+
+    async def fake_render(self, url):
+        return ("<html>ok</html>", "http")
+
+    def fake_extract(html, url, source="amazon", selectors=None):
+        return [prod.Product(source=source, source_id="A1", title="Thing",
+                             image_url="http://x/i.jpg", price_cents=999, currency="USD",
+                             category=None, url=None)]
+
+    monkeypatch.setattr(AmazonSearchPollable, "_render", fake_render)
+    monkeypatch.setattr(prod, "extract_products", fake_extract)
+    src = AmazonSearchPollable("ddr5 ram", source="newegg", category="RAM", max_results=5)
+    res = await src.poll(None)
+    assert res.ok
+    assert res.payload[0]["source"] == "newegg"
+    assert res.payload[0]["category"] == "RAM"      # category stamped onto results
+
+
 def test_unknown_profile_falls_back_to_amazon():
     src = MarketplaceSearchPollable(profile="nope")
     assert src.profile_name == "amazon"

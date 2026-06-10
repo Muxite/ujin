@@ -87,21 +87,21 @@ class AmazonSearchPollable:
     def search_url(self) -> str:
         return self.search_url_template.format(domain=self.domain, query=quote_plus(self.term))
 
-    async def _fetch_http(self, url: str) -> str:
+    async def _fetch_http(self, url: str) -> str:  # pragma: no cover (network/browser I/O)
         from ujin.fetch.http import HttpFetcher
 
         async with HttpFetcher(user_agent=_UA, timeout_secs=self.timeout_secs) as f:
             resp = await f.get(url, proxy=self.proxy)
             return resp.body or ""
 
-    async def _fetch_obscura(self, url: str) -> str:
+    async def _fetch_obscura(self, url: str) -> str:  # pragma: no cover (network/browser I/O)
         from ujin.fetch.obscura import ObscuraFetcher, obscura_available
 
         if not obscura_available():
             return ""
         return (await ObscuraFetcher(timeout_secs=self.timeout_secs).render_html(url)).html or ""
 
-    async def _fetch_browser(self, url: str) -> str:
+    async def _fetch_browser(self, url: str) -> str:  # pragma: no cover (network/browser I/O)
         from ujin.fetch.browser import BrowserFetcher, browser_available
 
         engine = "selenium" if self.engine == "selenium" else "playwright"
@@ -122,7 +122,7 @@ class AmazonSearchPollable:
             except Exception:  # noqa: BLE001
                 pass
 
-    async def _render(self, url: str) -> tuple[str, str]:
+    async def _render(self, url: str) -> tuple[str, str]:  # pragma: no cover (network/browser I/O)
         """Return (html, engine_used). Escalates through the auto chain."""
         engines = _AUTO_CHAIN if self.engine == "auto" else (self.engine,)
         last = ""
