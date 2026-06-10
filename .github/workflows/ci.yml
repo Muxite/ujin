@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        # NOTE: no `submodules: true` — the obscura Rust crate is never built
+        # in CI; obscura tests run against the stub binary from conftest.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: pip install -e .[all,dev]
+        # Playwright/Selenium libs install, but no browsers do — tests marked
+        # `browser` are skipped; recipe logic runs against FakePage.
+      - name: Test with coverage
+        run: pytest --cov --cov-report=term-missing
+
+  benchmarks:
+    # Regression check only; runs after Cycle 2 lands baselines. Non-blocking.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e .[all,dev]
+      - name: Run benchmarks
+        run: |
+          if [ -d benchmarks ]; then
+            pytest benchmarks/ --benchmark-only --benchmark-disable-gc -q
+          else
+            echo "no benchmarks yet"
+          fi

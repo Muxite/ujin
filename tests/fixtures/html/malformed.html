@@ -1,0 +1,14 @@
+<html>
+<head><title>Malformed page<title>
+<body>
+<div class="unclosed">
+  <p>Paragraph never closed
+  <a href="/ok-link">a link that should still be found
+  <a href='/single-quotes'>single quoted</a>
+  <a href=/no-quotes>unquoted attr</a>
+  <table><tr><td>orphan table cell
+  <script>document.write("<a href='/from-script'>script link</a>");</script>
+  <!-- unterminated comment <a href="/in-comment">hidden</a>
+  <a href="/after-comment">after busted comment</a>
+<div><span><b><i>deeply <u>nested unclosed inline tags
+<p>final paragraph with stray < bracket and & ampersand

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>The Daily Fixture</title>
+    <link>https://news.example.com/</link>
+    <description>Fixture feed for tests</description>
+    <item>
+      <title>Markets rally as central bank holds rates steady</title>
+      <link>https://news.example.com/2026/06/09/markets-rally-on-rate-decision</link>
+      <guid>https://news.example.com/2026/06/09/markets-rally-on-rate-decision</guid>
+      <pubDate>Tue, 09 Jun 2026 09:15:00 GMT</pubDate>
+      <description>Equities climbed broadly after the decision.</description>
+    </item>
+    <item>
+      <title>Chipmaker announces $40B fab expansion in three states</title>
+      <link>https://news.example.com/2026/06/09/chip-fab-expansion-announced</link>
+      <guid>https://news.example.com/2026/06/09/chip-fab-expansion-announced</guid>
+      <pubDate>Tue, 09 Jun 2026 07:40:00 GMT</pubDate>
+      <description>The expansion is the largest single private investment this year.</description>
+    </item>
+    <item>
+      <title>Lab claims quantum error-correction milestone</title>
+      <link>https://news.example.com/2026/06/08/quantum-error-correction-milestone</link>
+      <guid>https://news.example.com/2026/06/08/quantum-error-correction-milestone</guid>
+      <pubDate>Mon, 08 Jun 2026 14:30:00 GMT</pubDate>
+      <description>Researchers demonstrated a logical qubit below threshold.</description>
+    </item>
+  </channel>
+</rss>
