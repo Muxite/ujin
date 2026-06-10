@@ -235,6 +235,11 @@ def _install_builtins(reg: Registry) -> None:
             timeout_secs=cfg.get("timeout_secs", 30),
             seed=cfg.get("seed"),
             key=cfg.get("key", "amazon_category"),
+            harvest=cfg.get("harvest", False),
+            harvest_path=cfg.get("harvest_path", "/data/amazon_harvest.json"),
+            harvest_ratio=cfg.get("harvest_ratio", 0.5),
+            harvest_min_len=cfg.get("harvest_min_len", 4),
+            max_pool=cfg.get("max_pool", 5000),
         )
 
     reg.register_builtin("source", "http", _src_http)

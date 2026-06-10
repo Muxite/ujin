@@ -21,8 +21,11 @@ healthy across transient blocks.
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import os
+import random as _random_mod
+import re
 from urllib.parse import quote_plus
 
 from ujin.poll.base import PollResult, decide_changed, fingerprint
@@ -192,6 +195,106 @@ _KEYTERM_BANK: dict[str, list[str]] = {
 _MODIFIERS = ["", "", "", "", "best", "premium", "portable", "set", "for home", "2024"]
 
 
+# ── Keyterm harvesting ──────────────────────────────────────────────────────
+# Self-expanding search variety with no LLM: every scraped product title is a bag
+# of real product words. We pull the uncommon ones out, remember the ones we've
+# never searched, and feed them back as future queries. A search for "razor" surfaces
+# titles like "stainless steel safety razor blades" -> we learn "stainless", "safety",
+# "blades" and search those next. The `used` set guarantees a term is never searched
+# twice, so coverage keeps widening instead of looping.
+
+_WORD_RE = re.compile(r"[a-z][a-z]+")
+
+# Words too generic to be useful queries (articles, filler, colors, units, sizes,
+# materials/adjectives that match everything) plus the drift modifiers above. Harvested
+# words are also length-gated, so this list only needs the common *long* offenders.
+_HARVEST_STOPWORDS: frozenset[str] = frozenset({
+    "the", "and", "for", "with", "from", "your", "you", "our", "this", "that", "these",
+    "those", "all", "any", "each", "per", "set", "pack", "piece", "pieces", "count",
+    "pcs", "size", "large", "small", "medium", "mini", "max", "plus", "pro", "premium",
+    "best", "new", "high", "quality", "professional", "portable", "wireless", "rechargeable",
+    "adjustable", "universal", "multi", "multiple", "double", "single", "heavy", "duty",
+    "duty", "super", "ultra", "extra", "long", "short", "wide", "thick", "thin", "soft",
+    "hard", "light", "lightweight", "durable", "strong", "easy", "fast", "quick", "smart",
+    "black", "white", "blue", "red", "green", "gray", "grey", "silver", "gold", "pink",
+    "purple", "yellow", "brown", "orange", "color", "colour", "colors", "colours",
+    "inch", "inches", "feet", "foot", "pack", "packs", "piece", "pound", "pounds", "ounce",
+    "ounces", "gram", "grams", "liter", "litre", "men", "women", "kids", "boys", "girls",
+    "unisex", "home", "office", "indoor", "outdoor", "travel", "gift", "gifts", "use",
+    "used", "include", "includes", "including", "free", "case", "cover", "kit", "accessory",
+    "accessories", "compatible", "replacement", "original", "genuine", "official", "style",
+    "design", "fashion", "classic", "modern", "deluxe", "standard", "edition", "version",
+    "type", "model", "series", "brand", "value", "great", "perfect", "ideal", "non",
+    "anti", "inch", "cm", "mm", "kg", "ml", "oz", "led", "usb",
+})
+
+
+class _HarvestStore:
+    """Persistent term pool + already-searched set, stored as one JSON file.
+
+    ``pool`` maps a not-yet-searched term -> the category of the listing it came from
+    (so when we search it, the results get tagged with a sensible category). ``used`` is
+    every term we've already issued a search for — terms never re-enter the pool.
+    """
+
+    def __init__(self, path: str, max_pool: int = 5000, rng=None) -> None:
+        self.path = path
+        self.max_pool = max_pool
+        self._rng = rng or _random_mod.Random()
+        self.used: set[str] = set()
+        self.pool: dict[str, str] = {}
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                data = json.load(f)
+            self.used = set(data.get("used", []))
+            self.pool = {str(k): str(v) for k, v in dict(data.get("pool", {})).items()}
+        except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError):
+            pass  # first run / unreadable -> start empty
+
+    def save(self) -> None:
+        try:
+            parent = os.path.dirname(self.path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            tmp = f"{self.path}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"used": sorted(self.used), "pool": self.pool}, f)
+            os.replace(tmp, self.path)  # atomic
+        except OSError as exc:  # noqa: BLE001
+            log.warning("harvest store save failed (%s): %s", self.path, exc)
+
+    def add_from_titles(self, items: list[dict], min_len: int) -> int:
+        """Harvest new words from scraped titles. Returns how many were added."""
+        added = 0
+        for item in items:
+            title = str(item.get("title") or "")
+            category = str(item.get("category") or "") or "Electronics"
+            for word in _WORD_RE.findall(title.lower()):
+                if len(word) < min_len or word in _HARVEST_STOPWORDS:
+                    continue
+                if word in self.used or word in self.pool:
+                    continue
+                if len(self.pool) >= self.max_pool:
+                    return added
+                self.pool[word] = category
+                added += 1
+        return added
+
+    def draw(self, n: int) -> list[tuple[str, str]]:
+        """Take up to ``n`` terms from the pool, marking them used (never reissued)."""
+        if n <= 0 or not self.pool:
+            return []
+        terms = self._rng.sample(list(self.pool), min(n, len(self.pool)))
+        out: list[tuple[str, str]] = []
+        for term in terms:
+            out.append((term, self.pool.pop(term)))
+            self.used.add(term)
+        return out
+
+
 class AmazonCategoryPollable:
     """Randomized, category-driven Amazon sweep.
 
@@ -217,6 +320,11 @@ class AmazonCategoryPollable:
         timeout_secs: int = 30,
         seed: int | None = None,
         key: str = "amazon_category",
+        harvest: bool = False,
+        harvest_path: str = "/data/amazon_harvest.json",
+        harvest_ratio: float = 0.5,
+        harvest_min_len: int = 4,
+        max_pool: int = 5000,
     ) -> None:
         self.categories = [c for c in (categories or list(_KEYTERM_BANK)) if c in _KEYTERM_BANK]
         if not self.categories:
@@ -230,21 +338,43 @@ class AmazonCategoryPollable:
         self.proxy = proxy
         self.timeout_secs = timeout_secs
         self.key = key
-        import random as _random
-        self._rng = _random.Random(seed)
+        self._rng = _random_mod.Random(seed)
+        # Harvest config: fraction of each poll's terms drawn from words learned from
+        # previous results (the rest come from the static bank so we never starve).
+        self.harvest = bool(harvest)
+        self.harvest_ratio = min(1.0, max(0.0, float(harvest_ratio)))
+        self.harvest_min_len = max(3, int(harvest_min_len))
+        self._store = (
+            _HarvestStore(harvest_path, max_pool=max_pool, rng=self._rng)
+            if self.harvest else None
+        )
 
     def _sample_terms(self) -> list[tuple[str, str]]:
-        """Pick (term, category) pairs for this poll, with occasional mutation."""
-        pairs = [(t, cat) for cat in self.categories for t in _KEYTERM_BANK[cat]]
-        k = min(self.terms_per_poll, len(pairs))
-        chosen = self._rng.sample(pairs, k)
+        """Pick (term, category) pairs for this poll, with occasional mutation.
+
+        When harvesting is on, up to ``harvest_ratio`` of the terms are drawn from the
+        learned pool (each used at most once, ever); the remainder come from the static
+        bank, so a run always has something to search even when the pool is empty.
+        """
         out: list[tuple[str, str]] = []
-        for term, cat in chosen:
-            if self._rng.random() < self.mutate_prob:
-                mod = self._rng.choice(_MODIFIERS)
-                if mod:
-                    term = f"{mod} {term}" if self._rng.random() < 0.5 else f"{term} {mod}"
-            out.append((term, cat))
+
+        # 1. Harvested terms (already-deduped against the used set). No mutation — these
+        #    are real product words and we want to search them verbatim.
+        if self._store is not None and self.harvest_ratio > 0:
+            want = round(self.terms_per_poll * self.harvest_ratio)
+            out.extend(self._store.draw(want))
+
+        # 2. Fill the rest from the static bank, with occasional drift.
+        remaining = self.terms_per_poll - len(out)
+        if remaining > 0:
+            pairs = [(t, cat) for cat in self.categories for t in _KEYTERM_BANK[cat]]
+            chosen = self._rng.sample(pairs, min(remaining, len(pairs)))
+            for term, cat in chosen:
+                if self._rng.random() < self.mutate_prob:
+                    mod = self._rng.choice(_MODIFIERS)
+                    if mod:
+                        term = f"{mod} {term}" if self._rng.random() < 0.5 else f"{term} {mod}"
+                out.append((term, cat))
         return out
 
     async def poll(self, prev: PollResult | None) -> PollResult:
@@ -274,6 +404,14 @@ class AmazonCategoryPollable:
                 if sid:
                     seen.add(sid)
                 combined.append(item)
+
+        # Learn new query terms from this cycle's titles for future polls, then persist.
+        if self._store is not None:
+            added = self._store.add_from_titles(combined, self.harvest_min_len)
+            self._store.save()
+            log.info("amazon_category harvest: +%d terms (pool=%d, used=%d)",
+                     added, len(self._store.pool), len(self._store.used))
+
         # Always push what we found this cycle (upsert is idempotent), so
         # last_seen_at stays fresh and new items land.
         return PollResult(ok=True, changed=bool(combined),
