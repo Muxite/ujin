@@ -207,8 +207,15 @@ def _install_builtins(reg: Registry) -> None:
     # --- transforms ------------------------------------------------------- #
     from ujin.jobs.transforms import BUILTIN_TRANSFORMS
 
+    # NB: a closure, not `lambda c, _cls=tcls: ...` — a default second param
+    # makes _build think the factory wants the BuildContext and clobbers it.
+    def _mk_transform(tcls):
+        def factory(cfg):
+            return tcls(cfg)
+        return factory
+
     for tname, tcls in BUILTIN_TRANSFORMS.items():
-        reg.register_builtin("transform", tname, (lambda c, _cls=tcls: _cls(c)))
+        reg.register_builtin("transform", tname, _mk_transform(tcls))
 
     # --- sinks (ctx carries hub + store) ---------------------------------- #
     from ujin.jobs.sinks import BUILTIN_SINKS, build_sink

@@ -86,7 +86,7 @@ branch = true
 
 [tool.coverage.report]
 # Ratcheted per cycle: 60 (Cycle 0) -> 80 (Gate 1) -> 85 (Gate 3).
-fail_under = 60
+fail_under = 80
 show_missing = true
 exclude_also = [
     "if TYPE_CHECKING:",

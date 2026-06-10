@@ -227,6 +227,8 @@ class FakeOrigin:
         self._web = web
         self.routes: dict[str, Route] = {}
         self.requests: list[Any] = []
+        self.inflight = 0
+        self.max_inflight = 0
         self._server = None
         self._app = web.Application()
         self._app.router.add_route("*", "/{tail:.*}", self._handle)
@@ -238,21 +240,26 @@ class FakeOrigin:
 
     async def _handle(self, request):
         self.requests.append(request)
-        route = self.routes.get(request.path)
-        if route is None:
-            return self._web.Response(status=404, text="not found")
-        if route.delay:
-            await asyncio.sleep(route.delay)
-        headers = dict(route.headers)
-        if route.etag:
-            headers["ETag"] = route.etag
-            if request.headers.get("If-None-Match") == route.etag:
-                return self._web.Response(status=304, headers=headers)
-        body = route.body.encode() if isinstance(route.body, str) else route.body
-        return self._web.Response(
-            body=body, status=route.status,
-            content_type=route.content_type, headers=headers,
-        )
+        self.inflight += 1
+        self.max_inflight = max(self.max_inflight, self.inflight)
+        try:
+            route = self.routes.get(request.path)
+            if route is None:
+                return self._web.Response(status=404, text="not found")
+            if route.delay:
+                await asyncio.sleep(route.delay)
+            headers = dict(route.headers)
+            if route.etag:
+                headers["ETag"] = route.etag
+                if request.headers.get("If-None-Match") == route.etag:
+                    return self._web.Response(status=304, headers=headers)
+            body = route.body.encode() if isinstance(route.body, str) else route.body
+            return self._web.Response(
+                body=body, status=route.status,
+                content_type=route.content_type, headers=headers,
+            )
+        finally:
+            self.inflight -= 1
 
     async def start(self):
         from aiohttp.test_utils import TestServer
@@ -316,6 +323,67 @@ def obscura_stub_bin(tmp_path, monkeypatch) -> str:
     monkeypatch.setenv("OBSCURA_BIN", path)
     monkeypatch.delenv("OBSCURA_URL", raising=False)
     return path
+
+
+# --------------------------------------------------------------------------- #
+# Duck-typed service-layer fakes (shared by scrape-service and routes tests).
+# --------------------------------------------------------------------------- #
+class FakeHttp:
+    """Routes GETs by URL; mimics HttpFetcher.get. With ``not_modified=True``
+    answers 304 to any conditional request carrying an ETag."""
+
+    def __init__(self, routes: Optional[dict] = None, *, not_modified: bool = False):
+        self._routes = routes or {}
+        self._not_modified = not_modified
+        self.calls: list[str] = []
+
+    async def get(self, url, *, etag=None, last_modified=None,
+                  extra_headers=None, proxy=None):
+        from ujin.fetch.http import HttpResponse
+
+        self.calls.append(url)
+        if self._not_modified and etag is not None:
+            return HttpResponse(url=url, status=304, body="",
+                                not_modified=True, final_url=url)
+        resp = self._routes.get(url)
+        if resp is None:
+            return HttpResponse(url=url, status=404, body="", final_url=url)
+        if isinstance(resp, Exception):
+            raise resp
+        return resp
+
+
+class FakeObscura:
+    """Canned obscura renderer; ``html=None`` simulates unavailability."""
+
+    def __init__(self, html: Optional[str] = None):
+        self._html = html
+        self.calls: list[str] = []
+
+    async def render_html(self, url):
+        from ujin.fetch.obscura import ObscuraResult
+
+        self.calls.append(url)
+        if self._html is None:
+            raise RuntimeError("obscura unavailable")
+        return ObscuraResult(url=url, html=self._html, elapsed_ms=1)
+
+
+class FakeBrowser:
+    """Duck-typed BrowserFetcher returning canned HTML for any recipe."""
+
+    def __init__(self, html: str = "<html></html>", *, raises: Optional[Exception] = None):
+        self.html = html
+        self.raises = raises
+        self.calls: list[tuple[str, list]] = []
+
+    async def render(self, url, actions=None, *, results_selector=None, ctx=None):
+        from ujin.fetch.browser import BrowserResult
+
+        self.calls.append((url, actions or []))
+        if self.raises is not None:
+            raise self.raises
+        return BrowserResult(url=url, html=self.html, elapsed_ms=2, final_url=url)
 
 
 # --------------------------------------------------------------------------- #
