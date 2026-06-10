@@ -22,11 +22,23 @@ Build the app with `create_scrape_app(config: ScrapeConfig, *, scorer=None)` or 
 Liveness + renderer/cache state. Never fails.
 
 ```json
-{ "status": "ok", "obscura_available": false,
+{ "ok": true, "status": "ok", "service": "ujin-scrape",
+  "obscura_available": false,
   "cache": { "entries": 0, "max": 2048, "ttl_secs": 120 } }
 ```
 `obscura_available` is `false` when no renderer is reachable; the service still
-works (HTTP + altpath only).
+works (HTTP + altpath only). As of 0.4.0 every ujin service returns the same
+`ok` / `status` / `service` trio.
+
+### `GET /capabilities`
+The fetch-backend capability matrix (http / obscura / playwright / selenium)
+with live availability flags — see [BACKENDS.md](BACKENDS.md). Lets callers
+decide which `render=` strategies are usable before scraping.
+
+### Authentication (all services)
+Off by default. Set `UJIN_API_KEY` and every request to :8900/:8901/:8902
+(HTTP **and** WebSocket) must present `X-API-Key: <key>` or
+`Authorization: Bearer <key>`; `/health` stays open for probes.
 
 ### `POST /scrape`
 Render and extract a single page.
@@ -117,8 +129,8 @@ Drives `ujin.engine.PollEngine` and streams change events. Run `ujin api`.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /health` | `{ "ok": true, "targets": N }` |
-| `GET /stats` | engine stats snapshot |
+| `GET /health` | `{ "ok": true, "status": "ok", "service": "ujin-poller", "targets": N }` |
+| `GET /metrics` | engine stats snapshot (0.4.0: renamed from `/stats`) |
 | `GET /targets` | `[ { key, interval, polls, changes, circuit } ]` |
 | `POST /targets` | add a target: `{ kind, config, base?, min?, max?, jitter? }` → `{ key }` |
 | `DELETE /targets/{key}` | remove a target |

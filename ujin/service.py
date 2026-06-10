@@ -6,7 +6,7 @@ task so the daemon's adaptive/jittered polling happens while the API is served.
 
 Endpoints:
   GET    /health
-  GET    /stats
+  GET    /metrics
   GET    /targets
   POST   /targets         {kind, config, base?, min?, max?, jitter?}
   DELETE /targets/{key}
@@ -121,14 +121,22 @@ def create_app(config_path: str | None = None, *, run_engine: bool = True) -> An
                 except asyncio.CancelledError:
                     pass
 
-    app = FastAPI(title="ujin", version="0.3.0", lifespan=lifespan)
+    app = FastAPI(title="ujin", version="0.4.0", lifespan=lifespan)
+
+    from ujin.auth import mount_api_key
+
+    mount_api_key(app)
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        return {"ok": True, "targets": len(engine.targets)}
+        # normalized shape across all three services: ok + status + service
+        return {"ok": True, "status": "ok", "service": "ujin-poller",
+                "targets": len(engine.targets)}
 
-    @app.get("/stats")
-    def stats() -> dict[str, Any]:
+    @app.get("/metrics")
+    def metrics() -> dict[str, Any]:
+        # 0.4.0: renamed from /stats to match :8901/:8902 (nothing consumed
+        # the old route).
         return engine.stats()
 
     @app.get("/targets")

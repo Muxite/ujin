@@ -316,8 +316,12 @@ class BrowserFetcher:
 
 # --------------------------------------------------------------------------- #
 # Playwright backend (async).
+#
+# Everything below requires a real installed browser (playwright chromium or
+# chromedriver); it is exercised by the `browser`-marked integration tests
+# (tests/integration/), never by the offline unit suite — hence no cover.
 # --------------------------------------------------------------------------- #
-class _PlaywrightBackend:
+class _PlaywrightBackend:  # pragma: no cover
     def __init__(self, fetcher: BrowserFetcher):
         self._f = fetcher
         self._pw = None
@@ -346,7 +350,7 @@ class _PlaywrightBackend:
             await self._pw.stop()
 
 
-class _PlaywrightPage:
+class _PlaywrightPage:  # pragma: no cover
     def __init__(self, context, page, default_timeout_ms: int):
         self._context = context
         self._p = page
@@ -418,7 +422,7 @@ class _PlaywrightPage:
 # --------------------------------------------------------------------------- #
 # Selenium backend (sync WebDriver on a dedicated single thread).
 # --------------------------------------------------------------------------- #
-class _SeleniumBackend:
+class _SeleniumBackend:  # pragma: no cover
     def __init__(self, fetcher: BrowserFetcher):
         self._f = fetcher
         self._driver = None
@@ -461,7 +465,7 @@ class _SeleniumBackend:
             self._executor.shutdown(wait=True)
 
 
-class _SeleniumPage:
+class _SeleniumPage:  # pragma: no cover
     """Async adapter over the single shared sync WebDriver."""
 
     def __init__(self, backend: _SeleniumBackend):

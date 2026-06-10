@@ -110,6 +110,14 @@ def _cmd_jobs_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_mcp_serve(args: argparse.Namespace) -> int:
+    from ujin.mcp import serve
+
+    serve(transport=("http" if args.http else "stdio"),
+          host=args.host, port=args.port)
+    return 0
+
+
 def _cmd_obscura_build(args: argparse.Namespace) -> int:
     """Init the bundled obscura submodule and build the release binary.
 
@@ -213,6 +221,15 @@ def main(argv: list[str] | None = None) -> int:
     p_watch.add_argument("--min", type=float, default=5.0)
     p_watch.add_argument("--max", type=float, default=3600.0)
     p_watch.set_defaults(func=_cmd_watch)
+
+    p_mcp = sub.add_parser(
+        "mcp-serve", help="run the MCP server for agents (stdio; --http for HTTP)"
+    )
+    p_mcp.add_argument("--http", action="store_true",
+                       help="streamable HTTP transport instead of stdio")
+    p_mcp.add_argument("--host", default="127.0.0.1")
+    p_mcp.add_argument("--port", type=int, default=8903)
+    p_mcp.set_defaults(func=_cmd_mcp_serve)
 
     p_obs = sub.add_parser(
         "obscura-build", help="init + build the bundled obscura renderer (needs cargo)"

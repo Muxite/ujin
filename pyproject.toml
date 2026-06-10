@@ -43,8 +43,10 @@ jobs = ["ujin[service,scrape]"]
 # artifact — install it with `playwright install chromium` (the ujin-browser
 # image does this), so the wheel stays pure-python.
 browser = ["ujin[scrape]", "playwright>=1.44", "selenium>=4.20"]
+# MCP server: expose scrape + jobs as tools for agents (`ujin mcp-serve`).
+mcp = ["ujin[scrape,jobs]", "mcp>=1.2"]
 # Everything.
-all = ["ujin[web,yaml,service,scrape,social,diff,sessions,jobs,browser]"]
+all = ["ujin[web,yaml,service,scrape,social,diff,sessions,jobs,browser,mcp]"]
 dev = [
     "ujin[all]",
     "pytest>=8.0",
@@ -86,7 +88,7 @@ branch = true
 
 [tool.coverage.report]
 # Ratcheted per cycle: 60 (Cycle 0) -> 80 (Gate 1) -> 85 (Gate 3).
-fail_under = 80
+fail_under = 85
 show_missing = true
 exclude_also = [
     "if TYPE_CHECKING:",

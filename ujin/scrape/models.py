@@ -634,6 +634,14 @@ class HealthResponse(BaseModel):
         description="Liveness marker. Always `'ok'` when the process is serving.",
         examples=["ok"],
     )
+    ok: bool = Field(
+        True,
+        description="Boolean liveness, normalized across all ujin services.",
+    )
+    service: str = Field(
+        "ujin-scrape",
+        description="Which ujin service answered (normalized across services).",
+    )
     obscura_available: bool = Field(
         ...,
         description=(

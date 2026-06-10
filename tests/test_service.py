@@ -18,7 +18,9 @@ def client():
 
 
 def test_health_and_empty_targets(client):
-    assert client.get("/health").json() == {"ok": True, "targets": 0}
+    assert client.get("/health").json() == {
+        "ok": True, "status": "ok", "service": "ujin-poller", "targets": 0,
+    }
     assert client.get("/targets").json() == []
 
 
@@ -34,8 +36,8 @@ def test_add_command_target_and_sweep(client):
     sweep = client.post("/sweep").json()
     assert key in sweep["changed"]            # first poll -> changed
 
-    stats = client.get("/stats").json()
-    assert stats["targets"] == 1 and stats["polls"] >= 1
+    metrics = client.get("/metrics").json()   # 0.4.0: /stats renamed
+    assert metrics["targets"] == 1 and metrics["polls"] >= 1
 
 
 def test_add_bad_kind_400(client):

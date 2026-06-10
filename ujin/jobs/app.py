@@ -213,7 +213,8 @@ def create_jobs_app(
     @app.get("/health")
     def health() -> dict[str, Any]:
         m = app.state.manager
-        return {"ok": True, "jobs": len(m.jobs),
+        return {"ok": True, "status": "ok", "service": "ujin-jobs",
+                "jobs": len(m.jobs),
                 "plugins": getattr(app.state, "plugins", {"loaded": [], "failed": []}),
                 "workflows": getattr(app.state, "workflows",
                                      {"dir": wf_dir, "loaded": [], "failed": []})}
@@ -356,11 +357,9 @@ def create_jobs_app(
 
     # Optional API-key gate (off unless UJIN_API_KEY is set — trust the network
     # by default; guards HTTP + WebSocket; /health stays open).
-    api_key = os.environ.get("UJIN_API_KEY")
-    if api_key:
-        from .auth import ApiKeyMiddleware
+    from ujin.auth import mount_api_key
 
-        app.add_middleware(ApiKeyMiddleware, api_key=api_key)
+    if mount_api_key(app):
         log.info("ujin jobs: API-key auth enabled")
 
     return app

@@ -7,3 +7,6 @@ build/
 .pytest_cache/
 # obscura submodule build output (Rust) — never tracked by the parent repo.
 ujin/obscura/target/
+.coverage
+.coverage.*
+.benchmarks/

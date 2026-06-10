@@ -160,7 +160,11 @@ def create_scrape_app(
             await close_scrape_components(comps)
             logger.info("ujin scrape service stopped")
 
-    app = FastAPI(title="ujin-scrape", version="0.3.0", lifespan=lifespan)
+    app = FastAPI(title="ujin-scrape", version="0.4.0", lifespan=lifespan)
+
+    from ..auth import mount_api_key
+
+    mount_api_key(app)
     app.include_router(core_router)
     app.include_router(social_router)
     return app

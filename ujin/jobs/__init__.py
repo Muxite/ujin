@@ -27,6 +27,7 @@ from .model import (
 )
 from .store import JobStore
 
+# The stable import surface (everything else under ujin.jobs is internal).
 __all__ = [
     "JobSpec",
     "JobState",
@@ -35,4 +36,13 @@ __all__ = [
     "SourceSpec",
     "TransformSpec",
     "JobStore",
+    "JobManager",
 ]
+
+
+def __getattr__(name: str):
+    if name == "JobManager":
+        from .manager import JobManager
+
+        return JobManager
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

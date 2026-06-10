@@ -12,6 +12,27 @@ feedparser/fastapi) are pulled by the ``scrape`` extra and imported lazily.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .config import ScrapeConfig
 
-__all__ = ["ScrapeConfig"]
+if TYPE_CHECKING:  # pragma: no cover
+    from .build import build_scrape_service
+    from .service import ScrapeResult, ScrapeService
+
+# The stable import surface (everything else under ujin.scrape is internal).
+__all__ = ["ScrapeConfig", "ScrapeService", "ScrapeResult", "build_scrape_service"]
+
+
+def __getattr__(name: str):
+    # Lazy: ScrapeService pulls the web stack (aiohttp/selectolax/trafilatura);
+    # importing ujin.scrape for just the config must stay dependency-free.
+    if name in ("ScrapeService", "ScrapeResult"):
+        from . import service
+
+        return getattr(service, name)
+    if name == "build_scrape_service":
+        from .build import build_scrape_service
+
+        return build_scrape_service
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
