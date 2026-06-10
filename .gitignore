@@ -10,3 +10,5 @@ ujin/obscura/target/
 .coverage
 .coverage.*
 .benchmarks/
+# local jobs database — runtime artifact
+ujin-jobs.db
