@@ -43,7 +43,12 @@ _UA = (
 
 
 class AmazonSearchPollable:
-    """Poll one Amazon search term -> list of product dicts."""
+    """Poll one marketplace search term -> list of product dicts.
+
+    Defaults target Amazon, but ``source``/``selectors``/``search_url_template``/
+    ``wait_selector`` make it site-agnostic — drive any marketplace from a site profile
+    (see ujin/ujin/poll/marketplace.py) without new code.
+    """
 
     def __init__(
         self,
@@ -58,6 +63,10 @@ class AmazonSearchPollable:
         timeout_secs: int = 30,
         clean_titles: bool = True,
         key: str | None = None,
+        source: str = "amazon",
+        selectors: dict | None = None,
+        search_url_template: str | None = None,
+        wait_selector: str | None = None,
     ) -> None:
         self.term = term
         self.domain = domain
@@ -68,11 +77,15 @@ class AmazonSearchPollable:
         self.proxy = proxy or os.environ.get("PROXY_URL") or None
         self.timeout_secs = timeout_secs
         self.clean_titles = clean_titles
-        self.key = key or f"amazon:{term}"
+        self.source = source
+        self.selectors = selectors or None
+        self.search_url_template = search_url_template or "https://{domain}/s?k={query}"
+        self.wait_selector = wait_selector or "div[data-component-type='s-search-result']"
+        self.key = key or f"{source}:{term}"
 
     @property
     def search_url(self) -> str:
-        return f"https://{self.domain}/s?k={quote_plus(self.term)}"
+        return self.search_url_template.format(domain=self.domain, query=quote_plus(self.term))
 
     async def _fetch_http(self, url: str) -> str:
         from ujin.fetch.http import HttpFetcher
@@ -100,7 +113,7 @@ class AmazonSearchPollable:
         )
         try:
             recipe = [{"action": "wait_for_selector",
-                       "selector": "div[data-component-type='s-search-result']",
+                       "selector": self.wait_selector,
                        "timeout_ms": self.timeout_secs * 1000}]
             return (await fetcher.render(url, recipe)).html or ""
         finally:
@@ -129,7 +142,7 @@ class AmazonSearchPollable:
                 # as a fallback and escalate to the next engine.
                 from ujin.extract.product import extract_products
 
-                if extract_products(html, url, source="amazon"):
+                if extract_products(html, url, source=self.source, selectors=self.selectors):
                     return html, eng
                 last = html
         return last, engines[-1]
@@ -143,7 +156,7 @@ class AmazonSearchPollable:
 
         from ujin.extract.product import clean_product_name, extract_products
 
-        products = extract_products(html, url, source="amazon")[: self.max_results]
+        products = extract_products(html, url, source=self.source, selectors=self.selectors)[: self.max_results]
         for p in products:
             if self.category:
                 p.category = self.category

@@ -249,8 +249,25 @@ def _install_builtins(reg: Registry) -> None:
     reg.register_builtin("source", "site", _src_site)
     reg.register_builtin("source", "scrape", _src_scrape)
     reg.register_builtin("source", "browser", _src_browser)
+    def _src_marketplace_search(cfg):
+        from ujin.poll.marketplace import MarketplaceSearchPollable
+
+        return MarketplaceSearchPollable(
+            profile=cfg.get("profile", "amazon"),
+            categories=cfg.get("categories"),
+            terms_per_poll=cfg.get("terms_per_poll", 3),
+            max_results=cfg.get("max_results", 8),
+            engine=cfg.get("engine"),
+            proxy=cfg.get("proxy"),
+            timeout_secs=cfg.get("timeout_secs", 40),
+            headless=cfg.get("headless", True),
+            seed=cfg.get("seed"),
+            key=cfg.get("key", "marketplace_search"),
+        )
+
     reg.register_builtin("source", "amazon_search", _src_amazon_search)
     reg.register_builtin("source", "amazon_category", _src_amazon_category)
+    reg.register_builtin("source", "marketplace_search", _src_marketplace_search)
 
     # --- transforms ------------------------------------------------------- #
     from ujin.jobs.transforms import BUILTIN_TRANSFORMS
