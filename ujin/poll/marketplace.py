@@ -66,6 +66,7 @@ class MarketplaceSearchPollable:
         timeout_secs: int = 40,
         headless: bool = True,
         seed: int | None = None,
+        with_description: bool = False,
         key: str | None = None,
     ) -> None:
         self.profile_name = profile if profile in SITE_PROFILES else "amazon"
@@ -77,6 +78,7 @@ class MarketplaceSearchPollable:
         self.proxy = proxy
         self.timeout_secs = timeout_secs
         self.headless = headless
+        self.with_description = with_description
         self.key = key or f"marketplace:{self.profile_name}"
         self._rng = _random_mod.Random(seed)
 
@@ -94,6 +96,8 @@ class MarketplaceSearchPollable:
             selectors=self.profile.get("selectors"),
             search_url_template=self.profile["search_url"],
             wait_selector=self.profile.get("wait_selector"),
+            with_description=self.with_description,
+            desc_selectors=self.profile.get("desc_selectors"),
         )
 
     def _sample(self) -> list[tuple[str, str]]:

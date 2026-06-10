@@ -40,6 +40,49 @@ class Product:
     currency: str = "USD"
     category: str | None = None
     url: str | None = None
+    description: str | None = None   # filled from the detail page when requested
+
+
+# Where to find a product's description on a detail page, per source. Override via
+# extract_description(..., selectors=...).
+_DESC_SELECTORS: dict[str, dict] = {
+    "amazon": {"bullets": "#feature-bullets li span.a-list-item", "block": "#productDescription"},
+    "newegg": {"bullets": ".product-bullets li", "block": ".product-overview-content"},
+}
+
+
+def extract_description(
+    html: str, *, source: str = "amazon", selectors: dict | None = None, max_chars: int = 600,
+) -> str | None:
+    """Pull a short product description from a detail-page HTML (bullets > block > meta).
+
+    :returns: A cleaned single-line description (<= max_chars), or None if nothing usable.
+    """
+    try:
+        from selectolax.parser import HTMLParser
+    except ImportError:  # pragma: no cover
+        return None
+    tree = HTMLParser(html)
+    sel = selectors or _DESC_SELECTORS.get(source, _DESC_SELECTORS["amazon"])
+    parts: list[str] = []
+    for node in tree.css(sel.get("bullets") or ""):
+        t = (node.text() or "").strip()
+        if t:
+            parts.append(t)
+    if not parts and sel.get("block"):
+        node = tree.css_first(sel["block"])
+        if node and (node.text() or "").strip():
+            parts.append(node.text().strip())
+    desc = " · ".join(parts).strip()
+    if not desc:
+        for q in ('meta[name="description"]', 'meta[property="og:description"]'):
+            m = tree.css_first(q)
+            content = m.attributes.get("content") if m else None
+            if content and content.strip():
+                desc = content.strip()
+                break
+    desc = re.sub(r"\s+", " ", desc).strip()
+    return desc[:max_chars] or None
 
 
 # Default CSS selectors for an Amazon search-results grid. Override via

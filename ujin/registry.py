@@ -209,6 +209,7 @@ def _install_builtins(reg: Registry) -> None:
             headless=cfg.get("headless", True),
             proxy=cfg.get("proxy"),
             timeout_secs=cfg.get("timeout_secs", 30),
+            with_description=cfg.get("with_description", False),
         )
         terms = cfg.get("terms")
         if terms:
@@ -262,6 +263,7 @@ def _install_builtins(reg: Registry) -> None:
             timeout_secs=cfg.get("timeout_secs", 40),
             headless=cfg.get("headless", True),
             seed=cfg.get("seed"),
+            with_description=cfg.get("with_description", False),
             key=cfg.get("key", "marketplace_search"),
         )
 

@@ -67,6 +67,8 @@ class AmazonSearchPollable:
         selectors: dict | None = None,
         search_url_template: str | None = None,
         wait_selector: str | None = None,
+        with_description: bool = False,
+        desc_selectors: dict | None = None,
     ) -> None:
         self.term = term
         self.domain = domain
@@ -81,7 +83,33 @@ class AmazonSearchPollable:
         self.selectors = selectors or None
         self.search_url_template = search_url_template or "https://{domain}/s?k={query}"
         self.wait_selector = wait_selector or "div[data-component-type='s-search-result']"
+        self.with_description = with_description
+        self.desc_selectors = desc_selectors or None
         self.key = key or f"{source}:{term}"
+
+    async def _fetch_page(self, url: str) -> str:  # pragma: no cover (network I/O)
+        """Fetch a product detail page (http -> obscura; skips the search-card browser recipe)."""
+        for eng in ("http", "obscura"):
+            try:
+                html = await (self._fetch_http(url) if eng == "http" else self._fetch_obscura(url))
+            except Exception:  # noqa: BLE001
+                html = ""
+            if html:
+                return html
+        return ""
+
+    async def _attach_descriptions(self, products) -> None:  # pragma: no cover (network I/O)
+        import asyncio as _asyncio
+        from ujin.extract.product import extract_description
+
+        async def one(p):
+            if not getattr(p, "url", None):
+                return
+            html = await self._fetch_page(p.url)
+            if html:
+                p.description = extract_description(html, source=self.source, selectors=self.desc_selectors)
+
+        await _asyncio.gather(*(one(p) for p in products), return_exceptions=True)
 
     @property
     def search_url(self) -> str:
@@ -162,6 +190,8 @@ class AmazonSearchPollable:
                 p.category = self.category
             if self.clean_titles:
                 p.title = clean_product_name(p.title)
+        if self.with_description and products:
+            await self._attach_descriptions(products)  # one detail-page fetch per product
         items = [dataclasses.asdict(p) for p in products]
         if not items:
             log.warning("amazon %s: page fetched (%s) but no products parsed",
