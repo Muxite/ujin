@@ -11,6 +11,9 @@ cov:
 	pytest --cov --cov-report=term-missing
 
 bench:
-	pytest benchmarks/ --benchmark-only --benchmark-disable-gc -q
+	pytest benchmarks/ -q --no-cov --benchmark-disable-gc
+
+bench-record:
+	UJIN_BENCH_RECORD=1 pytest benchmarks/ -q --no-cov --benchmark-disable-gc
 
 check: cov

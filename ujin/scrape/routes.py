@@ -201,6 +201,18 @@ async def scrape_batch(
     return BatchScrapeResponse(results=out)
 
 
+@router.get("/capabilities")
+async def capabilities() -> dict:
+    """The backend capability matrix with live availability flags.
+
+    Lets callers (and agents via MCP) decide which `render=` strategies are
+    actually usable in this deployment before issuing a scrape.
+    """
+    from ..fetch.capabilities import capabilities_snapshot
+
+    return {"backends": capabilities_snapshot()}
+
+
 @router.get("/metrics", response_model=MetricsResponse)
 async def metrics(request: Request) -> MetricsResponse:
     """Per-host fetch metrics snapshot."""

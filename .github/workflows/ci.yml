@@ -39,10 +39,7 @@ jobs:
           cache: pip
       - name: Install
         run: pip install -e .[all,dev]
-      - name: Run benchmarks
-        run: |
-          if [ -d benchmarks ]; then
-            pytest benchmarks/ --benchmark-only --benchmark-disable-gc -q
-          else
-            echo "no benchmarks yet"
-          fi
+      - name: Run benchmarks against committed baseline
+        # sync paths report via pytest-benchmark; async paths assert <4x the
+        # medians in benchmarks/baseline.json (see benchmarks/_aio.py)
+        run: pytest benchmarks/ -q --no-cov --benchmark-disable-gc
