@@ -62,17 +62,18 @@ async def test_article_mode_empty_when_unextractable():
 # ── render pinning ───────────────────────────────────────────────────────────
 
 async def test_render_http_pinned_never_escalates():
-    """render='http' on a thin page must NOT fall through to obscura.
-
-    Current behavior: the thin HTML is discarded (html=None) and, with no
-    altpath available either, the scrape fails — but the renderer is never
-    consulted. (Revisit returning the thin link-set in the API cleanup.)"""
+    """render='http' on a thin page must NOT fall through to obscura, and
+    (0.4.0) the thin link-set is still returned rather than failing."""
     obscura = FakeObscura(html=_index_html())
-    http = FakeHttp({HOME: _resp(HOME, "<html></html>")})  # 0 links
+    thin = ('<html><body><main><article><h2><a href="/2026/06/09/only-one">'
+            "A single sufficiently long headline</a></h2></article>"
+            "</main></body></html>")
+    http = FakeHttp({HOME: _resp(HOME, thin)})  # 1 link < fast_path_min_links
     svc = _service(http, obscura=obscura)
-    with pytest.raises(RuntimeError):
-        await svc.scrape(HOME, mode="links", render="http")
+    r = await svc.scrape(HOME, mode="links", render="http")
     assert obscura.calls == []
+    assert r.strategy_used == "http"
+    assert len(r.links) == 1
 
 
 async def test_render_obscura_pinned_skips_http():

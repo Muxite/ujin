@@ -639,6 +639,7 @@ class ScrapeService:
                 logger.warning("browser render failed for %s: %s", url, exc)
                 return None, True, http_meta, final_url or url, False, "browser"
 
+        thin_body: Optional[str] = None
         if override_strategy not in ("obscura",):
             try:
                 resp = await self._http.get(
@@ -660,6 +661,7 @@ class ScrapeService:
                     )
                     if len(links) >= self._config.fast_path_min_links:
                         return resp.body, False, http_meta, final_url, False, "http"
+                    thin_body = resp.body
                     logger.debug(
                         "HTTP fast-path: only %d links for %s; trying obscura",
                         len(links), url,
@@ -674,8 +676,10 @@ class ScrapeService:
                 )
 
         if override_strategy == "http":
-            # User pinned this host to HTTP only; don't escalate.
-            return None, False, http_meta, final_url, False, "http"
+            # User pinned this host to HTTP only; don't escalate — but a thin
+            # 200 is still an answer, not a failure (0.4.0 fix: previously
+            # the body was discarded and the scrape failed outright).
+            return thin_body, False, http_meta, final_url, False, "http"
 
         try:
             result = await self._obscura.render_html(url)

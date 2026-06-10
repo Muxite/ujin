@@ -130,6 +130,7 @@ ujin serve targets.yaml      # run the poll engine as a daemon
 ujin api [targets.yaml]      # poller control service (REST + WS) on :8900
 ujin scrape-serve            # rich scrape HTTP service on :8901
 ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
+ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
 ujin obscura-build           # build the bundled headless renderer (needs cargo)
 ```
@@ -144,11 +145,22 @@ Three FastAPI apps — run any combination. Full reference in
   `/jobs/{id}/content` + `/jobs/{id}/results` (hand out obtained data), `WS /jobs/events`,
   `/kinds`, `/metrics`, `POST /plugins/reload`. Durable + plugin-extensible.
   File-driven workflows load from `./workflows` — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
-- **Poller control** (`:8900`): `GET /health /stats /targets`,
+- **Poller control** (`:8900`): `GET /health /metrics /targets`,
   `POST /targets`, `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.
 - **Scrape** (`:8901`): `POST /scrape` (modes `links|article|auto|combined|structured`),
-  `/scrape:batch`, `/feed`, `/sitemap`, `/discover`, `/metrics`, plus optional
-  `/social/*` and `/trends/*`.
+  `/scrape:batch`, `/feed`, `/sitemap`, `/discover`, `/capabilities`, `/metrics`,
+  plus optional `/social/*` and `/trends/*`.
+
+Set `UJIN_API_KEY` to require `X-API-Key`/Bearer auth on every service
+(`/health` stays open).
+
+## MCP — ujin as an agent tool
+
+`ujin mcp-serve` (extra: `ujin[mcp]`) exposes scraping and the job control
+plane as MCP tools — `scrape_url`, `discover_site`, `get_capabilities`,
+`create_job`, `run_job`, `get_job_results`, … — over stdio for Claude Code /
+Claude Desktop or any MCP client: `claude mcp add ujin -- ujin mcp-serve`.
+See [docs/MCP.md](docs/MCP.md).
 
 ## Docker
 
@@ -196,7 +208,8 @@ The engine takes injectable `clock`/`rng`/`sleep` for deterministic tests.
 pip install -e .              # core: engine + adapt + callable/command roles (no deps)
 pip install -e ".[web]"       # + HTTP/RSS/API roles and the scrape toolkit
 pip install -e ".[scrape]"    # + the rich scrape HTTP service
-pip install -e ".[all]"       # everything (web, service, scrape, social, diff, sessions)
+pip install -e ".[mcp]"       # + the MCP server for agents
+pip install -e ".[all]"       # everything (web, service, scrape, social, diff, sessions, mcp)
 ```
 Core is dependency-free; heavier features pull `aiohttp`/`selectolax`/
 `trafilatura`/`feedparser`/`fastapi` lazily behind extras. The obscura submodule
@@ -207,10 +220,26 @@ git submodule update --init --recursive   # fetch the obscura renderer source
 ujin obscura-build                         # build it (optional; needs cargo)
 ```
 
+## Development
+
+```bash
+make install-dev   # editable install with everything
+make cov           # the CI gate: full offline suite + coverage (fail_under=85)
+make bench         # benchmarks vs the committed baseline
+```
+
+Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [TESTING](docs/TESTING.md) ·
+[BACKENDS](docs/BACKENDS.md) (aiohttp vs obscura vs playwright vs selenium) ·
+[PERFORMANCE](docs/PERFORMANCE.md) · [CONSUMERS](docs/CONSUMERS.md)
+(downstream submodule contracts) · [API](docs/API.md) · [JOBS](docs/JOBS.md) ·
+[WORKFLOWS](docs/WORKFLOWS.md) · [PLUGINS](docs/PLUGINS.md) ·
+[BROWSER](docs/BROWSER.md) · [MCP](docs/MCP.md) · [CHANGELOG](CHANGELOG.md)
+
 ## Lineage
 
 Formerly `scraperv2`, extracted from jennie's scraper-v2. The poller (`poll/`,
 `adapt/`, `engine.py`) was built fresh; the scrape service reaches feature/
 endpoint parity with scraper-v2 so jennie's irene pipeline can migrate onto ujin.
 News-trading scoring (tiering/corroboration/breaking score) stays optional behind
-`ujin.trends.BreakingScorer`. Consumed by awork and hct-site as a submodule.
+`ujin.trends.BreakingScorer`. Consumed by awork, hct-site, and wordle-max as a
+submodule — see [docs/CONSUMERS.md](docs/CONSUMERS.md) before breaking anything.
