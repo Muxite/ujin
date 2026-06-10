@@ -368,6 +368,7 @@ class AmazonCategoryPollable:
         harvest_ratio: float = 0.5,
         harvest_min_len: int = 4,
         max_pool: int = 5000,
+        with_description: bool = False,
     ) -> None:
         self.categories = [c for c in (categories or list(_KEYTERM_BANK)) if c in _KEYTERM_BANK]
         if not self.categories:
@@ -380,6 +381,7 @@ class AmazonCategoryPollable:
         self.headless = headless
         self.proxy = proxy
         self.timeout_secs = timeout_secs
+        self.with_description = with_description
         self.key = key
         self._rng = _random_mod.Random(seed)
         # Harvest config: fraction of each poll's terms drawn from words learned from
@@ -429,7 +431,7 @@ class AmazonCategoryPollable:
             AmazonSearchPollable(
                 term, domain=self.domain, max_results=self.max_results, category=cat,
                 engine=self.engine, headless=self.headless, proxy=self.proxy,
-                timeout_secs=self.timeout_secs,
+                timeout_secs=self.timeout_secs, with_description=self.with_description,
             )
             for term, cat in pairs
         ]

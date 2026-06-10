@@ -241,6 +241,7 @@ def _install_builtins(reg: Registry) -> None:
             harvest_ratio=cfg.get("harvest_ratio", 0.5),
             harvest_min_len=cfg.get("harvest_min_len", 4),
             max_pool=cfg.get("max_pool", 5000),
+            with_description=cfg.get("with_description", False),
         )
 
     reg.register_builtin("source", "http", _src_http)
