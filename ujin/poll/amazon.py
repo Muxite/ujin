@@ -99,14 +99,41 @@ class AmazonSearchPollable:
         return ""
 
     async def _attach_descriptions(self, products) -> None:  # pragma: no cover (network I/O)
+        """Fetch each product's detail page and enrich it in place.
+
+        Promotes a shallow search-card product (title/image/price) to a full detail scrape:
+        brand, rating, review count, image gallery, spec table, selected variant, the
+        canonical buy-box price, and a description. Falls back to description-only when the
+        rich extractor can't parse the page (bot wall, layout drift). One fetch per product.
+        """
         import asyncio as _asyncio
-        from ujin.extract.product import extract_description
+        from ujin.extract.product import extract_description, extract_product_detail
 
         async def one(p):
             if not getattr(p, "url", None):
                 return
             html = await self._fetch_page(p.url)
-            if html:
+            if not html:
+                return
+            detail = extract_product_detail(html, p.url, source=self.source)
+            if detail:
+                # Prefer detail's richer/canonical values; keep the cleaned discovery title
+                # and category (the muddle/anti-cheat layer runs on title at ingest).
+                p.description = detail.description or p.description
+                p.brand = detail.brand
+                p.rating = detail.rating
+                p.review_count = detail.review_count
+                p.specs = detail.specs
+                p.variant = detail.variant
+                p.scrape_version = detail.scrape_version
+                if detail.images:
+                    p.images = detail.images
+                    p.image_url = detail.image_url or p.image_url
+                if detail.price_cents:
+                    p.price_cents = detail.price_cents     # buy-box price beats the card price
+                if detail.currency:
+                    p.currency = detail.currency
+            else:
                 p.description = extract_description(html, source=self.source, selectors=self.desc_selectors)
 
         await _asyncio.gather(*(one(p) for p in products), return_exceptions=True)
