@@ -33,7 +33,20 @@ log = logging.getLogger("ujin.cli")
 
 
 def _version() -> str:
-    """Best-effort package version (installed metadata, then the package attr)."""
+    """Best-effort package version (the in-package attr, then installed metadata).
+
+    The hardcoded ``ujin.__version__`` is the release source of truth and tracks
+    the working tree; installed ``.dist-info`` metadata can lag behind it under
+    an editable install, so prefer the attr and fall back to metadata.
+    """
+    try:
+        import ujin
+
+        v = getattr(ujin, "__version__", None)
+        if v:
+            return v
+    except Exception:  # noqa: BLE001 - never let version lookup break the CLI
+        pass
     try:
         from importlib.metadata import PackageNotFoundError, version
 
@@ -41,14 +54,9 @@ def _version() -> str:
             return version("ujin")
         except PackageNotFoundError:
             pass
-    except Exception:  # noqa: BLE001 - never let version lookup break the CLI
-        pass
-    try:
-        import ujin
-
-        return getattr(ujin, "__version__", "unknown")
     except Exception:  # noqa: BLE001
-        return "unknown"
+        pass
+    return "unknown"
 
 
 def _build_pollable(kind: str, cfg: dict[str, Any]):
