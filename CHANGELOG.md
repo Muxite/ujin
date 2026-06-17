@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **List-reshaping transforms** (`ujin/jobs/transforms.py`, pure stdlib):
+  - `flatten` — fan a list payload into one event per item (inverse of `chunk`),
+    with an optional `index` field; non-list payloads pass through.
+  - `sort` — sort a list payload by a dotted `key` (or natural order), `reverse`
+    optional; missing/uncomparable values sort last without raising.
+  - `limit` — cap a list payload to the first/last N items (`count`, `from`).
+  - `rename` — remap dict keys (`mapping`) across a dict or list-of-dicts;
+    `drop_missing` materializes absent keys as null.
+- **`csv` sink** (`ujin/jobs/sinks.py`, pure stdlib) — append event rows to a
+  CSV/TSV file with auto header on create, explicit-or-inferred (and then
+  locked) `columns`, configurable `delimiter` / `path_in_event`; non-dict items
+  are skipped and a no-row event is a silent no-op.
+- All five kinds are additive, registered as built-ins, discoverable at
+  `GET /kinds`, and documented in docs/LIST_TRANSFORMS.md.
+
 ## 0.4.0 — 2026-06-10
 
 Hardening release: the test/coverage/benchmark infrastructure, API

@@ -56,6 +56,10 @@ in-memory `POST /targets` left open.
 | `template` | `template` | `str.format` over the event → `event.message` |
 | `dedupe` | `key?` (dotted), `max?` | drop already-seen items (by key) or whole events (by fingerprint) |
 | `chunk` | `size` or `token_budget`, `path?` | fan a large list/text payload into one event per chunk (LLM-sized) — see [recipes/feed-an-llm-with-chunking.md](recipes/feed-an-llm-with-chunking.md) |
+| `flatten` | `path?`, `index?` | fan a list payload into one event per item (inverse of accumulating) — see [LIST_TRANSFORMS.md](LIST_TRANSFORMS.md) |
+| `sort` | `path?`, `key?` (dotted), `reverse?` | sort a list payload by a key; missing/uncomparable values sort last without raising |
+| `limit` | `path?`, `count` (required), `from?` (`head`/`tail`) | cap a list payload to the first/last N items |
+| `rename` | `path?`, `mapping` (required), `drop_missing?` | rename keys on a dict (or each dict in a list) |
 
 ### Sinks (`kind`) — fan out concurrently; one failing sink never blocks the others
 | kind | config | effect |
@@ -66,6 +70,7 @@ in-memory `POST /targets` left open.
 | `jsonl` / `file` | `path` | append one JSON line per event |
 | `stdout` | `prefix?` | print JSON (default, dependency-free) |
 | `sqlite` | — | persist into the jobstore's `job_events` table (`GET /jobs/{id}/events`) |
+| `csv` | `path`, `columns?`, `path_in_event?`, `header?`, `delimiter?` | append event rows to a CSV/TSV file (pure stdlib) — see [LIST_TRANSFORMS.md](LIST_TRANSFORMS.md) |
 | `plugin:<name>` | (plugin-defined) | a custom sink |
 
 ### Schedule (`mode`)

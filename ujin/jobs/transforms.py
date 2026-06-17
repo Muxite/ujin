@@ -1,4 +1,5 @@
-"""Built-in transforms: select (filter/reshape), regex, template, dedupe, chunk.
+"""Built-in transforms: select, regex, template, dedupe, chunk, flatten, sort,
+limit, rename.
 
 Each is a small class exposing ``async apply(event) -> dict | list[dict] | None``
 (the :class:`ujin.jobs.pipeline.Transform` protocol — a list return fans out into
@@ -236,12 +237,165 @@ class ChunkTransform:
         return out
 
 
+class FlattenTransform:
+    """Fan a list payload into one downstream event per item.
+
+    The inverse of accumulating: where a source yields a list (API rows, RSS
+    entries, scraped links), ``flatten`` emits a separate event for each element
+    so per-item transforms/sinks see one item at a time. A non-list target
+    passes through unchanged as a single event.
+
+    config:
+      path:  dotted path to the list (default "payload")
+      index: when set (e.g. "item_index"), each emitted event gets this field
+             carrying the item's 0-based position in the original list
+    Each output event has the single item written back at ``path``.
+    """
+
+    def __init__(self, cfg: dict):
+        self.path = cfg.get("path", "payload")
+        self.index = cfg.get("index")
+
+    async def apply(self, event: dict) -> "dict | list[dict] | None":
+        target = dotted_get(event, self.path)
+        if not isinstance(target, list):
+            return event  # nothing to flatten — pass through unchanged
+        out: list[dict] = []
+        for i, item in enumerate(target):
+            ev = copy.deepcopy(event)
+            dotted_set(ev, self.path, item)
+            if self.index:
+                ev[self.index] = i
+            out.append(ev)
+        return out  # empty list drops the event (nothing to emit)
+
+
+class SortTransform:
+    """Sort a list payload in place by a dotted key (or natural order).
+
+    config:
+      path:    dotted path to the list (default "payload")
+      key:     dotted path within each item to sort on (optional; sorts the raw
+               items when omitted)
+      reverse: descending when true (default false)
+    Items missing the key (or non-comparable) sort last, deterministically. A
+    non-list target passes through unchanged.
+    """
+
+    def __init__(self, cfg: dict):
+        self.path = cfg.get("path", "payload")
+        self.key = cfg.get("key")
+        self.reverse = bool(cfg.get("reverse", False))
+
+    def _sort_key(self, item: Any):
+        val = dotted_get(item, self.key) if self.key else item
+        # (missing-flag, type-name, value) keeps mixed/None payloads from raising
+        # TypeError on comparison and pushes missing values to the end.
+        if val is None:
+            return (1, "", "")
+        return (0, type(val).__name__, val)
+
+    async def apply(self, event: dict) -> dict | None:
+        target = dotted_get(event, self.path)
+        if not isinstance(target, list):
+            return event
+        try:
+            ordered = sorted(target, key=self._sort_key, reverse=self.reverse)
+        except TypeError:
+            # values of the same type that still don't compare — fall back to str
+            ordered = sorted(
+                target,
+                key=lambda it: str(dotted_get(it, self.key) if self.key else it),
+                reverse=self.reverse,
+            )
+        dotted_set(event, self.path, ordered)
+        return event
+
+
+class LimitTransform:
+    """Cap a list payload to the first/last N items.
+
+    config:
+      path:   dotted path to the list (default "payload")
+      count:  max items to keep (required, >= 0)
+      from_:  "head" (default) keeps the first N, "tail" keeps the last N.
+              Accepted under config key ``from``.
+    A non-list target passes through unchanged.
+    """
+
+    def __init__(self, cfg: dict):
+        self.path = cfg.get("path", "payload")
+        if "count" not in cfg:
+            raise ValueError("limit transform requires 'count'")
+        self.count = max(0, int(cfg["count"]))
+        self.from_ = cfg.get("from", "head")
+        if self.from_ not in ("head", "tail"):
+            raise ValueError("limit 'from' must be 'head' or 'tail'")
+
+    async def apply(self, event: dict) -> dict | None:
+        target = dotted_get(event, self.path)
+        if not isinstance(target, list):
+            return event
+        if self.from_ == "tail":
+            limited = target[-self.count:] if self.count else []
+        else:
+            limited = target[: self.count]
+        dotted_set(event, self.path, limited)
+        return event
+
+
+class RenameTransform:
+    """Rename keys on dict items (applies across a list of dicts too).
+
+    config:
+      path:    dotted path to operate on (default "payload")
+      mapping: {old_key: new_key, ...} (required)
+      drop_missing: when true, materialize the new key (as ``None``) even when
+                    the source key is absent; when false (default), absent source
+                    keys are simply left alone.
+    Operates on a dict target, or each dict in a list target. Existing keys not
+    in ``mapping`` are preserved; a non-dict (and non-list-of-dicts) target
+    passes through unchanged.
+    """
+
+    def __init__(self, cfg: dict):
+        self.path = cfg.get("path", "payload")
+        self.mapping = dict(cfg.get("mapping") or {})
+        if not self.mapping:
+            raise ValueError("rename transform requires a non-empty 'mapping'")
+        self.drop_missing = bool(cfg.get("drop_missing", False))
+
+    def _rename(self, item: Any) -> Any:
+        if not isinstance(item, dict):
+            return item
+        out = dict(item)
+        for old, new in self.mapping.items():
+            if old in out:
+                out[new] = out.pop(old)
+            elif self.drop_missing:
+                out[new] = None
+        return out
+
+    async def apply(self, event: dict) -> dict | None:
+        target = dotted_get(event, self.path)
+        if isinstance(target, list):
+            target = [self._rename(it) for it in target]
+        else:
+            target = self._rename(target)
+        dotted_set(event, self.path, target)
+        return event
+
+
 BUILTIN_TRANSFORMS = {
     "select": SelectTransform,
     "regex": RegexTransform,
     "template": TemplateTransform,
     "dedupe": DedupeTransform,
     "chunk": ChunkTransform,
+    "flatten": FlattenTransform,
+    "sort": SortTransform,
+    "limit": LimitTransform,
+    "rename": RenameTransform,
 }
 
 
