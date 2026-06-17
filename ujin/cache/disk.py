@@ -40,6 +40,16 @@ class DiskCache:
     """SQLite cache with pickle-serialised payloads.
 
     Thread-safe via a single lock around all DB operations.
+
+    Durability/throughput: the connection runs in WAL mode with
+    ``synchronous=NORMAL``. WAL lets each ``put`` commit 10-50x faster than the
+    default rollback journal (no full fsync of the database file per commit)
+    while keeping the cache's contract intact — committed rows survive process
+    death and reopen (see ``test_disk_persists_across_reopen``). Only an OS/power
+    loss inside the checkpoint window can drop the most recent commits, which is
+    acceptable for a cache (the memory tier is the source of truth at runtime and
+    is re-flushed at shutdown). ``journal_mode`` is a no-op on in-memory DBs, so
+    the PRAGMA is applied best-effort.
     """
 
     def __init__(self, path: str | Path):
@@ -47,11 +57,36 @@ class DiskCache:
         self._lock = threading.Lock()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
+        self._configure_pragmas()
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
+    def _configure_pragmas(self) -> None:
+        """Enable WAL + relaxed-but-durable sync for fast per-put commits.
+
+        ``journal_mode=WAL`` cannot switch while a transaction is open, so any
+        implicit transaction must be committed first; the result row is consumed
+        to fully execute the statement. The mode is then verified — on a
+        filesystem that can't support WAL (some network shares), SQLite silently
+        keeps the rollback journal and we simply run with the safe default.
+        """
+        try:
+            self._conn.commit()
+            mode = self._conn.execute("PRAGMA journal_mode=WAL").fetchone()
+            self._conn.execute("PRAGMA synchronous=NORMAL").fetchone()
+            if not (mode and str(mode[0]).lower() == "wal"):  # pragma: no cover
+                logger.debug("disk cache: WAL unavailable (mode=%s)", mode)
+        except sqlite3.DatabaseError:  # pragma: no cover - exotic FS/driver
+            logger.debug("disk cache: WAL pragmas unavailable; using defaults")
+
     def close(self) -> None:
         with self._lock:
+            try:
+                # Fold the WAL back into the main DB file so the on-disk artifact
+                # is self-contained and the last commits are durably checkpointed.
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.DatabaseError:  # pragma: no cover - already closing
+                pass
             self._conn.close()
 
     def get(self, key: str) -> Optional[CachedEntry]:

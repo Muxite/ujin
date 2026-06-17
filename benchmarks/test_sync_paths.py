@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from ujin.cache import CachedEntry, ScrapeCache
+from ujin.cache.disk import DiskCache
 from ujin.extract.links import extract_headline_links, fingerprint_links
 from ujin.poll.base import fingerprint
 from ujin.scrape.routes import _decode_cursor, _encode_cursor
@@ -58,6 +59,25 @@ def test_cursor_roundtrip(benchmark):
 
     offset, fp = benchmark(roundtrip)
     assert offset == 40
+
+
+def test_disk_cache_put(benchmark, tmp_path):
+    """Raw per-put commit throughput — isolates the SQLite commit path that
+    WAL mode accelerates (the async roundtrip bench is dominated by
+    ``asyncio.to_thread`` overhead and hides this win)."""
+    db = DiskCache(tmp_path / "bench.db")
+    entry = CachedEntry(url="u", fingerprint="f",
+                        payload={"links": [{"u": i} for i in range(100)]},
+                        fetched_at=time.monotonic())
+    counter = {"n": 0}
+
+    def put_one():
+        counter["n"] += 1
+        # vary the key so we exercise both INSERT and UPDATE branches
+        db.put(f"k{counter['n'] % 64}", entry)
+
+    benchmark(put_one)
+    db.close()
 
 
 def test_memory_cache_put_get(benchmark):

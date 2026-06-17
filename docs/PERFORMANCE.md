@@ -15,7 +15,8 @@ treat as relative orders of magnitude, not SLAs). Re-measure with
 | `ScrapeService` cache-hit scrape | ~7 µs | full service path, no fetch |
 | `fingerprint` JSON payload (500 items) | ~0.23 ms | dominated by canonical JSON encode, not the hash |
 | `fingerprint` 1 MB body | ~0.53 ms | |
-| disk-cache (SQLite) put+get | ~1.5 ms | one commit per put |
+| disk-cache (SQLite) put (commit) | ~20 µs | WAL + `synchronous=NORMAL` (was ~1.3 ms with rollback journal) |
+| disk-cache (SQLite) put+get via `to_thread` | ~0.12 ms | was ~1.45 ms; the commit fsync was the dominant cost |
 | HTTP leg, 32 parallel GETs (local origin) | ~4.4 ms | per-host semaphore at 8 |
 | `extract_headline_links` (news front page) | ~1.3 ms | the CPU hot path |
 | engine sweep, 1 000 no-op targets | ~7.8 ms | scheduler overhead ≈ 8 µs/target |
@@ -30,10 +31,23 @@ treat as relative orders of magnitude, not SLAs). Re-measure with
   polling workloads.
 - **Fingerprinting JSON is ~40x costlier than hashing bytes** because the
   payload is canonical-JSON-encoded first. For very large API payloads,
-  narrow with `json_path` so only the relevant slice is encoded.
-- **The disk cache commits per put (~1.5 ms).** Heavy scrape bursts should
-  rely on the memory cache (default) and let the disk flush at shutdown;
-  per-put disk writes would cap throughput around ~600 writes/s.
+  narrow with `json_path` so only the relevant slice is encoded. (Investigated
+  cheaper canonicalizations — pre-sorting in Python, streaming `iterencode`,
+  C-encoder fast-paths — and **none are both byte-stable and faster**: any
+  scheme that touches every node in Python loses to CPython's C encoder doing
+  the same traversal, and changing the byte layout would invalidate persisted
+  fingerprints. `json_path` narrowing remains the real lever.)
+- **The disk cache now commits per put in ~20 µs** (was ~1.3 ms). The
+  connection runs in **WAL mode with `synchronous=NORMAL`**, so a commit no
+  longer fsyncs the whole database file on every write. This lifts the per-put
+  ceiling from ~600 writes/s to ~40k writes/s while preserving the cache's
+  durability contract: committed rows survive process death and reopen (only an
+  OS/power loss inside the checkpoint window can drop the most recent commits —
+  acceptable for a cache, whose runtime source of truth is the memory tier).
+  `close()` runs a truncating `wal_checkpoint`, so the on-disk file stays
+  self-contained after a clean shutdown. The memory cache is still the right
+  default for heavy bursts; per-put disk writes are now cheap enough to be a
+  viable durable tier too.
 - **A cache hit costs microseconds** — `force_refresh=False` (default) plus
   per-host cooldowns mean repeated agent/MCP calls against the same URL are
   effectively free.

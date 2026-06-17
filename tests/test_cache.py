@@ -138,6 +138,48 @@ def test_disk_creates_parent_dirs(tmp_path):
     db.close()
 
 
+def test_disk_uses_wal_journal_mode(tmp_path):
+    """WAL mode is what gives the fast per-put commit; assert it's active."""
+    path = tmp_path / "cache.db"
+    db = DiskCache(path)
+    mode = db._conn.execute("PRAGMA journal_mode").fetchone()[0]
+    assert mode.lower() == "wal"
+    sync = db._conn.execute("PRAGMA synchronous").fetchone()[0]
+    assert sync == 1  # NORMAL
+    db.close()
+
+
+def test_disk_close_checkpoints_wal(tmp_path):
+    """After close, committed data must be readable from the main DB file
+    alone (WAL folded back), even with the sidecar files removed."""
+    path = tmp_path / "cache.db"
+    db = DiskCache(path)
+    db.put("k", _entry(fp="durable"))
+    db.close()
+    # Remove WAL sidecars; the truncating checkpoint on close should have
+    # consolidated everything into the main file.
+    for suffix in ("-wal", "-shm"):
+        sidecar = path.with_name(path.name + suffix)
+        if sidecar.exists():
+            sidecar.unlink()
+    reopened = DiskCache(path)
+    assert reopened.get("k").fingerprint == "durable"
+    reopened.close()
+
+
+def test_disk_durable_across_reopen_without_clean_close(tmp_path):
+    """Committed puts survive even if the process never calls close()
+    (simulated by abandoning the connection)."""
+    path = tmp_path / "cache.db"
+    db = DiskCache(path)
+    db.put("k", _entry(fp="committed"))
+    # Drop the reference without close() — the WAL holds the committed row.
+    del db
+    reopened = DiskCache(path)
+    assert reopened.get("k").fingerprint == "committed"
+    reopened.close()
+
+
 # ── host policy ──────────────────────────────────────────────────────────────
 
 def test_policy_no_cooldown_initially():
