@@ -1,5 +1,34 @@
 # Changelog
 
+## [Unreleased]
+
+Developer-experience pass: friendlier CLI, actionable config errors, faster
+onboarding. All additive — no subcommand, flag, env var, or Docker target
+renamed or removed.
+
+### Added
+- **`ujin doctor`** — reports which fetch backends (http/obscura/playwright/
+  selenium) and optional Python extras are installed, what each unlocks, and the
+  exact `pip install` to enable a missing one. Reuses
+  `ujin/fetch/capabilities.py`.
+- **`ujin init [targets.yaml]`** — scaffolds a commented, ready-to-run starter
+  `targets.yaml` (HTTP page, RSS feed, JSON API, shell command). `-f/--force`
+  overwrites; refuses to clobber otherwise.
+- **`ujin --version`** — prints the installed version.
+- Usage examples in `--help` for every subcommand (epilogs), clearer top-level
+  help, default-value hints on flags, and `metavar`s.
+- README: a 60-second quickstart and a Troubleshooting section mapping each
+  common error to its fix; `ujin doctor` referenced from docs/BACKENDS.md.
+- CLI tests for `doctor`/`init`/`--version` and every actionable error path.
+
+### Changed
+- **Actionable CLI errors** (no tracebacks; clean `ujin: …` messages):
+  - missing targets file → names the path + suggests `ujin init`;
+  - invalid YAML → names the file **and line/column**;
+  - non-mapping document or target entry → explains the expected shape;
+  - unknown source kind → lists the valid kinds;
+  - missing required config key (e.g. `url`) → names the key.
+
 ## 0.4.0 — 2026-06-10
 
 Hardening release: the test/coverage/benchmark infrastructure, API

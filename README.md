@@ -23,6 +23,20 @@ are, retreats on errors/429s, and spreads work with jitter + a global token
 bucket. The scrape side adds everything you actually need to get clean content
 out of hostile real-world pages.
 
+## Quick start — 60 seconds
+
+```bash
+pip install -e ".[web]"      # HTTP/RSS/API roles + scrape toolkit
+ujin doctor                  # what's installed and what each backend unlocks
+ujin init                    # writes a commented starter targets.yaml
+ujin sweep targets.yaml      # one pass; prints which targets changed
+```
+
+`ujin init` scaffolds a ready-to-run `targets.yaml` (HTTP page, RSS feed, JSON
+API, shell command). `ujin sweep` polls them once and exits; `ujin serve` runs
+the same file as an adaptive, jittered daemon. `ujin --help` lists every command;
+each subcommand's `--help` carries usage examples.
+
 ## Quick start — the poller
 
 ```python
@@ -125,6 +139,8 @@ The scrape service can also pin `render: "browser"` with `actions`, and supports
 ## CLI
 
 ```bash
+ujin doctor                  # report installed backends/extras + what each unlocks
+ujin init [targets.yaml]     # scaffold a starter targets.yaml (-f to overwrite)
 ujin sweep targets.yaml      # poll all targets once; print what changed
 ujin serve targets.yaml      # run the poll engine as a daemon
 ujin api [targets.yaml]      # poller control service (REST + WS) on :8900
@@ -133,7 +149,12 @@ ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
 ujin obscura-build           # build the bundled headless renderer (needs cargo)
+ujin --version               # print the installed version
 ```
+
+Every command has examples in its `--help`. Config errors are actionable: a
+missing/invalid `targets.yaml` names the file (and line), an unknown source kind
+lists the valid ones, and a missing required key (e.g. `url`) names it.
 
 ## HTTP services
 
@@ -234,6 +255,31 @@ Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [TESTING](docs/TESTING.md) ·
 (downstream submodule contracts) · [API](docs/API.md) · [JOBS](docs/JOBS.md) ·
 [WORKFLOWS](docs/WORKFLOWS.md) · [PLUGINS](docs/PLUGINS.md) ·
 [BROWSER](docs/BROWSER.md) · [MCP](docs/MCP.md) · [CHANGELOG](CHANGELOG.md)
+
+## Troubleshooting
+
+Run **`ujin doctor`** first — it shows which fetch backends and Python extras are
+installed and the exact `pip install` to enable each missing one.
+
+- **`ModuleNotFoundError: aiohttp` (or `fastapi`, `selectolax`, …)** — a feature
+  needs an optional extra. `ujin doctor` lists what's missing; install it, e.g.
+  `pip install -e ".[web]"` for HTTP/RSS/API roles or `".[scrape]"` for the
+  scrape service. Core is dependency-free by design.
+- **`ujin: targets file not found`** — pass a real path, or run `ujin init` to
+  scaffold one.
+- **`ujin: invalid YAML in targets.yaml (line N, column M)`** — a YAML syntax
+  error at that location (usually indentation or an unclosed `{`). Each target is
+  a single-key mapping: `- http: { url: https://… }`.
+- **`unknown source kind 'x'; available: …`** — the kind isn't registered. Use
+  one of the listed built-ins, or load your plugin (see docs/PLUGINS.md) and
+  reference it as `plugin:<name>`.
+- **`missing required config key 'url'`** — that source needs the named key in
+  its `config` block.
+- **`render: "browser"` / `kind: browser` does nothing** — browser automation is
+  off unless `ujin[browser]` is installed and the engine is available
+  (`ujin doctor` shows playwright/selenium status). See docs/BROWSER.md.
+- **Auth: every service returns 401** — `UJIN_API_KEY` is set, so all endpoints
+  except `/health` require `X-API-Key`/`Bearer`. Unset it to run open.
 
 ## Lineage
 
