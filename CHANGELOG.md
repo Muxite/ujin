@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- **Disk cache (SQLite) runs in WAL mode with `synchronous=NORMAL`.** Per-put
+  commits no longer fsync the whole database file, lifting the per-put commit
+  cost from ~1.3 ms to ~20 µs (~49x) and the put+get-via-`to_thread` roundtrip
+  from ~1.45 ms to ~0.12 ms — raising the durable-write ceiling from ~600 to
+  ~40k writes/s. The public `DiskCache` API and its durability contract are
+  unchanged: committed rows survive process death and reopen (new tests
+  `test_disk_durable_across_reopen_without_clean_close`,
+  `test_disk_close_checkpoints_wal`). `close()` now runs a truncating
+  `wal_checkpoint` so the on-disk file stays self-contained after shutdown.
+  New benchmark `test_disk_cache_put` isolates the commit path; the
+  `disk_cache_roundtrip` async baseline was re-recorded.
+
 ## 0.4.0 — 2026-06-10
 
 Hardening release: the test/coverage/benchmark infrastructure, API
