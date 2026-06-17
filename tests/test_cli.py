@@ -111,3 +111,158 @@ def test_main_serve_dispatch(monkeypatch, tmp_path):
     rc = cli.main(["serve", str(p)])
     assert rc == 0
     assert ran["targets"] == 2
+
+
+# ── --version ───────────────────────────────────────────────────────────────
+
+def test_version_flag(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--version"])
+    assert exc.value.code == 0
+    assert "ujin" in capsys.readouterr().out.lower()
+
+
+def test_version_helper_returns_string():
+    assert isinstance(cli._version(), str) and cli._version()
+
+
+def test_version_helper_falls_back_to_package_attr(monkeypatch):
+    import importlib.metadata as md
+
+    def boom(_name):
+        raise md.PackageNotFoundError("ujin")
+
+    monkeypatch.setattr(md, "version", boom)
+    # falls through to ujin.__version__ without raising
+    assert isinstance(cli._version(), str)
+
+
+def test_mcp_serve_stdio_dispatch(monkeypatch):
+    pytest.importorskip("mcp")
+    called = {}
+
+    def fake_serve(transport, host, port):
+        called.update(transport=transport, port=port)
+
+    # `ujin.mcp.serve` resolves lazily to `ujin.mcp.server.serve` via __getattr__,
+    # so patch the canonical attribute (matches test_mcp_server.py).
+    monkeypatch.setattr("ujin.mcp.server.serve", fake_serve)
+    rc = cli.main(["mcp-serve"])  # stdio default (no --http)
+    assert rc == 0
+    assert called["transport"] == "stdio"
+
+
+# ── doctor ──────────────────────────────────────────────────────────────────
+
+def test_doctor_reports_backends_and_extras(capsys):
+    rc = cli.main(["doctor"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    # every fetch backend is listed
+    for name in ("http", "obscura", "playwright", "selenium"):
+        assert name in out
+    # extras section names the pip extra to enable a missing one
+    assert "Python extras" in out
+    assert "fastapi" in out
+
+
+# ── init ────────────────────────────────────────────────────────────────────
+
+def test_init_writes_loadable_starter(tmp_path, capsys):
+    dest = tmp_path / "targets.yaml"
+    rc = cli.main(["init", str(dest)])
+    assert rc == 0
+    assert dest.exists()
+    assert "wrote" in capsys.readouterr().out
+    # the scaffold must parse and build an engine without touching the network
+    engine = cli._load(str(dest))
+    assert len(engine.targets) == 4  # http, rss, api, command
+
+
+def test_init_refuses_to_clobber_without_force(tmp_path, capsys):
+    dest = tmp_path / "targets.yaml"
+    dest.write_text("existing")
+    rc = cli.main(["init", str(dest)])
+    assert rc == 1
+    assert "already exists" in capsys.readouterr().err
+    assert dest.read_text() == "existing"
+
+
+def test_init_force_overwrites(tmp_path):
+    dest = tmp_path / "targets.yaml"
+    dest.write_text("existing")
+    rc = cli.main(["init", str(dest), "--force"])
+    assert rc == 0
+    assert "ujin targets" in dest.read_text()
+
+
+def test_init_default_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    rc = cli.main(["init"])
+    assert rc == 0
+    assert (tmp_path / "targets.yaml").exists()
+
+
+# ── actionable load errors (no tracebacks; SystemExit with a hint) ───────────
+
+def test_load_missing_file_is_actionable():
+    with pytest.raises(SystemExit) as exc:
+        cli._load("/no/such/targets.yaml")
+    msg = str(exc.value)
+    assert "not found" in msg and "ujin init" in msg
+
+
+def test_load_invalid_yaml_names_line(tmp_path):
+    p = tmp_path / "targets.yaml"
+    p.write_text("targets:\n  - http: {url: x\n  bad: : indent\n")
+    with pytest.raises(SystemExit) as exc:
+        cli._load(str(p))
+    msg = str(exc.value)
+    assert "invalid YAML" in msg and "line" in msg
+
+
+def test_load_non_mapping_document(tmp_path):
+    p = tmp_path / "targets.yaml"
+    p.write_text("- just a list\n")
+    with pytest.raises(SystemExit) as exc:
+        cli._load(str(p))
+    assert "must be a YAML mapping" in str(exc.value)
+
+
+def test_load_non_mapping_target_entry(tmp_path):
+    p = tmp_path / "targets.yaml"
+    p.write_text("targets:\n  - just a string\n")
+    with pytest.raises(SystemExit) as exc:
+        cli._load(str(p))
+    assert "single-key mapping" in str(exc.value)
+
+
+def test_load_unknown_kind_lists_valid_kinds(tmp_path):
+    p = tmp_path / "targets.yaml"
+    p.write_text("targets:\n  - warp: {url: x}\n")
+    with pytest.raises(SystemExit) as exc:
+        cli._load(str(p))
+    msg = str(exc.value)
+    assert "unknown source kind 'warp'" in msg
+    assert "http" in msg and "rss" in msg  # valid kinds listed
+
+
+def test_load_missing_required_config_key(tmp_path):
+    p = tmp_path / "targets.yaml"
+    p.write_text("targets:\n  - http: {render: true}\n")  # no url
+    with pytest.raises(SystemExit) as exc:
+        cli._load(str(p))
+    assert "missing required config key" in str(exc.value)
+    assert "url" in str(exc.value)
+
+
+def test_build_pollable_unknown_kind_message_lists_kinds():
+    with pytest.raises(ValueError) as exc:
+        cli._build_pollable("nope", {})
+    assert "available:" in str(exc.value)
+
+
+def test_load_empty_document_is_empty_engine(tmp_path):
+    p = tmp_path / "targets.yaml"
+    p.write_text("# just a comment\n")
+    assert len(cli._load(str(p)).targets) == 0

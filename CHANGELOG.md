@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## 0.5.0 — 2026-06-17
+
+Feature + performance + developer-experience cycle. Every change is **additive** —
+no public symbol, CLI subcommand, flag, env var, response field, or Docker target
+was renamed or removed, so the three consumer-contract surfaces
+(awork / hct-site / wordle-max) stay frozen and green.
 
 ### Added
 - **List-reshaping transforms** (`ujin/jobs/transforms.py`, pure stdlib):
@@ -17,6 +22,19 @@
   are skipped and a no-row event is a silent no-op.
 - All five kinds are additive, registered as built-ins, discoverable at
   `GET /kinds`, and documented in docs/LIST_TRANSFORMS.md.
+- **`ujin doctor`** — reports which fetch backends (http/obscura/playwright/
+  selenium) and optional Python extras are installed, what each unlocks, and the
+  exact `pip install` to enable a missing one. Reuses
+  `ujin/fetch/capabilities.py`.
+- **`ujin init [targets.yaml]`** — scaffolds a commented, ready-to-run starter
+  `targets.yaml` (HTTP page, RSS feed, JSON API, shell command). `-f/--force`
+  overwrites; refuses to clobber otherwise.
+- **`ujin --version`** — prints the installed version.
+- Usage examples in `--help` for every subcommand (epilogs), clearer top-level
+  help, default-value hints on flags, and `metavar`s.
+- README: a 60-second quickstart and a Troubleshooting section mapping each
+  common error to its fix; `ujin doctor` referenced from docs/BACKENDS.md.
+- CLI tests for `doctor`/`init`/`--version` and every actionable error path.
 
 ### Changed
 - **Disk cache (SQLite) runs in WAL mode with `synchronous=NORMAL`.** Per-put
@@ -30,6 +48,12 @@
   `wal_checkpoint` so the on-disk file stays self-contained after shutdown.
   New benchmark `test_disk_cache_put` isolates the commit path; the
   `disk_cache_roundtrip` async baseline was re-recorded.
+- **Actionable CLI errors** (no tracebacks; clean `ujin: …` messages):
+  - missing targets file → names the path + suggests `ujin init`;
+  - invalid YAML → names the file **and line/column**;
+  - non-mapping document or target entry → explains the expected shape;
+  - unknown source kind → lists the valid kinds;
+  - missing required config key (e.g. `url`) → names the key.
 
 ## 0.4.0 — 2026-06-10
 

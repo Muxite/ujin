@@ -15,7 +15,7 @@ The scrape toolkit (``ujin.fetch``, ``ujin.extract``, ``ujin.cache``,
 ``ujin.sources``) remains available for direct use.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.5.0"
 
 # Lightweight, dependency-free re-exports. Pollables that need optional deps
 # (aiohttp, feedparser) import them lazily inside poll().
