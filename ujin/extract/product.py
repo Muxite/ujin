@@ -142,12 +142,29 @@ def _is_sponsored(card) -> bool:
     return any(card.css_first(sel) is not None for sel in _SPONSORED_SELECTORS)
 
 
+# Placeholder/promo cards some marketplaces inject into the results grid (eBay's first
+# card is a "Shop on eBay" promo with a $0.99 price and no real product). They have a
+# generic title, so skip by exact (case-folded) title match.
+_JUNK_TITLES: frozenset[str] = frozenset({
+    "shop on ebay", "new listing",
+})
+
+
+def _is_junk_title(title: str | None) -> bool:
+    return bool(title) and title.strip().casefold() in _JUNK_TITLES
+
+
+# Badge text some marketplaces glue to the front of a card title (eBay prepends a
+# "New Listing" / "Sponsored" badge inside the title span, e.g. "New ListingApple ...").
+_TITLE_BADGE_RE = re.compile(r"^(?:new listing|sponsored|top rated plus)\s*", re.I)
+
+
 def _best_title(card, title_selectors) -> str | None:
     """Pick the longest non-empty title candidate (avoids brand-only spans)."""
     candidates: list[str] = []
     for sel in _as_selectors(title_selectors):
         for node in card.css(sel):
-            text = node.text(strip=True)
+            text = _TITLE_BADGE_RE.sub("", node.text(strip=True))
             if text:
                 candidates.append(text)
     return max(candidates, key=len) if candidates else None
@@ -209,6 +226,9 @@ def _card_image(card, selectors) -> str:
 _HREF_ID_PATTERNS: dict[str, re.Pattern] = {
     "newegg": re.compile(r"/p/([A-Za-z0-9]+)"),          # .../p/N82E16820982185
     "amazon": re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})"),
+    "ebay": re.compile(r"/itm/(\d+)"),                   # .../itm/123456789012 (legacy id)
+    # Walmart product pages are /ip/<slug>/<numeric-id> or /ip/<numeric-id>.
+    "walmart": re.compile(r"/ip/(?:.*/)?(\d+)"),
 }
 
 
@@ -346,7 +366,7 @@ def _from_cards(
             continue
         title = _best_title(card, selectors["title"])
         price_node = _first_node(card, selectors["price"])
-        if not (title and price_node):
+        if not (title and price_node) or _is_junk_title(title):
             continue
         price_text = price_node.text(strip=True)
         cents = price_to_cents(price_text)

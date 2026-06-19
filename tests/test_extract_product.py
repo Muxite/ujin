@@ -421,6 +421,127 @@ def test_jsonld_detail_no_product_block_returns_none():
     assert extract_product_detail(html, "https://x.com/a", source="newegg") is None
 
 
+# ── eBay / Walmart card extraction + id recovery ───────────────────────────────
+from ujin.extract.product import _id_from_href  # noqa: E402
+
+
+def test_id_from_href_ebay():
+    assert _id_from_href("https://www.ebay.com/itm/295678901234?hash=item", "ebay") == "295678901234"
+    # Slug-style legacy URL: the numeric id is still recovered.
+    assert _id_from_href("https://www.ebay.com/itm/Apple-iPhone/267890123456?epid=1", "ebay") == "267890123456"
+
+
+def test_id_from_href_walmart():
+    assert _id_from_href("https://www.walmart.com/ip/Great-Value-Coffee/12345678", "walmart") == "12345678"
+    assert _id_from_href("https://www.walmart.com/ip/987654321", "walmart") == "987654321"
+
+
+_EBAY_SELECTORS = {
+    "card": ".s-card, .s-item",
+    "id_attr": "data-id",
+    "title": (".s-card__title", ".s-item__title span", ".s-item__title", "h3"),
+    "image": (".s-card__image img", ".s-item__image-wrapper img", "img"),
+    "price": (".s-card__price", ".s-item__price"),
+    "link": ("a.su-link", "a.s-item__link", "a[href*='/itm/']"),
+}
+
+_EBAY_SRP_HTML = """
+<html><body><ul class="srp-results">
+<li class="s-item">
+  <a class="s-item__link" href="https://www.ebay.com/itm/295678901234?hash=item">
+    <div class="s-item__image-wrapper"><img src="https://i.ebayimg.com/images/g/abc/s-l300.jpg"/></div>
+    <div class="s-item__title"><span role="heading">Apple AirPods Pro 2nd Generation Wireless Earbuds</span></div>
+  </a>
+  <span class="s-item__price">$179.99</span>
+</li>
+<li class="s-item">
+  <a class="s-item__link" href="https://www.ebay.com/itm/305678901299">
+    <div class="s-item__image-wrapper"><img src="https://i.ebayimg.com/images/g/xyz/s-l300.jpg"/></div>
+    <div class="s-item__title"><span role="heading">Shop on eBay</span></div>
+  </a>
+  <span class="s-item__price">$0.99</span>
+</li>
+</ul></body></html>
+"""
+
+
+def test_extract_ebay_cards_and_skips_placeholder():
+    products = extract_products(
+        _EBAY_SRP_HTML, "https://www.ebay.com/sch/?_nkw=earbuds",
+        source="ebay", selectors=_EBAY_SELECTORS,
+    )
+    # The "Shop on eBay" promo card is dropped; only the real listing remains.
+    assert len(products) == 1
+    p = products[0]
+    assert p.source == "ebay"
+    assert p.source_id == "295678901234"           # recovered from the /itm/ link
+    assert p.title == "Apple AirPods Pro 2nd Generation Wireless Earbuds"
+    assert p.price_cents == 17999
+    assert p.image_url.endswith("s-l300.jpg")
+    assert p.url.startswith("https://www.ebay.com/itm/295678901234")
+
+
+_EBAY_BADGE_HTML = """
+<html><body><ul class="srp-results">
+<li class="s-item">
+  <a class="s-item__link" href="https://www.ebay.com/itm/444555666777">
+    <div class="s-item__image-wrapper"><img src="https://i.ebayimg.com/g/q.jpg"/></div>
+    <div class="s-item__title"><span role="heading">New ListingSony WH-1000XM5 Headphones</span></div>
+  </a>
+  <span class="s-item__price">$299.00</span>
+</li>
+</ul></body></html>
+"""
+
+
+def test_ebay_title_strips_new_listing_badge():
+    # eBay glues a "New Listing" badge to the front of the title span — strip it.
+    products = extract_products(
+        _EBAY_BADGE_HTML, "https://www.ebay.com/sch/?_nkw=headphones",
+        source="ebay", selectors=_EBAY_SELECTORS,
+    )
+    assert len(products) == 1
+    assert products[0].title == "Sony WH-1000XM5 Headphones"
+
+
+_WALMART_SELECTORS = {
+    "card": "[data-item-id]",
+    "id_attr": "data-item-id",
+    "title": ("[data-automation-id='product-title']", "span.w_iUH7", "a span"),
+    "image": ("img[data-testid='productTileImage']", "img[loading]", "img"),
+    "price": ("[data-automation-id='product-price'] .w_iUH7",
+              "[data-automation-id='product-price']"),
+    "link": ("a[link-identifier]", "a[href*='/ip/']"),
+}
+
+_WALMART_GRID_HTML = """
+<html><body>
+<div data-item-id="12345678">
+  <a link-identifier="12345678" href="/ip/Great-Value-Classic-Roast-Coffee/12345678">
+    <img data-testid="productTileImage" src="https://i5.walmartimages.com/asr/abc.jpg"/>
+    <span data-automation-id="product-title">Great Value Classic Roast Ground Coffee, 30.5 oz</span>
+  </a>
+  <div data-automation-id="product-price"><span class="w_iUH7">current price $9.48</span></div>
+</div>
+</body></html>
+"""
+
+
+def test_extract_walmart_cards():
+    products = extract_products(
+        _WALMART_GRID_HTML, "https://www.walmart.com/search?q=coffee",
+        source="walmart", selectors=_WALMART_SELECTORS,
+    )
+    assert len(products) == 1
+    p = products[0]
+    assert p.source == "walmart"
+    assert p.source_id == "12345678"               # from the data-item-id card attr
+    assert p.title.startswith("Great Value Classic Roast")
+    assert p.price_cents == 948
+    assert p.image_url.endswith("abc.jpg")
+    assert p.url == "https://www.walmart.com/ip/Great-Value-Classic-Roast-Coffee/12345678"
+
+
 def test_card_image_uses_data_src_when_src_placeholder():
     # A lazy-loaded grid: the <img> src is a 1px placeholder; the real URL is in data-src.
     html = """

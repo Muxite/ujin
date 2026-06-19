@@ -48,6 +48,59 @@ SITE_PROFILES: dict[str, dict] = {
             "HDD": ["internal hard drive", "2tb hard drive", "4tb hard drive", "external hdd"],
         },
     },
+    # eBay. The browser engine (with the stealth context) is required: the bare-headless
+    # fingerprint is bounced to an error page, AND the classic `/sch/i.html` search route is
+    # blocked even with stealth — but `/sch/?_nkw=` serves the full result grid (verified
+    # live: 70+ cards). Current SRP uses `.s-card`; legacy `.s-item` selectors are kept as
+    # fallbacks. The id is recovered from each card's `/itm/<digits>` link
+    # (see _HREF_ID_PATTERNS["ebay"]); eBay's first "Shop on eBay" promo card is skipped.
+    "ebay": {
+        "domain": "ebay.com",
+        "search_url": "https://www.{domain}/sch/?_nkw={query}",
+        "selectors": {
+            "card": ".s-card, .s-item",
+            "id_attr": "data-id",            # absent on eBay cards -> id from /itm/ link
+            "title": (".s-card__title", ".s-item__title span", ".s-item__title", "h3"),
+            "image": (".s-card__image img", ".s-item__image-wrapper img", "img"),
+            "price": (".s-card__price", ".s-item__price"),
+            "link": ("a.su-link", "a.s-item__link", "a[href*='/itm/']"),
+        },
+        "engine": "browser",
+        "wait_selector": ".s-card, .s-item",
+        "keyterms": {
+            "Electronics": ["wireless earbuds", "bluetooth speaker", "smart watch",
+                            "gaming mouse", "graphics card", "drone"],
+            "Collectibles": ["pokemon cards", "vintage camera", "lego set",
+                             "action figure", "comic book"],
+            "Apparel": ["leather jacket", "running shoes", "designer handbag",
+                        "mechanical watch", "sunglasses"],
+            "Home": ["espresso machine", "cast iron skillet", "power tool", "vacuum cleaner"],
+        },
+    },
+    # Walmart. Protected by PerimeterX ("Robot or human?") — best effort. Cards carry a
+    # numeric `data-item-id`; the JSON-LD detail path enriches each item page when reachable.
+    "walmart": {
+        "domain": "walmart.com",
+        "search_url": "https://www.{domain}/search?q={query}",
+        "selectors": {
+            "card": "[data-item-id]",
+            "id_attr": "data-item-id",
+            "title": ("[data-automation-id='product-title']", "span.w_iUH7", "a span"),
+            "image": ("img[data-testid='productTileImage']", "img[loading]", "img"),
+            "price": ("[data-automation-id='product-price'] .w_iUH7",
+                      "[data-automation-id='product-price']",
+                      "div[data-automation-id='product-price']"),
+            "link": ("a[link-identifier]", "a[href*='/ip/']"),
+        },
+        "engine": "browser",
+        "wait_selector": "[data-item-id]",
+        "keyterms": {
+            "Grocery": ["coffee", "olive oil", "protein powder", "cereal"],
+            "Home": ["bed sheets", "throw pillow", "storage bin", "area rug"],
+            "Electronics": ["bluetooth speaker", "tablet", "headphones", "smart bulb"],
+            "Toys": ["board game", "building blocks", "remote control car"],
+        },
+    },
 }
 
 

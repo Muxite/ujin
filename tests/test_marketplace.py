@@ -78,3 +78,39 @@ async def test_amazon_search_poll_stamps_category_without_network(monkeypatch):
 def test_unknown_profile_falls_back_to_amazon():
     src = MarketplaceSearchPollable(profile="nope")
     assert src.profile_name == "amazon"
+
+
+# ── eBay / Walmart profiles ────────────────────────────────────────────────────
+def test_ebay_profile_shape():
+    prof = SITE_PROFILES["ebay"]
+    assert prof["domain"] == "ebay.com"
+    assert "{query}" in prof["search_url"] and "{domain}" in prof["search_url"]
+    assert prof["engine"] == "browser"          # bare HTTP gets bounced to an error page
+    sel = prof["selectors"]
+    assert ".s-item" in sel["card"]
+    assert prof["keyterms"]                       # has category banks
+
+
+def test_walmart_profile_shape():
+    prof = SITE_PROFILES["walmart"]
+    assert prof["domain"] == "walmart.com"
+    assert "/search?q={query}" in prof["search_url"]
+    assert prof["engine"] == "browser"
+    assert prof["selectors"]["id_attr"] == "data-item-id"
+    assert prof["keyterms"]
+
+
+def test_ebay_child_uses_profile_url_and_source():
+    src = MarketplaceSearchPollable(profile="ebay", seed=1)
+    child = src._child("wireless earbuds", "Electronics")
+    assert child.source == "ebay"
+    assert "ebay.com/sch/?_nkw=" in child.search_url     # /sch/i.html is blocked; /sch/ works
+    assert "wireless+earbuds" in child.search_url       # query is quote_plus-encoded
+
+
+def test_walmart_child_uses_profile_url_and_source():
+    src = MarketplaceSearchPollable(profile="walmart", seed=1)
+    child = src._child("olive oil", "Grocery")
+    assert child.source == "walmart"
+    assert "walmart.com/search?q=" in child.search_url
+    assert "olive+oil" in child.search_url
