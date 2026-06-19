@@ -31,11 +31,138 @@ async def test_webhook_sink_posts_signed_payload(fake_origin):
     assert req.headers["X-Ujin-Signature"] == f"sha256={want}"
 
 
-async def test_webhook_sink_4xx_logged_not_raised(fake_origin, caplog):
+async def test_webhook_sink_4xx_logged_not_raised(fake_origin, caplog, tmp_path):
     fake_origin.add("/hook", body="no", status=410)
-    sink = build_sink("webhook", {"url": fake_origin.url("/hook")})
+    sink = build_sink("webhook", {"url": fake_origin.url("/hook"),
+                                  "spool_dir": str(tmp_path)})
     await sink.emit({"job_id": "j1"})  # must not raise
     assert any("410" in r.message for r in caplog.records)
+    # A permanent 4xx must NOT be spooled (retrying can't help).
+    assert list(tmp_path.glob("**/*.json")) == []
+
+
+class _ProgServer:
+    """A localhost webhook target with full per-request control, recording JSON bodies."""
+
+    def __init__(self):
+        from aiohttp import web
+        self.bodies: list[dict] = []
+        self.status_for = lambda n: 200      # n = 1-based request index -> status
+        self._app = web.Application()
+        self._app.router.add_route("*", "/{tail:.*}", self._handle)
+        self._server = None
+
+    async def _handle(self, request):
+        from aiohttp import web
+        try:
+            self.bodies.append(await request.json())
+        except Exception:  # noqa: BLE001
+            self.bodies.append({})
+        return web.Response(status=self.status_for(len(self.bodies)), text="{}")
+
+    async def __aenter__(self):
+        from aiohttp.test_utils import TestServer
+        self._server = TestServer(self._app)
+        await self._server.start_server()
+        return self
+
+    async def __aexit__(self, *exc):
+        await self._server.close()
+
+    def url(self, path="/hook"):
+        return str(self._server.make_url(path))
+
+
+async def test_webhook_retries_then_succeeds(tmp_path):
+    """A transient 503 is retried until it clears; the event is delivered, not spooled."""
+    async with _ProgServer() as srv:
+        srv.status_for = lambda n: 503 if n == 1 else 200   # fail once, then succeed
+        sink = build_sink("webhook", {
+            "url": srv.url(), "retries": 3, "backoff_secs": 0.01,
+            "spool_dir": str(tmp_path),
+        })
+        await sink.emit({"job_id": "j1", "payload": [{"x": 1}]})
+        assert len(srv.bodies) == 2                     # one retry happened
+    assert list(tmp_path.glob("**/*.json")) == []       # delivered -> nothing spooled
+
+
+async def test_webhook_spools_on_outage_then_replays(tmp_path):
+    """Backend down -> event spooled (not dropped); backend back -> replayed on next emit."""
+    # 1. Backend unreachable: deliver fails after retries, event is spooled (not lost).
+    sink_down = build_sink("webhook", {
+        "url": "http://127.0.0.1:1/hook", "retries": 1, "backoff_secs": 0.01,
+        "timeout_secs": 1, "spool_dir": str(tmp_path),
+    })
+    await sink_down.emit({"job_id": "j1", "payload": [{"id": "a"}]})
+    assert len(list(tmp_path.glob("**/*.json"))) == 1   # the sweep was preserved
+
+    # 2. Backend recovers. A new emit drains the backlog first, then delivers the
+    #    current event — both arrive in order, spool ends empty.
+    async with _ProgServer() as srv:
+        sink_up = build_sink("webhook", {
+            "url": srv.url(), "retries": 1, "backoff_secs": 0.01,
+            "spool_dir": str(tmp_path),
+        })
+        sink_up.spool_dir = sink_down.spool_dir   # share the outage's spool dir
+        await sink_up.emit({"job_id": "j2", "payload": [{"id": "b"}]})
+
+        ids = [b["payload"][0]["id"] for b in srv.bodies]
+        assert ids == ["a", "b"]                   # replayed 'a' first, then live 'b'
+    assert list(tmp_path.glob("**/*.json")) == []  # backlog fully drained
+
+
+async def test_webhook_spool_disabled_drops_and_errors(caplog):
+    """With spooling explicitly off, an outage logs an error (legacy drop behavior)."""
+    sink = build_sink("webhook", {
+        "url": "http://127.0.0.1:1/hook", "retries": 0,
+        "timeout_secs": 1, "spool_dir": "",
+    })
+    await sink.emit({"job_id": "j1"})  # must not raise
+    assert sink.spool_dir is None
+    assert any("DROPPED" in r.message for r in caplog.records)
+
+
+async def test_webhook_spool_is_bounded(tmp_path):
+    """A long outage can't grow the spool past spool_max_files (oldest dropped)."""
+    sink = build_sink("webhook", {
+        "url": "http://127.0.0.1:1/hook", "retries": 0, "timeout_secs": 1,
+        "spool_dir": str(tmp_path), "spool_max_files": 3,
+    })
+    for i in range(6):
+        await sink.emit({"job_id": "j", "payload": [{"i": i}]})
+    assert len(list(tmp_path.glob("**/*.json"))) == 3   # capped, not unbounded
+
+
+async def test_webhook_replay_pauses_when_backend_still_down(tmp_path):
+    """During an ongoing outage, draining stops and the backlog is preserved (not lost)."""
+    sink = build_sink("webhook", {
+        "url": "http://127.0.0.1:1/hook", "retries": 0, "timeout_secs": 1,
+        "spool_dir": str(tmp_path),
+    })
+    await sink.emit({"job_id": "j", "payload": [{"i": 1}]})   # spools #1
+    await sink.emit({"job_id": "j", "payload": [{"i": 2}]})   # drain fails, spools #2
+    assert len(list(tmp_path.glob("**/*.json"))) == 2         # both still queued for replay
+
+
+async def test_webhook_drain_drops_permanently_rejected(tmp_path):
+    """A spooled event the recovered backend rejects with 4xx is dropped, not stuck forever."""
+    # Spool one event against a dead backend.
+    sink_down = build_sink("webhook", {
+        "url": "http://127.0.0.1:1/hook", "retries": 0, "timeout_secs": 1,
+        "spool_dir": str(tmp_path),
+    })
+    await sink_down.emit({"job_id": "j", "payload": [{"i": 1}]})
+    assert len(list(tmp_path.glob("**/*.json"))) == 1
+
+    # Backend is back but permanently rejects (e.g. bad secret -> 401): the replay drops it.
+    async with _ProgServer() as srv:
+        srv.status_for = lambda n: 401
+        sink_up = build_sink("webhook", {
+            "url": srv.url(), "retries": 0, "spool_dir": str(tmp_path),
+        })
+        sink_up.spool_dir = sink_down.spool_dir
+        await sink_up.emit({"job_id": "j2", "payload": [{"i": 2}]})
+    assert list(tmp_path.glob("**/*.json")) == []    # backlog cleared (rejected one dropped)
 
 
 async def test_forward_sink_is_webhook_alias(fake_origin):

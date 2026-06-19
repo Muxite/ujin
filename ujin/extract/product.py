@@ -117,10 +117,14 @@ _AMAZON_SELECTORS = {
     # Several layouts put the brand in one element and the full title in another
     # ("Logitech" vs "Logitech MX Master 3S ..."). Gather all candidates across
     # these selectors and keep the longest — the product title, not the brand.
-    "title": ("h2 a span", "h2 span", "h2"),
-    "image": ".s-image",
-    "price": ".a-price .a-offscreen",
-    "link": "a.a-link-normal",
+    # `[data-cy='title-recipe']` is the current grid's title wrapper; the bare h2
+    # selectors stay as fallbacks for older/drifted layouts.
+    "title": ("[data-cy='title-recipe'] h2 span", "h2 a span", "h2 span", "h2"),
+    # Lazy-loaded grids serve a placeholder src and stash the real URL in data-src/
+    # srcset — `_from_cards` reads those too; the selectors just need to match the <img>.
+    "image": (".s-image", "img.s-image", "img"),
+    "price": (".a-price .a-offscreen", ".a-price span.a-offscreen"),
+    "link": ("a.a-link-normal.s-no-outline", "a.a-link-normal"),
 }
 
 
@@ -140,15 +144,88 @@ def _is_sponsored(card) -> bool:
 
 def _best_title(card, title_selectors) -> str | None:
     """Pick the longest non-empty title candidate (avoids brand-only spans)."""
-    if isinstance(title_selectors, str):
-        title_selectors = (title_selectors,)
     candidates: list[str] = []
-    for sel in title_selectors:
+    for sel in _as_selectors(title_selectors):
         for node in card.css(sel):
             text = node.text(strip=True)
             if text:
                 candidates.append(text)
     return max(candidates, key=len) if candidates else None
+
+
+def _as_selectors(value) -> tuple[str, ...]:
+    """Normalize a selector config (str or iterable of str) to a tuple of strings.
+
+    Site profiles may list several fallback selectors per field (e.g. Newegg's
+    ``"price": (".price-current", ".price-current strong")``). ``selectolax``'s
+    ``css``/``css_first`` only take a single string, so every selector lookup goes
+    through this — passing a tuple straight to ``css_first`` would raise a TypeError
+    and silently zero out the whole scrape.
+    """
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    return tuple(str(s) for s in value if s)
+
+
+def _first_node(card, selectors):
+    """First node matching any of ``selectors`` (str or tuple), in order; else None."""
+    for sel in _as_selectors(selectors):
+        node = card.css_first(sel)
+        if node is not None:
+            return node
+    return None
+
+
+def _first_srcset(srcset: str | None) -> str | None:
+    """First URL out of a ``srcset`` attribute (``"a.jpg 1x, b.jpg 2x"`` -> ``a.jpg``)."""
+    if not srcset:
+        return None
+    first = srcset.split(",", 1)[0].strip()
+    return first.split()[0] if first else None
+
+
+def _card_image(card, selectors) -> str:
+    """Best image URL from a card across all image selectors.
+
+    Robust to layout drift and lazy-loading: tries each selector's matches in order and
+    returns the first ``src``/``data-src``/``srcset`` that's a real http(s) URL (a leading
+    placeholder ``<img>`` with an empty/data: src no longer kills the card)."""
+    for sel in _as_selectors(selectors):
+        for node in card.css(sel):
+            for attr in ("src", "data-src", "data-image-src"):
+                u = node.attributes.get(attr) or ""
+                if u.startswith("http"):
+                    return u
+            u = _first_srcset(node.attributes.get("srcset")) or ""
+            if u.startswith("http"):
+                return u
+    return ""
+
+
+# Per-source patterns that recover a stable product id from a card's link when the
+# card itself carries no id attribute (e.g. Newegg's `.item-cell` has no data-id).
+_HREF_ID_PATTERNS: dict[str, re.Pattern] = {
+    "newegg": re.compile(r"/p/([A-Za-z0-9]+)"),          # .../p/N82E16820982185
+    "amazon": re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})"),
+}
+
+
+def _id_from_href(href: str | None, source: str) -> str | None:
+    """Best-effort stable source_id from a product link; falls back to the path."""
+    if not href:
+        return None
+    pat = _HREF_ID_PATTERNS.get(source)
+    if pat:
+        m = pat.search(href)
+        if m:
+            return m.group(1)
+    # Generic fallback: the last non-empty path segment (drops the query string).
+    path = href.split("?", 1)[0].rstrip("/")
+    tail = path.rsplit("/", 1)[-1]
+    return tail or None
+
 
 _CURRENCY_SYMBOLS = {"$": "USD", "£": "GBP", "€": "EUR", "¥": "JPY", "₹": "INR"}
 # Thousands separators (comma / thin space between digit groups) are stripped
@@ -268,24 +345,26 @@ def _from_cards(
         if skip_sponsored and _is_sponsored(card):
             continue
         title = _best_title(card, selectors["title"])
-        price_node = card.css_first(selectors["price"])
-        image_node = card.css_first(selectors["image"])
-        if not (title and price_node and image_node):
+        price_node = _first_node(card, selectors["price"])
+        if not (title and price_node):
             continue
         price_text = price_node.text(strip=True)
         cents = price_to_cents(price_text)
         if cents is None or cents <= 0:
             continue
-        image_url = image_node.attributes.get("src") or ""
+        image_url = _card_image(card, selectors["image"])
         if not image_url:
             continue
         source_id = card.attributes.get(selectors["id_attr"]) or None
+        link_node = _first_node(card, selectors["link"])
+        href = (link_node.attributes.get("href") if link_node else None) or ""
+        if source_id is None:
+            # No id attribute on the card (e.g. Newegg) — recover one from the link.
+            source_id = _id_from_href(href, source)
         if source == "amazon" and source_id:
             # Canonical product URL — drop the noisy search-ref query string.
             url = f"https://www.amazon.com/dp/{source_id}"
         else:
-            link_node = card.css_first(selectors["link"])
-            href = (link_node.attributes.get("href") if link_node else None) or ""
             url = urljoin(base_url, href) if href else None
         out.append(Product(
             source=source,
@@ -438,6 +517,137 @@ def _selected_variant(tree, sel: dict) -> str | None:
     return " · ".join(vals) if vals else None
 
 
+def _detail_from_jsonld(
+    html: str, url: str, *, source: str, max_chars: int = 600,
+) -> Product | None:
+    """Build a rich :class:`Product` from a detail page's schema.org ``Product`` JSON-LD.
+
+    Site-agnostic — any store that ships a ``@type==Product`` block (Newegg, Shopify,
+    most modern carts) yields brand/rating/reviews/price/image/specs without per-site CSS.
+    Used as the primary extractor for non-Amazon sources and as an Amazon fallback when the
+    DOM parse fails (e.g. layout drift / a partial bot wall). Returns ``None`` if there is no
+    usable Product block with a positive price.
+    """
+    blocks = extract_structured(html).get("jsonld", [])
+    block: dict | None = None
+    for b in blocks:
+        if not isinstance(b, dict):
+            continue
+        types = b.get("@type")
+        types = types if isinstance(types, list) else [types]
+        if "Product" in types:
+            block = b
+            break
+    if block is None:
+        return None
+
+    title = _clean(block.get("name"))
+    if not title:
+        return None
+
+    offers = _first(block.get("offers")) or {}
+    if not isinstance(offers, dict):
+        offers = {}
+    cents = price_to_cents(offers.get("price"))
+    if cents is None or cents <= 0:
+        return None
+    currency = str(offers.get("priceCurrency") or "").strip() or _currency_from_url(url)
+
+    image = _first(block.get("image"))
+    if isinstance(image, dict):
+        image = image.get("url")
+    images: list[str] = []
+    raw_images = block.get("image")
+    for raw in (raw_images if isinstance(raw_images, list) else [raw_images]):
+        u = raw.get("url") if isinstance(raw, dict) else raw
+        u = _http_url_str(u, url)
+        if u and u not in images:
+            images.append(u)
+    image_url = _http_url_str(image, url) or (images[0] if images else "")
+    if not image_url:
+        og = extract_structured(html).get("opengraph", {})
+        image_url = _http_url_str(og.get("og:image"), url) or ""
+    if not image_url:
+        return None
+
+    brand = block.get("brand")
+    if isinstance(brand, dict):
+        brand = brand.get("name")
+    brand = _clean(brand) or None
+
+    rating = review_count = None
+    agg = block.get("aggregateRating")
+    if isinstance(agg, dict):
+        rating = _clean_float(agg.get("ratingValue"))
+        review_count = _clean_pos_int(agg.get("reviewCount") or agg.get("ratingCount"))
+
+    # Specs: schema.org scatters facts as flat scalar props (Model, weight, …). Keep short
+    # string pairs, skip schema plumbing and nested objects.
+    _SKIP_KEYS = {
+        "@context", "@type", "@id", "name", "description", "image", "offers", "brand",
+        "aggregateRating", "review", "sku", "mpn", "gtin", "gtin12", "gtin13", "gtin14",
+        "url", "itemCondition", "category", "productID",
+    }
+    specs: dict[str, str] = {}
+    for k, v in block.items():
+        if k in _SKIP_KEYS or isinstance(v, (dict, list)):
+            continue
+        key, val = _clean(k)[:48], _clean(v)[:80]
+        if key and val and "{" not in val:
+            specs[key] = val
+        if len(specs) >= 14:
+            break
+
+    variant = _clean(block.get("mpn") or block.get("Model")) or None
+    source_id = _clean(block.get("sku") or block.get("mpn")) or _id_from_href(url, source)
+
+    return Product(
+        source=source,
+        source_id=source_id,
+        title=title,
+        image_url=image_url,
+        price_cents=cents,
+        currency=currency,
+        url=url,
+        description=extract_description(html, source=source, max_chars=max_chars)
+        or (_clean(block.get("description"))[:max_chars] or None),
+        brand=brand,
+        rating=rating,
+        review_count=review_count,
+        images=images[:10],
+        specs=specs,
+        variant=variant,
+        scrape_version=SCRAPE_VERSION_DETAIL,
+    )
+
+
+def _http_url_str(value, base_url: str) -> str | None:
+    s = str(value or "").strip()
+    if s.startswith("//"):
+        s = "https:" + s
+    if s.startswith("http://") or s.startswith("https://"):
+        return s
+    return urljoin(base_url, s) if s else None
+
+
+def _clean_float(raw) -> float | None:
+    try:
+        return round(float(raw), 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _clean_pos_int(raw) -> int | None:
+    m = _DIGITS_RE.search(str(raw or ""))
+    if not m:
+        return None
+    try:
+        n = int(m.group(0).replace(",", ""))
+    except ValueError:
+        return None
+    return n if n >= 0 else None
+
+
 def extract_product_detail(
     html: str, url: str, *, source: str = "amazon", selectors: dict | None = None,
     max_chars: int = 600,
@@ -449,13 +659,18 @@ def extract_product_detail(
     judge value (the price itself is captured for scoring, never shown). Returns ``None``
     when the page has no usable title+price (e.g. a bot/captcha wall).
 
-    Dispatches on ``source``: Amazon (and Amazon-shaped stores) parse the DOM; AliExpress
-    parses its ``window.runParams`` JSON. The result is stamped
-    ``scrape_version = SCRAPE_VERSION_DETAIL`` so the DB records the richer coverage versus
-    the search-card path (:data:`SCRAPE_VERSION_CARD`).
+    Dispatches on ``source``: AliExpress parses its ``window.runParams`` JSON; Amazon (and
+    Amazon-shaped stores) parse the DOM, falling back to schema.org ``Product`` JSON-LD when
+    the DOM parse comes up empty; every other source uses the JSON-LD path directly. The
+    result is stamped ``scrape_version = SCRAPE_VERSION_DETAIL`` so the DB records the richer
+    coverage versus the search-card path (:data:`SCRAPE_VERSION_CARD`).
     """
     if source == "aliexpress":
         return _aliexpress_detail(html, url, max_chars=max_chars)
+    # Non-Amazon sources (Newegg, generic schema.org stores) have no Amazon DOM — read the
+    # site-agnostic JSON-LD Product block straight away.
+    if source != "amazon" and not selectors:
+        return _detail_from_jsonld(html, url, source=source, max_chars=max_chars)
     try:
         from selectolax.parser import HTMLParser
     except ImportError:  # pragma: no cover - web extra missing
@@ -470,12 +685,14 @@ def extract_product_detail(
     title_node = tree.css_first(sel["title"])
     title = _clean(title_node.text()) if title_node else None
     if not title:
-        return None
+        # DOM title missing (layout drift / partial bot wall) — try schema.org JSON-LD,
+        # which Amazon ships on most detail pages, before giving up.
+        return _detail_from_jsonld(html, url, source=source, max_chars=max_chars)
 
     # Price: first non-empty offscreen value across the buy-box candidates.
     cents: int | None = None
     price_text = ""
-    for q in sel["price"]:
+    for q in _as_selectors(sel["price"]):
         node = tree.css_first(q)
         txt = _clean(node.text()) if node else ""
         if txt:
@@ -484,7 +701,7 @@ def extract_product_detail(
                 cents, price_text = c, txt
                 break
     if cents is None:
-        return None
+        return _detail_from_jsonld(html, url, source=source, max_chars=max_chars)
 
     # Rating from the popover title attr ("4.5 out of 5 stars").
     rating: float | None = None

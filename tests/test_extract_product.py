@@ -272,3 +272,166 @@ def test_aliexpress_bot_shell_returns_none():
     assert extract_product_detail("<html><body>JS required</body></html>",
                                   "https://www.aliexpress.com/item/123.html",
                                   source="aliexpress") is None
+
+
+# ── Newegg-shaped card grid (tuple selectors, no id attr, link-derived id) ─────
+# Mirrors the Newegg profile: tuple price/image selectors and a `.item-cell` card that
+# carries NO data-id — the id must be recovered from the `/p/N82E...` product link.
+# (Before the fix, passing a tuple to css_first raised a TypeError that silently zeroed
+#  out the entire scrape — the cause of "0 Newegg rows" in production.)
+_NEWEGG_CARD_HTML = """
+<html><body>
+<div class="item-cell">
+  <a class="item-title" href="https://www.newegg.com/corsair-vengeance-ddr5/p/N82E16820982007">
+     CORSAIR Vengeance 32GB (2 x 16GB) DDR5 6000 Desktop Memory</a>
+  <div class="item-img"><img src="https://c1.neweggimages.com/p/20-236-828.jpg"/></div>
+  <li class="price-current">$<strong>519</strong><sup>.99</sup>&nbsp;<abbr title="to">–</abbr></li>
+</div>
+</body></html>
+"""
+
+_NEWEGG_SELECTORS = {
+    "card": ".item-cell", "id_attr": "data-id",
+    "title": (".item-title",), "image": (".item-img img", "img"),
+    "price": (".price-current", ".price-current strong"), "link": "a.item-title",
+}
+
+
+def test_newegg_cards_with_tuple_selectors():
+    products = extract_products(
+        _NEWEGG_CARD_HTML, "https://www.newegg.com/p/pl?d=ddr5+ram",
+        source="newegg", selectors=_NEWEGG_SELECTORS,
+    )
+    assert len(products) == 1
+    p = products[0]
+    assert p.source == "newegg"
+    assert p.source_id == "N82E16820982007"        # recovered from the /p/ link
+    assert p.price_cents == 51999                   # ".price-current" -> "519.99"
+    assert p.image_url.endswith("20-236-828.jpg")
+    assert p.url.endswith("/p/N82E16820982007")
+
+
+# ── Generic schema.org Product JSON-LD detail (Newegg, Shopify, …) ─────────────
+_JSONLD_DETAIL_HTML = """
+<html><head>
+<script type="application/ld+json">
+{"@context":"http://schema.org/","@type":"Product",
+ "name":"CORSAIR Vengeance 32GB DDR5 6000 Desktop Memory",
+ "description":"High-speed DDR5 gaming memory.",
+ "sku":"N82E16820982007","mpn":"CMK32GX5M2B6000C30","brand":"Corsair",
+ "image":"https://c1.neweggimages.com/p/20-236-828.jpg",
+ "offers":{"@type":"Offer","price":"519.99","priceCurrency":"USD"},
+ "aggregateRating":{"@type":"AggregateRating","ratingValue":4,"reviewCount":679},
+ "weight":"0.2 oz"}
+</script>
+</head><body>
+<div class="product-bullets"><li>DDR5 6000</li><li>CAS Latency 30</li></div>
+</body></html>
+"""
+
+
+def test_extract_product_detail_jsonld_newegg():
+    p = extract_product_detail(
+        _JSONLD_DETAIL_HTML,
+        "https://www.newegg.com/corsair/p/N82E16820982007",
+        source="newegg",
+    )
+    assert isinstance(p, Product)
+    assert p.source == "newegg"
+    assert p.source_id == "N82E16820982007"
+    assert p.title == "CORSAIR Vengeance 32GB DDR5 6000 Desktop Memory"
+    assert p.price_cents == 51999
+    assert p.currency == "USD"
+    assert p.brand == "Corsair"
+    assert p.rating == 4.0
+    assert p.review_count == 679
+    assert p.variant == "CMK32GX5M2B6000C30"
+    assert p.image_url.endswith("20-236-828.jpg")
+    assert p.scrape_version == SCRAPE_VERSION_DETAIL
+    # Description prefers the on-page bullets (newegg selectors) over the JSON-LD blurb.
+    assert "DDR5 6000" in p.description
+    # Scalar schema props surface as specs; schema plumbing is skipped.
+    assert p.specs.get("weight") == "0.2 oz"
+    assert "offers" not in p.specs and "aggregateRating" not in p.specs
+
+
+def test_amazon_detail_falls_back_to_jsonld_when_dom_absent():
+    # No Amazon DOM (#productTitle etc.), but a valid Product JSON-LD block is present:
+    # the Amazon path should fall back to JSON-LD rather than returning None.
+    p = extract_product_detail(
+        _JSONLD_DETAIL_HTML, "https://www.amazon.com/dp/B0ABC12345/", source="amazon",
+    )
+    assert isinstance(p, Product)
+    assert p.price_cents == 51999
+    assert p.scrape_version == SCRAPE_VERSION_DETAIL
+
+
+def test_jsonld_detail_requires_price():
+    no_price = _JSONLD_DETAIL_HTML.replace('"price":"519.99",', "")
+    assert extract_product_detail(
+        no_price, "https://www.newegg.com/x/p/N82E1", source="newegg") is None
+
+
+# brand-as-object, image-as-list-of-ImageObject, no sku (id from link), gallery dedupe.
+_JSONLD_RICH_HTML = """
+<html><head>
+<script type="application/ld+json">
+{"@type":"Product",
+ "name":"Generic Widget Pro",
+ "brand":{"@type":"Brand","name":"Acme"},
+ "image":[{"@type":"ImageObject","url":"https://cdn.example.com/a.jpg"},
+          {"@type":"ImageObject","url":"https://cdn.example.com/a.jpg"},
+          "https://cdn.example.com/b.jpg"],
+ "offers":{"@type":"Offer","price":"12.50","priceCurrency":"EUR"},
+ "color":"Blue"}
+</script>
+</head><body></body></html>
+"""
+
+
+def test_jsonld_detail_brand_object_and_image_list():
+    p = extract_product_detail(
+        _JSONLD_RICH_HTML, "https://shop.example.com/products/widget-pro", source="shopify",
+    )
+    assert p.brand == "Acme"                         # brand pulled out of the {name} object
+    assert p.currency == "EUR"
+    assert p.price_cents == 1250
+    assert p.images == ["https://cdn.example.com/a.jpg", "https://cdn.example.com/b.jpg"]  # deduped
+    assert p.image_url == "https://cdn.example.com/a.jpg"
+    assert p.specs.get("color") == "Blue"
+    # No sku/mpn -> source_id recovered from the last path segment of the URL.
+    assert p.source_id == "widget-pro"
+
+
+def test_jsonld_detail_og_image_fallback():
+    # Product block has no image; the extractor falls back to og:image.
+    html = """
+    <html><head>
+    <meta property="og:image" content="https://cdn.example.com/og.jpg"/>
+    <script type="application/ld+json">
+    {"@type":"Product","name":"NoImg","offers":{"price":"9.99","priceCurrency":"USD"}}
+    </script></head><body></body></html>
+    """
+    p = extract_product_detail(html, "https://shop.example.com/x", source="shopify")
+    assert p.image_url == "https://cdn.example.com/og.jpg"
+
+
+def test_jsonld_detail_no_product_block_returns_none():
+    html = '<html><head><script type="application/ld+json">{"@type":"Article"}</script></head></html>'
+    assert extract_product_detail(html, "https://x.com/a", source="newegg") is None
+
+
+def test_card_image_uses_data_src_when_src_placeholder():
+    # A lazy-loaded grid: the <img> src is a 1px placeholder; the real URL is in data-src.
+    html = """
+    <html><body>
+    <div data-component-type="s-search-result" data-asin="B0LAZY1234">
+      <h2><a class="a-link-normal" href="/x"><span>Lazy Loaded Item</span></a></h2>
+      <img class="s-image" src="data:image/gif;base64,AAAA" data-src="https://m.media-amazon.com/images/I/real.jpg"/>
+      <span class="a-price"><span class="a-offscreen">$42.00</span></span>
+    </div>
+    </body></html>
+    """
+    products = extract_products(html, "https://www.amazon.com/s?k=x")
+    assert len(products) == 1
+    assert products[0].image_url == "https://m.media-amazon.com/images/I/real.jpg"
