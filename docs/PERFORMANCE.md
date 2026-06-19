@@ -19,6 +19,7 @@ treat as relative orders of magnitude, not SLAs). Re-measure with
 | disk-cache (SQLite) put+get via `to_thread` | ~0.12 ms | was ~1.45 ms; the commit fsync was the dominant cost |
 | HTTP leg, 32 parallel GETs (local origin) | ~4.4 ms | per-host semaphore at 8 |
 | `extract_headline_links` (news front page) | ~1.3 ms | the CPU hot path |
+| full links-mode scrape (mocked fetch, 60-story page) | ~4.6 ms | HTTP→extract→cache; extraction runs **once** (was 3×) |
 | engine sweep, 1 000 no-op targets | ~7.8 ms | scheduler overhead ≈ 8 µs/target |
 
 ## What this means
@@ -28,7 +29,15 @@ treat as relative orders of magnitude, not SLAs). Re-measure with
   fetch.
 - **The CPU hot path is link extraction** (~1.3 ms/page). At 100 pages/s
   that's 13% of a core — relevant only for crawl-style bursts; fine for
-  polling workloads.
+  polling workloads. The default `mode="links"` scrape now extracts each body
+  **exactly once**: `_fetch_html` hands the links it computed for the HTTP
+  fast-path decision back to `scrape()`, which reuses them for the
+  thin-result/altpath check and the final link-set instead of re-parsing the
+  same HTML two more times (a 3×→1× drop on the per-site path — the largest
+  single CPU win available, since extraction dominates the scrape's own time).
+  `mode="auto"` already extracted once and is unchanged. The
+  `scrape_links_extract` benchmark guards this path against re-introducing the
+  redundant passes.
 - **Fingerprinting JSON is ~40x costlier than hashing bytes** because the
   payload is canonical-JSON-encoded first. For very large API payloads,
   narrow with `json_path` so only the relevant slice is encoded. (Investigated

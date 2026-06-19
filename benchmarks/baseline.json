@@ -30,5 +30,13 @@
     "name": "scrape_cache_hit",
     "p95_s": 7.919999916339293e-06,
     "total_s": 0.001381789999868488
+  },
+  "scrape_links_extract": {
+    "iterations": 100,
+    "mean_s": 0.004915413589333184,
+    "median_s": 0.004636709491023794,
+    "name": "scrape_links_extract",
+    "p95_s": 0.006479849980678409,
+    "total_s": 0.491564258991275
   }
 }
