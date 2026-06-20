@@ -10,8 +10,11 @@ To add a site: add an entry to ``SITE_PROFILES`` and point a workflow at ``marke
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import random as _random_mod
+import time
 
 from ujin.poll.amazon import AmazonSearchPollable
 from ujin.poll.base import PollResult, decide_changed, fingerprint
@@ -79,6 +82,7 @@ SITE_PROFILES: dict[str, dict] = {
     },
     # Walmart. Protected by PerimeterX ("Robot or human?") — best effort. Cards carry a
     # numeric `data-item-id`; the JSON-LD detail path enriches each item page when reachable.
+    # BEST-EFFORT + PROXY: needs a residential PROXY_URL for reliable datacenter-IP runs.
     "walmart": {
         "domain": "walmart.com",
         "search_url": "https://www.{domain}/search?q={query}",
@@ -101,7 +105,224 @@ SITE_PROFILES: dict[str, dict] = {
             "Toys": ["board game", "building blocks", "remote control car"],
         },
     },
+    # ── JSON-LD-first profiles (selectors: None ⇒ extract_products auto-reads schema.org
+    #    Product/OpenGraph; detail pages enrich via the generic _detail_from_jsonld path).
+    #    These are the most reliable: no per-site CSS to drift, and a clean Product block
+    #    gives brand/rating/reviews/specs for free. Search-results pages on most of these
+    #    sites are JS-rendered, so the engine defaults to "browser" + a wait_selector. ──
+    #
+    # AliExpress. Heavy baxia/anti-bot wall — BEST-EFFORT + residential PROXY required for
+    # reliable runs (a datacenter IP gets an anti-bot shell with no product modules). Search
+    # results are JS-rendered; the dedicated `_aliexpress_detail` extractor parses each item
+    # page's `window.runParams` (richer than JSON-LD). Card extraction falls back to JSON-LD
+    # where present. source_id is the numeric /item/<id>.html.
+    "aliexpress": {
+        "domain": "aliexpress.com",
+        "search_url": "https://www.{domain}/w/wholesale-{query}.html",
+        "selectors": None,                       # JSON-LD/OpenGraph cards; detail via runParams
+        "engine": "browser",
+        "wait_selector": "a[href*='/item/']",
+        "keyterms": {
+            "Electronics": ["wireless earbuds", "phone case", "smart watch", "led strip",
+                            "usb c cable", "bluetooth speaker"],
+            "Home": ["kitchen gadget", "storage organizer", "wall sticker", "throw pillow cover"],
+            "Hobby": ["fishing rod", "model kit", "watercolor set", "knitting needles"],
+            "Apparel": ["graphic t shirt", "baseball cap", "backpack", "sunglasses"],
+        },
+    },
+    # Target. RedSky-backed catalogue ships schema.org Product JSON-LD on item pages; SRP is
+    # JS-rendered. RELIABLE (light wall) but a proxy helps under heavy sweeps. source_id is the
+    # numeric /p/<slug>/-/A-<id> — recovered from the link (see _HREF_ID_PATTERNS["target"]).
+    "target": {
+        "domain": "target.com",
+        "search_url": "https://www.{domain}/s?searchTerm={query}",
+        "selectors": None,
+        "engine": "browser",
+        "wait_selector": "[data-test='product-title'], a[href*='/p/']",
+        "keyterms": {
+            "Home": ["throw blanket", "storage bin", "desk lamp", "bath towel set", "area rug"],
+            "Kitchen": ["coffee maker", "air fryer", "dinnerware set", "water bottle"],
+            "Toys": ["building blocks", "board game", "stuffed animal", "play kitchen"],
+            "Beauty": ["face moisturizer", "shampoo", "makeup brushes", "sunscreen"],
+        },
+    },
+    # Best Buy. Electronics retailer; product pages carry schema.org Product JSON-LD. RELIABLE
+    # for detail enrichment; SRP is JS-rendered. source_id is the numeric skuId in /site/.../<id>.p.
+    "bestbuy": {
+        "domain": "bestbuy.com",
+        "search_url": "https://www.{domain}/site/searchpage.jsp?st={query}",
+        "selectors": None,
+        "engine": "browser",
+        "wait_selector": "a[href*='/site/'], .sku-item",
+        "keyterms": {
+            "Electronics": ["wireless headphones", "4k tv", "gaming laptop", "smart watch",
+                            "bluetooth speaker", "webcam", "soundbar"],
+            "Computers": ["mechanical keyboard", "gaming mouse", "external ssd", "monitor",
+                          "usb hub", "wifi router"],
+            "Gaming": ["game controller", "gaming headset", "graphics card"],
+        },
+    },
+    # Etsy. Handmade/vintage marketplace; listing pages ship schema.org Product JSON-LD.
+    # RELIABLE (lighter wall than the big-box stores). source_id is the numeric /listing/<id>/.
+    "etsy": {
+        "domain": "etsy.com",
+        "search_url": "https://www.{domain}/search?q={query}",
+        "selectors": None,
+        "engine": "browser",
+        "wait_selector": "a[href*='/listing/']",
+        "keyterms": {
+            "Jewelry": ["silver necklace", "beaded bracelet", "stud earrings", "gemstone ring"],
+            "Home": ["macrame wall hanging", "ceramic mug", "wooden cutting board", "scented candle"],
+            "Art": ["watercolor print", "canvas wall art", "enamel pin", "sticker pack"],
+            "Craft": ["knitting pattern", "yarn skein", "leather journal", "embroidery kit"],
+        },
+    },
+    # Wayfair. Furniture/home; product pages ship schema.org Product JSON-LD. RELIABLE for
+    # detail; SRP is JS-rendered. source_id recovered from the /pdp/...-<sku>.html link tail.
+    "wayfair": {
+        "domain": "wayfair.com",
+        "search_url": "https://www.{domain}/keyword.php?keyword={query}",
+        "selectors": None,
+        "engine": "browser",
+        "wait_selector": "a[href*='/pdp/'], [data-enzyme-id='ProductCard']",
+        "keyterms": {
+            "Furniture": ["accent chair", "coffee table", "bookshelf", "bar stool", "nightstand"],
+            "Decor": ["area rug", "wall mirror", "table lamp", "throw pillow", "wall art"],
+            "Bedroom": ["bed frame", "dresser", "mattress", "headboard"],
+            "Outdoor": ["patio set", "fire pit", "outdoor rug", "garden bench"],
+        },
+    },
+    # Home Depot. Big-box hardware; product pages ship schema.org Product JSON-LD. RELIABLE for
+    # detail; SRP is JS-rendered. source_id is the numeric /p/.../<id> (Internet number).
+    "homedepot": {
+        "domain": "homedepot.com",
+        "search_url": "https://www.{domain}/s/{query}",
+        "selectors": None,
+        "engine": "browser",
+        "wait_selector": "a[href*='/p/'], [data-testid='product-pod']",
+        "keyterms": {
+            "Tools": ["cordless drill", "impact driver", "tool box", "tape measure",
+                      "circular saw", "wrench set"],
+            "Hardware": ["door knob", "cabinet handles", "led shop light", "extension cord"],
+            "Garden": ["garden hose", "potting soil", "lawn mower", "pruning shears"],
+            "Paint": ["paint roller", "painters tape", "spray paint", "paint brush set"],
+        },
+    },
+    # Lowe's. Big-box hardware; product pages ship schema.org Product JSON-LD. RELIABLE for
+    # detail; SRP is JS-rendered. source_id recovered from the /pd/...-<id> link tail.
+    "lowes": {
+        "domain": "lowes.com",
+        "search_url": "https://www.{domain}/search?searchTerm={query}",
+        "selectors": None,
+        "engine": "browser",
+        "wait_selector": "a[href*='/pd/'], [data-selector='splp-prd-lnk']",
+        "keyterms": {
+            "Tools": ["cordless drill", "shop vac", "tool cabinet", "level", "socket set"],
+            "Hardware": ["led light bulb", "smart thermostat", "door lock", "power strip"],
+            "Garden": ["leaf blower", "garden soil", "watering can", "plant pots"],
+            "Appliances": ["microwave", "mini fridge", "space heater", "dehumidifier"],
+        },
+    },
+    # B&H Photo. Photo/video/pro-audio retailer; product pages ship schema.org Product JSON-LD.
+    # RELIABLE (lighter wall than the big-box stores). source_id recovered from the link tail.
+    "bhphoto": {
+        "domain": "bhphotovideo.com",
+        "search_url": "https://www.{domain}/c/search?Ntt={query}",
+        "selectors": None,
+        "engine": "browser",
+        "wait_selector": "[data-selenium='miniProductPage'], a[href*='/c/product/']",
+        "keyterms": {
+            "Camera": ["mirrorless camera", "camera tripod", "camera lens", "sd card",
+                       "camera bag", "external flash"],
+            "Audio": ["studio headphones", "usb microphone", "audio interface", "midi keyboard"],
+            "Video": ["led video light", "capture card", "gimbal stabilizer", "hdmi capture"],
+            "Computers": ["portable ssd", "usb c dock", "monitor", "mechanical keyboard"],
+        },
+    },
+    # Chewy. Pet supplies; product pages ship schema.org Product JSON-LD. RELIABLE (lighter
+    # wall). source_id recovered from the /dp/<id> link tail.
+    "chewy": {
+        "domain": "chewy.com",
+        "search_url": "https://www.{domain}/s?query={query}",
+        "selectors": None,
+        "engine": "browser",
+        "wait_selector": "a[href*='/dp/'], article[data-testid='product-card']",
+        "keyterms": {
+            "Dog": ["dog food", "dog bed", "dog leash", "chew toy", "dog crate"],
+            "Cat": ["cat litter", "cat tree", "cat food", "scratching post"],
+            "Aquarium": ["fish tank", "aquarium filter", "fish food", "water conditioner"],
+            "SmallPet": ["hamster cage", "bird cage", "rabbit hutch", "guinea pig food"],
+        },
+    },
+    # IKEA. Furniture/home; product pages ship schema.org Product JSON-LD. RELIABLE for detail;
+    # SRP is JS-rendered. source_id recovered from the /p/...-<digits>/ link tail.
+    "ikea": {
+        "domain": "ikea.com",
+        "search_url": "https://www.{domain}/us/en/search/?q={query}",
+        "selectors": None,
+        "engine": "browser",
+        "wait_selector": "a[href*='/p/'], .plp-product-list__products",
+        "keyterms": {
+            "Furniture": ["bookshelf", "desk", "dining chair", "wardrobe", "tv stand"],
+            "Storage": ["storage box", "shoe rack", "drawer unit", "shelf unit"],
+            "Lighting": ["floor lamp", "table lamp", "led bulb", "pendant lamp"],
+            "Kitchen": ["dish rack", "food container", "cutlery set", "frying pan"],
+        },
+    },
 }
+
+
+class _SeenStore:
+    """Persistent ``source_id -> last-seen epoch`` map for detail-page caching.
+
+    Mirrors the harvest-store pattern (one atomic JSON file on the durable /data volume).
+    A ``source_id`` "seen" within ``ttl_secs`` is a cache hit: its detail page was enriched
+    recently, so the next sweep keeps the card-level fields and skips the slow, block-prone
+    per-item detail fetch. Entries older than the TTL are pruned on load so the file can't
+    grow without bound, and stale prices/details still get re-fetched eventually.
+    """
+
+    def __init__(self, path: str, *, ttl_secs: float = 7 * 24 * 3600, clock=None) -> None:
+        self.path = path
+        self.ttl_secs = float(ttl_secs)
+        self._clock = clock or time.time
+        self.seen: dict[str, float] = {}
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                data = json.load(f)
+            now = self._clock()
+            self.seen = {
+                str(k): float(v) for k, v in dict(data.get("seen", {})).items()
+                if now - float(v) < self.ttl_secs        # prune expired on load
+            }
+        except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError, ValueError):
+            pass  # first run / unreadable -> start empty
+
+    def fresh_ids(self) -> set[str]:
+        """source_ids still within the TTL — their detail page need not be re-fetched."""
+        now = self._clock()
+        return {sid for sid, ts in self.seen.items() if now - ts < self.ttl_secs}
+
+    def mark(self, source_ids) -> None:
+        now = self._clock()
+        for sid in source_ids:
+            if sid:
+                self.seen[str(sid)] = now
+
+    def save(self) -> None:
+        try:
+            parent = os.path.dirname(self.path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            tmp = f"{self.path}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"seen": self.seen}, f)
+            os.replace(tmp, self.path)  # atomic
+        except OSError as exc:  # noqa: BLE001
+            log.warning("seen store save failed (%s): %s", self.path, exc)
 
 
 class MarketplaceSearchPollable:
@@ -120,6 +341,9 @@ class MarketplaceSearchPollable:
         headless: bool = True,
         seed: int | None = None,
         with_description: bool = False,
+        detail_cache: bool = False,
+        detail_cache_path: str | None = None,
+        detail_cache_ttl_secs: float = 7 * 24 * 3600,
         key: str | None = None,
     ) -> None:
         self.profile_name = profile if profile in SITE_PROFILES else "amazon"
@@ -134,8 +358,19 @@ class MarketplaceSearchPollable:
         self.with_description = with_description
         self.key = key or f"marketplace:{self.profile_name}"
         self._rng = _random_mod.Random(seed)
+        # Detail-page cache: skip re-fetching detail for source_ids seen within the TTL.
+        # Only meaningful when with_description is on (that's what triggers the per-item fetch).
+        self.detail_cache = bool(detail_cache)
+        self._seen = (
+            _SeenStore(
+                detail_cache_path or f"/data/{self.profile_name}_seen.json",
+                ttl_secs=detail_cache_ttl_secs,
+            )
+            if self.detail_cache else None
+        )
 
-    def _child(self, term: str, category: str | None) -> AmazonSearchPollable:
+    def _child(self, term: str, category: str | None,
+               skip_detail_ids: set | None = None) -> AmazonSearchPollable:
         return AmazonSearchPollable(
             term,
             domain=self.profile["domain"],
@@ -151,6 +386,7 @@ class MarketplaceSearchPollable:
             wait_selector=self.profile.get("wait_selector"),
             with_description=self.with_description,
             desc_selectors=self.profile.get("desc_selectors"),
+            skip_detail_ids=skip_detail_ids,
         )
 
     def _sample(self) -> list[tuple[str, str]]:
@@ -162,8 +398,15 @@ class MarketplaceSearchPollable:
 
     async def poll(self, prev: PollResult | None) -> PollResult:
         pairs = self._sample()
+        # Detail-page cache: ids enriched within the TTL skip the per-item detail fetch.
+        skip_ids = self._seen.fresh_ids() if self._seen is not None else None
+        if skip_ids:
+            log.info("marketplace[%s] detail-cache: %d ids fresh (skip detail fetch)",
+                     self.profile_name, len(skip_ids))
         log.info("marketplace[%s] sweep: %s", self.profile_name, [t for t, _ in pairs])
-        children = [self._child(term, cat) for term, cat in pairs]
+        # Term/site fan-out runs concurrently (asyncio.gather) — one slow/blocked site
+        # never serializes the rest of the sweep.
+        children = [self._child(term, cat, skip_detail_ids=skip_ids) for term, cat in pairs]
         results = await asyncio.gather(*(c.poll(None) for c in children), return_exceptions=True)
         combined: list[dict] = []
         seen: set[str] = set()
@@ -177,6 +420,11 @@ class MarketplaceSearchPollable:
                 if sid:
                     seen.add(sid)
                 combined.append(item)
+        # Record the ids we surfaced so the next sweep can skip their detail fetch, then
+        # persist (atomic JSON on the durable volume, mirroring the harvest store).
+        if self._seen is not None:
+            self._seen.mark(seen)
+            self._seen.save()
         return PollResult(
             ok=True,
             changed=decide_changed(fingerprint(combined), prev),

@@ -114,3 +114,103 @@ def test_walmart_child_uses_profile_url_and_source():
     assert child.source == "walmart"
     assert "walmart.com/search?q=" in child.search_url
     assert "olive+oil" in child.search_url
+
+
+# ── JSON-LD-first profiles (selectors: None ⇒ schema.org auto-extract) ──────────
+_JSONLD_PROFILES = [
+    "aliexpress", "target", "bestbuy", "etsy", "wayfair",
+    "homedepot", "lowes", "bhphoto", "chewy", "ikea",
+]
+
+
+def test_all_new_jsonld_profiles_registered():
+    for name in _JSONLD_PROFILES:
+        assert name in SITE_PROFILES, name
+
+
+def test_jsonld_profiles_have_no_selectors_and_browser_engine():
+    """selectors=None routes through extract_products' JSON-LD/OpenGraph path (most reliable)."""
+    for name in _JSONLD_PROFILES:
+        prof = SITE_PROFILES[name]
+        assert prof["selectors"] is None, name
+        assert prof["engine"] == "browser", name          # SRPs are JS-rendered
+        assert prof.get("wait_selector"), name             # browser needs something to wait on
+        assert prof["keyterms"], name                      # has category banks
+
+
+def test_jsonld_profile_search_url_templates_well_formed():
+    for name in _JSONLD_PROFILES:
+        url = SITE_PROFILES[name]["search_url"]
+        assert "{query}" in url and "{domain}" in url, name
+        assert url.startswith("https://"), name
+
+
+def test_jsonld_child_uses_profile_url_source_and_no_selectors():
+    src = MarketplaceSearchPollable(profile="target", seed=1)
+    child = src._child("desk lamp", "Home")
+    assert child.source == "target"
+    assert "target.com/s?searchTerm=" in child.search_url
+    assert "desk+lamp" in child.search_url
+    assert child.selectors is None                          # JSON-LD path, not CSS cards
+
+
+# ── Detail-page cache (_SeenStore) ─────────────────────────────────────────────
+def test_seen_store_roundtrip_and_ttl(tmp_path):
+    from ujin.poll.marketplace import _SeenStore
+
+    clock = [1000.0]
+    path = str(tmp_path / "seen.json")
+    store = _SeenStore(path, ttl_secs=100, clock=lambda: clock[0])
+    store.mark(["a", "b", None])                            # None is ignored
+    store.save()
+
+    # Reload before the TTL: both ids are still "fresh" (skip detail fetch).
+    clock[0] = 1050.0
+    again = _SeenStore(path, ttl_secs=100, clock=lambda: clock[0])
+    assert again.fresh_ids() == {"a", "b"}
+
+    # Past the TTL: pruned on load, nothing fresh.
+    clock[0] = 1200.0
+    expired = _SeenStore(path, ttl_secs=100, clock=lambda: clock[0])
+    assert expired.fresh_ids() == set()
+    assert expired.seen == {}                               # expired entries pruned
+
+
+def test_detail_cache_off_by_default():
+    src = MarketplaceSearchPollable(profile="target")
+    assert src._seen is None
+
+
+async def test_poll_passes_fresh_ids_to_children_and_marks_seen(monkeypatch, tmp_path):
+    """poll() feeds cached ids into the child's skip set, and records new ids after the sweep."""
+    from ujin.poll import amazon as amz
+    from ujin.poll.base import PollResult
+
+    captured_skip: list = []
+
+    async def fake_child_poll(self, prev):
+        captured_skip.append(set(self.skip_detail_ids))
+        return PollResult(ok=True, changed=True, payload=[
+            {"source": self.source, "source_id": "new-1", "title": "x", "price_cents": 100},
+        ])
+
+    monkeypatch.setattr(amz.AmazonSearchPollable, "poll", fake_child_poll)
+    path = str(tmp_path / "seen.json")
+    src = MarketplaceSearchPollable(
+        profile="target", terms_per_poll=1, seed=1,
+        detail_cache=True, detail_cache_path=path,
+    )
+    src._seen.mark(["already-seen"])                        # pre-seed the cache
+    res = await src.poll(None)
+    assert res.ok
+    # The child received the pre-seeded id in its skip set (no detail re-fetch for it).
+    assert captured_skip and "already-seen" in captured_skip[0]
+    # The newly-surfaced id is now persisted for the next sweep.
+    reloaded = type(src._seen)(path, ttl_secs=src._seen.ttl_secs)
+    assert "new-1" in reloaded.fresh_ids()
+
+
+def test_child_skip_detail_ids_defaults_to_empty_set():
+    src = MarketplaceSearchPollable(profile="target", seed=1)
+    child = src._child("desk lamp", "Home")               # no skip set passed
+    assert child.skip_detail_ids == set()

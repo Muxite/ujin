@@ -229,6 +229,17 @@ _HREF_ID_PATTERNS: dict[str, re.Pattern] = {
     "ebay": re.compile(r"/itm/(\d+)"),                   # .../itm/123456789012 (legacy id)
     # Walmart product pages are /ip/<slug>/<numeric-id> or /ip/<numeric-id>.
     "walmart": re.compile(r"/ip/(?:.*/)?(\d+)"),
+    # JSON-LD-first stores: recover a stable numeric/slug id from the canonical product link.
+    "aliexpress": re.compile(r"/item/(\d+)\.html"),       # .../item/100500.../...html
+    "target": re.compile(r"/A-(\d+)"),                    # .../p/<slug>/-/A-12345678
+    "bestbuy": re.compile(r"/(\d+)\.p"),                  # .../site/<slug>/6500000.p
+    "etsy": re.compile(r"/listing/(\d+)"),                # .../listing/123456789/<slug>
+    "wayfair": re.compile(r"-([a-z]{2,5}\d{3,})\.html", re.I),  # .../pdp/<slug>-ABCD1234.html
+    "homedepot": re.compile(r"/p/(?:.*/)?(\d{8,})"),      # .../p/<slug>/312345678
+    "lowes": re.compile(r"/pd/(?:.*/)?(\d{6,})"),         # .../pd/<slug>/1000123456
+    "bhphoto": re.compile(r"/c/product/(\d+)"),           # .../c/product/1234567-REG/<slug>
+    "chewy": re.compile(r"/dp/(\d+)"),                    # .../dp/123456
+    "ikea": re.compile(r"-(\d{8,})/"),                    # .../p/<slug>-s09390333/  (digits run)
 }
 
 
