@@ -167,7 +167,8 @@ Three FastAPI apps — run any combination. Full reference in
   `/kinds`, `/metrics`, `POST /plugins/reload`. Durable + plugin-extensible.
   File-driven workflows load from `./workflows` — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 - **Poller control** (`:8900`): `GET /health /metrics /targets`,
-  `POST /targets`, `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.
+  `GET /content?key=…` (reuse the body ujin last fetched), `POST /targets`,
+  `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.
 - **Scrape** (`:8901`): `POST /scrape` (modes `links|article|auto|combined|structured`),
   `/scrape:batch`, `/feed`, `/sitemap`, `/discover`, `/capabilities`, `/metrics`,
   plus optional `/social/*` and `/trends/*`.
@@ -230,7 +231,7 @@ pip install -e .              # core: engine + adapt + callable/command roles (n
 pip install -e ".[web]"       # + HTTP/RSS/API roles and the scrape toolkit
 pip install -e ".[scrape]"    # + the rich scrape HTTP service
 pip install -e ".[mcp]"       # + the MCP server for agents
-pip install -e ".[all]"       # everything (web, service, scrape, social, diff, sessions, mcp)
+pip install -e ".[all]"       # everything (web, service, scrape, social, diff, sessions, jobs, browser, mcp)
 ```
 Core is dependency-free; heavier features pull `aiohttp`/`selectolax`/
 `trafilatura`/`feedparser`/`fastapi` lazily behind extras. The obscura submodule

@@ -56,7 +56,7 @@ class ScrapeResult:
     cached: bool
     age_secs: float
     used_renderer: bool
-    strategy_used: str = "http"  # http|obscura|sitemap_news|rss|cache
+    strategy_used: str = "http"  # http|http_304|obscura|browser|sitemap_news|rss|combined|cache|error
     links: list[NormalizedLink] = field(default_factory=list)
     article: Optional["Article"] = None
     structured: Optional[dict] = None

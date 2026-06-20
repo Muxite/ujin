@@ -65,12 +65,12 @@ treat as relative orders of magnitude, not SLAs). Re-measure with
 
 | Knob | Where | Default | Effect |
 |---|---|---|---|
-| `per_host_concurrency` | `HttpFetcher` / `UJIN_PER_HOST_CONCURRENCY` | 2 | parallelism against one origin; raise for friendly APIs, never for news sites |
+| `per_host_concurrency` | `HttpFetcher` / `PER_HOST_CONCURRENCY` | 2 | parallelism against one origin; raise for friendly APIs, never for news sites |
 | token bucket `rate`/`burst` | `PollEngine(token_bucket=...)`, targets YAML `rate:`/`burst:` | 10/s | global request smoothing — the main politeness lever |
 | `max_concurrency` | `PollEngine` / YAML `concurrency:` | 8 | in-flight polls across all targets |
 | `fast_path_min_links` | `ScrapeConfig` | 5 | how thin an HTTP result must be before escalating to obscura |
 | `host_cooldown_secs` | `ScrapeConfig` / env | 60 | per-host backoff after 429/5xx (grows 1x→8x) |
-| cache `max_entries` / `ttl_secs` | `ScrapeConfig` | 512 / 3600 | memory cache size; raise for wide crawls |
+| cache `max_entries` / `ttl_secs` | `ScrapeConfig` | 2048 / 120 | memory cache size; raise for wide crawls |
 | jitter mode | `engine.add(jitter=...)` | `decorrelated` | spreads poll times; `equal` aligns fleets, `none` is for tests only |
 | adaptive `grow`/`shrink` | `engine.add(...)` / job schedule | 1.6 / 0.4 | how fast intervals back off on no-change / tighten on change |
 

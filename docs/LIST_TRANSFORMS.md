@@ -45,9 +45,11 @@ transforms:
       reverse: true      # descending (default false)
 ```
 
-Items missing the key sort last; mixed/uncomparable values never raise (grouped
-by type, with a `str()` fallback) so a heterogeneous payload can't crash the
-pipeline.
+Items missing the key go to the **end of ascending order**. `sort` reverses that
+whole order for `reverse: true`, so under `reverse: true` the key-less items
+appear **first** — keep that in mind for the "top-N by score" idiom below. Mixed
+or uncomparable values never raise (grouped by type, with a `str()` fallback) so
+a heterogeneous payload can't crash the pipeline.
 
 ## `limit` — take the top/bottom N
 
@@ -57,12 +59,15 @@ transforms:
     config: { key: score, reverse: true }
   - kind: limit
     config:
-      count: 10          # required, >= 0
+      count: 10          # required; a negative value clamps to 0
       from: head         # "head" (first N, default) or "tail" (last N)
 ```
 
 `sort` + `limit` is the idiomatic "top-N by score". `count` is clamped at 0
-(empties the list); a `count` larger than the list keeps everything.
+(a negative `count` empties the list); a `count` larger than the list keeps
+everything. Because `sort … reverse: true` floats key-less items to the front
+(see `sort` above), a row missing the sort key can occupy a top-N slot — drop
+such rows with a `select` `where` filter before `limit` if that matters.
 
 ## `rename` — remap dict keys
 

@@ -278,8 +278,9 @@ class SortTransform:
       key:     dotted path within each item to sort on (optional; sorts the raw
                items when omitted)
       reverse: descending when true (default false)
-    Items missing the key (or non-comparable) sort last, deterministically. A
-    non-list target passes through unchanged.
+    Items missing the key (or non-comparable) never raise; they sort to the end of
+    ascending order, which means they appear *first* when ``reverse`` is true
+    (the whole order is reversed). A non-list target passes through unchanged.
     """
 
     def __init__(self, cfg: dict):

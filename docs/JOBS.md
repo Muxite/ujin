@@ -57,7 +57,7 @@ in-memory `POST /targets` left open.
 | `dedupe` | `key?` (dotted), `max?` | drop already-seen items (by key) or whole events (by fingerprint) |
 | `chunk` | `size` or `token_budget`, `path?` | fan a large list/text payload into one event per chunk (LLM-sized) — see [recipes/feed-an-llm-with-chunking.md](recipes/feed-an-llm-with-chunking.md) |
 | `flatten` | `path?`, `index?` | fan a list payload into one event per item (inverse of accumulating) — see [LIST_TRANSFORMS.md](LIST_TRANSFORMS.md) |
-| `sort` | `path?`, `key?` (dotted), `reverse?` | sort a list payload by a key; missing/uncomparable values sort last without raising |
+| `sort` | `path?`, `key?` (dotted), `reverse?` | sort a list payload by a key; missing/uncomparable values never raise — they land last in ascending order, first under `reverse: true` |
 | `limit` | `path?`, `count` (required), `from?` (`head`/`tail`) | cap a list payload to the first/last N items |
 | `rename` | `path?`, `mapping` (required), `drop_missing?` | rename keys on a dict (or each dict in a list) |
 

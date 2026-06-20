@@ -62,9 +62,9 @@ def _version() -> str:
 def _build_pollable(kind: str, cfg: dict[str, Any]):
     """Resolve a poll source through the plugin registry.
 
-    Built-in kinds (http/rss/api/command/site/scrape) and any plugin-registered
-    ``plugin:*`` source kinds resolve identically here, so the YAML-driven engine
-    and the jobs control plane share one code path.
+    Built-in kinds (http/rss/api/command/site/scrape/browser) and any
+    plugin-registered ``plugin:*`` source kinds resolve identically here, so the
+    YAML-driven engine and the jobs control plane share one code path.
     """
     from ujin.registry import register
 
