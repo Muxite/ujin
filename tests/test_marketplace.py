@@ -214,3 +214,44 @@ def test_child_skip_detail_ids_defaults_to_empty_set():
     src = MarketplaceSearchPollable(profile="target", seed=1)
     child = src._child("desk lamp", "Home")               # no skip set passed
     assert child.skip_detail_ids == set()
+
+
+# ── Google Shopping (best-effort CSS aggregator; no JSON-LD) ────────────────────
+def test_google_shopping_profile_shape():
+    prof = SITE_PROFILES["google_shopping"]
+    # Unlike the JSON-LD stores this carries CSS selectors (the SERP has no structured data)
+    # and routes through the browser engine; source_id is recovered from the offer link.
+    assert prof["selectors"] is not None and prof["selectors"]["card"]
+    assert prof["engine"] == "browser" and prof.get("wait_selector")
+    assert "tbm=shop" in prof["search_url"] and "{query}" in prof["search_url"]
+    assert prof["keyterms"]
+
+
+def test_google_shopping_child_uses_profile_url_source_and_selectors():
+    src = MarketplaceSearchPollable(profile="google_shopping", seed=1)
+    child = src._child("wireless earbuds", "Electronics")
+    assert child.source == "google_shopping"
+    assert "google.com/search?tbm=shop" in child.search_url
+    assert child.selectors is not None                     # CSS card path, not JSON-LD
+
+
+def test_google_shopping_extracts_card_with_id_and_price():
+    from ujin.extract.product import extract_products
+    html = (
+        '<div class="sh-dgr__content">'
+        '<h3 class="tAxDx">Sony WH-1000XM5 Wireless Headphones</h3>'
+        '<img class="ArOc1c" src="https://shopping.google/img/abc.jpg"/>'
+        '<span class="a8Pemb">$348.00</span>'
+        '<a class="shntl" href="https://www.google.com/shopping/product/1234567890?gl=us">x</a>'
+        '</div>'
+    )
+    prods = extract_products(
+        html, "https://www.google.com/", source="google_shopping",
+        selectors=SITE_PROFILES["google_shopping"]["selectors"],
+    )
+    assert prods, "no products extracted"
+    d = prods[0].__dict__
+    assert d["source"] == "google_shopping"
+    assert d["source_id"] == "1234567890"                  # /shopping/product/<id>
+    assert d["price_cents"] == 34800                        # $348.00
+    assert "Sony" in d["title"]

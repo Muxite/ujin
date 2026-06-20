@@ -240,6 +240,9 @@ _HREF_ID_PATTERNS: dict[str, re.Pattern] = {
     "bhphoto": re.compile(r"/c/product/(\d+)"),           # .../c/product/1234567-REG/<slug>
     "chewy": re.compile(r"/dp/(\d+)"),                    # .../dp/123456
     "ikea": re.compile(r"-(\d{8,})/"),                    # .../p/<slug>-s09390333/  (digits run)
+    # Google Shopping product hub link: /shopping/product/<digits>. Offer redirect links
+    # (/url?q=...) won't match and fall back to the path tail — best-effort, see marketplace.py.
+    "google_shopping": re.compile(r"/shopping/product/(\d+)"),
 }
 
 

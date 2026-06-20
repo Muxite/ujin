@@ -269,6 +269,37 @@ SITE_PROFILES: dict[str, dict] = {
             "Kitchen": ["dish rack", "food container", "cutlery set", "frying pan"],
         },
     },
+    # Google Shopping (tbm=shop). NOTE: this is an AGGREGATOR, not a store — the SERP lists offers
+    # from many merchants. BEST-EFFORT and inherently fragile: there is NO schema.org JSON-LD on
+    # the results page and Google rotates/obfuscates the card class names, so the CSS selectors
+    # below WILL drift over time. The page is also heavily bot-walled (EU/consent interstitial +
+    # CAPTCHA), so it needs a residential PROXY_URL plus the stealth browser, and scraping Google
+    # results is against Google's ToS. The RELIABLE, ToS-compliant path is a SERP API (e.g.
+    # SerpAPI's `google_shopping` engine or Zenserp) wired as an `api` source that returns clean
+    # JSON — see docs/ingest.md ("Google Shopping"). Kept here so a proxy-equipped operator can opt
+    # in; emits source="google_shopping". source_id is recovered from the /shopping/product/<id>
+    # link (see _HREF_ID_PATTERNS["google_shopping"]).
+    "google_shopping": {
+        "domain": "google.com",
+        "search_url": "https://www.{domain}/search?tbm=shop&hl=en&gl=us&q={query}",
+        "selectors": {
+            "card": "div.sh-dgr__content, div.i0X6df",
+            "id_attr": None,                     # no stable card id; recovered from the offer link
+            "title": ("h3.tAxDx", "h4.A2sOrd", "h3"),
+            "image": ("img.ArOc1c", "g-img img", "img"),
+            "price": ("span.a8Pemb", "span.kHxwFf", "span.HRLxBb"),
+            "link": ("a[href*='/shopping/product/']", "a.shntl", "a.Lq5OHe"),
+        },
+        "engine": "browser",
+        "wait_selector": "div.sh-dgr__content, div.i0X6df, a.shntl",
+        "keyterms": {
+            "Electronics": ["wireless earbuds", "4k monitor", "mechanical keyboard", "smart watch",
+                            "portable ssd", "bluetooth speaker"],
+            "Home": ["robot vacuum", "air purifier", "espresso machine", "standing desk"],
+            "Apparel": ["running shoes", "winter jacket", "leather wallet", "backpack"],
+            "Toys": ["lego set", "board game", "rc car", "jigsaw puzzle"],
+        },
+    },
 }
 
 
