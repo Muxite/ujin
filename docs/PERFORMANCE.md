@@ -74,6 +74,36 @@ treat as relative orders of magnitude, not SLAs). Re-measure with
 | jitter mode | `engine.add(jitter=...)` | `decorrelated` | spreads poll times; `equal` aligns fleets, `none` is for tests only |
 | adaptive `grow`/`shrink` | `engine.add(...)` / job schedule | 1.6 / 0.4 | how fast intervals back off on no-change / tighten on change |
 
+## Multiprocessing (Track 3) gate
+
+Measured by `benchmarks/test_extract_throughput.py` (Linux, Python 3.12, same
+machine as the baseline above). Numbers are single-process, CPU-only (fetch
+excluded), 500–100 iterations with warmup.
+
+| Extractor | Median | Events/sec | Notes |
+|---|---|---|---|
+| `extract_structured` (selectolax) | ~0.07 ms | ~14 000/s | JSON-LD + OG + microdata; selectolax is fast |
+| `extract_tables` (selectolax) | ~0.28 ms | ~2 900/s | colspan/rowspan expansion |
+| `extract_headline_links` (selectolax) | ~1.2 ms | ~815/s | typical links-mode hot path |
+| `extract_article` (trafilatura) | ~6.8 ms | ~146/s | trafilatura dominates the full-extraction path |
+| **per-poll (all four, fetch excluded)** | **~7.1 ms** | **~140/s** | ceiling for one core running the full extraction stack |
+
+**Go/no-go recommendation — Track 3 is NOT justified for normal polling
+workloads and is only justified for sustained crawl bursts.**
+
+- **Threshold**: multiprocessing helps only when the pipeline delivers pages
+  faster than the single-process extraction ceiling. That ceiling is **~140
+  pages/sec** for full-extraction mode (dominated by trafilatura's ~6.8 ms/page)
+  or **~815 pages/sec** for links-only mode.
+- **Polling workload** (typical): 1 000 targets at 60 s intervals ≈ 17 pages/sec
+  — **14× below** the full-extraction ceiling. Extraction is idle >99% of the
+  time. A single process is the bottleneck nowhere; the network and rate-limiter
+  always dominate. → **NO-GO.**
+- **Crawl workload**: ≥100 parallel HTTP connections × ~0.7 s avg fetch ≈ 140
+  pages/sec — right at the full-extraction ceiling. If sustained, one additional
+  worker process per ~140 pages/sec of fetch capacity would be needed. → **GO
+  only above ~140 pages/sec (full extraction) or ~815 pages/sec (links-only).**
+
 ## Regression gate
 
 CI runs `pytest benchmarks/` on every push (non-blocking job). Async paths
