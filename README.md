@@ -212,7 +212,10 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
   change). Each returns a `PollResult` with a content fingerprint.
 - **Adaptive** (`ujin.adapt`): `AdaptiveInterval` grows/shrinks the interval;
   full/equal/decorrelated **jitter**; `TokenBucket` + AIMD smoothing;
-  exponential `Backoff` (honors `Retry-After`) and a `CircuitBreaker`.
+  exponential `Backoff` (honors `Retry-After`) and a `CircuitBreaker`. Opt-in
+  `LearnedRateLimiter` composes the persisted `SiteStore` signals + robots
+  `Crawl-delay` into a self-calibrating per-host rate/concurrency governor
+  (see [docs/ROBOTS.md](docs/ROBOTS.md)).
 - **Scrape** (`ujin.scrape`): `ScrapeService` orchestrates fetch + cache +
   extract + the fallback chain; a pluggable `Scorer` ranks links and paces polls
   (`NullScorer` by default, `ujin.trends.BreakingScorer` for news-trading).
