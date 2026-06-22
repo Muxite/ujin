@@ -4,7 +4,9 @@ ujin can fetch a page four ways. The orchestrator (`ScrapeService`) escalates
 through them automatically (`render="auto"`), or a caller can pin one
 (`render="http" | "obscura" | "browser"`). This document is the human-readable
 form of the machine-readable matrix in `ujin/fetch/capabilities.py`, exposed
-live at `GET :8901/capabilities` (and via the MCP `get_capabilities` tool).
+live at `GET :8901/capabilities` (and via the MCP `get_capabilities` tool). To
+see which backends are installed **on your machine** right now — with the pip
+command to enable each missing one — run **`ujin doctor`**.
 
 ## Comparison
 

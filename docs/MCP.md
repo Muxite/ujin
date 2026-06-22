@@ -48,7 +48,7 @@ Or in `.mcp.json`:
 
 | Tool | What it does |
 |---|---|
-| `scrape_url(url, mode="links", render="auto", force_refresh=False)` | One-shot scrape through the full HTTP → obscura → sitemap/RSS chain. `mode`: `links` / `article` / `structured` / `combined`. `render` pins a backend. Cached unless `force_refresh`. |
+| `scrape_url(url, mode="links", render="auto", force_refresh=False)` | One-shot scrape through the full HTTP → obscura → sitemap/RSS chain. `mode`: `links` / `article` / `structured` / `combined` / `auto`. `render` pins a backend. Cached unless `force_refresh`. |
 | `scrape_feed(url)` | Parse an RSS/Atom feed into items. |
 | `discover_site(homepage)` | Find a site's RSS feeds + sitemaps (link tags, robots.txt, well-known paths). |
 | `get_capabilities()` | The backend matrix (http/obscura/playwright/selenium) with **live availability** — call this before pinning `render="obscura"`/`"browser"`. |

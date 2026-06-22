@@ -12,3 +12,9 @@ ujin/obscura/target/
 .benchmarks/
 # local jobs database — runtime artifact
 ujin-jobs.db
+# JetBrains IDE
+.idea/
+# Claude Code worktrees / local state
+.claude/
+# Orchestrator runtime state (cycle/backlog/verdicts/logs) — never tracked.
+orchestrator/state/

@@ -68,6 +68,54 @@ async def test_scrape_cache_hit_path():
     check_against_baseline(r)
 
 
+async def test_scrape_links_extract_path():
+    """ScrapeService links-mode scrape that goes all the way through fetch +
+    link extraction (no cache hit, no obscura). This is the default path for
+    the average site, and its cost is dominated by HTML parsing in
+    ``extract_headline_links`` — so it guards against re-introducing the
+    redundant multi-extraction the fast-path/altpath/finalize chain used to do.
+    """
+    from ujin.scrape.config import ScrapeConfig
+    from ujin.scrape.service import ScrapeService
+
+    # A headline-heavy homepage: ~60 story links inside <main>, plus nav/footer
+    # chrome the extractor must skip. Representative of a real news front page.
+    stories = "\n".join(
+        f'<article><a href="/world/2026/story-{i}-with-a-longish-headline-slug">'
+        f"Breaking: something significant happened in region {i} today, "
+        f"officials confirm</a></article>"
+        for i in range(60)
+    )
+    chrome = "".join(f'<a href="/section/{i}">Section {i}</a>' for i in range(20))
+    html = (
+        f"<html><body><header><nav>{chrome}</nav></header>"
+        f"<main>{stories}</main><footer><nav>{chrome}</nav></footer></body></html>"
+    )
+
+    class _FakeResp:
+        status = 200
+        etag = last_modified = final_url = None
+        not_modified = False
+
+        def __init__(self, body):
+            self.body = body
+
+    class _FakeHttp:
+        async def get(self, url, **kw):
+            return _FakeResp(html)
+
+    url = "https://bench-news.example.com/"
+    svc = ScrapeService(http=_FakeHttp(), obscura=None, cache=ScrapeCache(),
+                        policy=HostPolicy(), config=ScrapeConfig())
+
+    async def full():
+        await svc.scrape(url, mode="links", force_refresh=True)
+
+    r = await abench("scrape_links_extract", full, iterations=100)
+    record([r])
+    check_against_baseline(r)
+
+
 async def test_disk_cache_roundtrip(tmp_path):
     db = DiskCache(tmp_path / "bench.db")
     entry = CachedEntry(url="u", fingerprint="f",

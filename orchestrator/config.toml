@@ -1,0 +1,50 @@
+# ujin autonomous orchestrator configuration.
+# Every key here overrides a default in orchestrator/config.py. Unknown keys are
+# ignored (forward-compatible). Edit, then `systemctl --user restart` is NOT needed —
+# config is re-read every tick.
+
+# Git topology
+base_branch = "master"
+integration_prefix = "integration/cycle-"
+cycle = "0.6"
+
+# Autonomy posture: "full_auto" (merge to master) or "supervised" (stop before master).
+autonomy = "full_auto"
+# Push the base branch to origin on release. Keep false until you trust the loop.
+push_on_release = false
+
+# Concurrency + retry caps (runaway prevention).
+max_concurrent = 3
+max_build_retries = 2
+
+# Quality gates.
+coverage_floor = 85.0      # ratchets upward at runtime via state/cov_floor.txt
+bench_tolerance = 4.0      # median <= 4x baseline (blocking, unlike CI)
+contract_paths = ["tests/test_consumer_contracts.py"]
+
+# Agent runtime.
+claude_bin = "claude"
+# Use regular Claude Code (subscription) usage — strip API-key env vars so agents
+# authenticate with the logged-in OAuth credentials and never bill per-token.
+use_subscription_auth = true
+builder_timeout_s = 5400
+verifier_timeout_s = 900
+planner_timeout_s = 1800
+permission_flag = "--dangerously-skip-permissions"
+
+[models]
+# Mixed-by-difficulty tiers. The builder model is chosen per backlog item's
+# "difficulty" field; verify + conflict triage always use the cheap tier.
+planner = "opus"
+builder_hard = "opus"
+builder_routine = "sonnet"
+verifier = "haiku"
+triage = "haiku"
+
+[budgets]
+# Usage guards in equivalent-USD (NOT bills — under subscription auth there is no
+# per-token charge). per_agent maps to `claude --max-budget-usd` as a runaway cap;
+# per_cycle/per_day throttle how much plan usage the loop consumes before pausing.
+per_agent = 5.0
+per_cycle = 40.0
+per_day = 100.0

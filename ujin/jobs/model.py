@@ -25,7 +25,7 @@ from typing import Any
 
 @dataclass
 class SourceSpec:
-    """What to poll. ``kind`` in http|rss|api|command|site|scrape|callable|plugin:*."""
+    """What to poll. ``kind`` in http|rss|api|command|site|scrape|browser|plugin:*."""
 
     kind: str
     config: dict[str, Any] = field(default_factory=dict)
@@ -33,7 +33,8 @@ class SourceSpec:
 
 @dataclass
 class TransformSpec:
-    """One pipeline step. ``kind`` in select|regex|template|dedupe|plugin:*."""
+    """One pipeline step. ``kind`` in
+    select|regex|template|dedupe|chunk|flatten|sort|limit|rename|plugin:*."""
 
     kind: str
     config: dict[str, Any] = field(default_factory=dict)
@@ -41,7 +42,8 @@ class TransformSpec:
 
 @dataclass
 class SinkSpec:
-    """One output. ``kind`` in webhook|ws|jsonl|stdout|sqlite|forward|plugin:*."""
+    """One output. ``kind`` in
+    webhook|forward|ws|jsonl|file|stdout|sqlite|csv|plugin:*."""
 
     kind: str
     config: dict[str, Any] = field(default_factory=dict)

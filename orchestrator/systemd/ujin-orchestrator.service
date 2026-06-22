@@ -1,0 +1,18 @@
+[Unit]
+Description=ujin autonomous dev orchestrator (continuous 24/7 loop)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/ujin
+# Continuous loop: ticks back-to-back so agents work without idle gaps; the only
+# pauses are gate (test) runs. The KILL file (orchestrator/state/KILL) makes the loop
+# idle without exiting; remove it to resume. To stop entirely: systemctl --user stop.
+ExecStart=/usr/bin/python3 -m orchestrator.orchestrator --serve
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

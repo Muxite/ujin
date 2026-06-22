@@ -1,0 +1,11 @@
+[Unit]
+Description=Run ujin orchestrator GC daily
+Requires=ujin-orchestrator-gc.service
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=ujin-orchestrator-gc.service
+
+[Install]
+WantedBy=timers.target

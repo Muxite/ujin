@@ -1,0 +1,4 @@
+# Append-only changelog: concatenate parallel additions instead of conflicting.
+# This eliminates the recurring CHANGELOG merge conflict when multiple agent/*
+# branches each add an entry under ## [Unreleased].
+CHANGELOG.md merge=union

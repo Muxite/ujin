@@ -56,7 +56,7 @@ class ScrapeResult:
     cached: bool
     age_secs: float
     used_renderer: bool
-    strategy_used: str = "http"  # http|obscura|sitemap_news|rss|cache
+    strategy_used: str = "http"  # http|http_304|obscura|browser|sitemap_news|rss|combined|cache|error
     links: list[NormalizedLink] = field(default_factory=list)
     article: Optional["Article"] = None
     structured: Optional[dict] = None
@@ -161,7 +161,7 @@ class ScrapeService:
         # override); "auto" keeps the per-host/default escalation.
         effective_strategy = render if render != "auto" else override.strategy
 
-        html, used_renderer, http_meta, final_url, not_modified, fetch_strategy = (
+        html, used_renderer, http_meta, final_url, not_modified, fetch_strategy, prelinks = (
             await self._fetch_html(
                 url,
                 mode=mode,
@@ -185,14 +185,21 @@ class ScrapeService:
         # produced too few links to be useful (and we're in links mode).
         synth_links: Optional[list[NormalizedLink]] = None
         synth_strategy: Optional[str] = None
+        # Extract links at most once per scrape and reuse the result for both
+        # the thin-result altpath decision and the final link-set build. The
+        # HTTP fast-path already extracted them (``prelinks``); otherwise we
+        # extract here from whatever body `_fetch_html` returned.
+        extracted_links: Optional[list[NormalizedLink]] = None
         if mode in ("links", "auto"):
             if html is None:
                 should_try_alt = True
             elif mode == "links":
-                extracted = self._extract_with_profile(
-                    html, base_url=final_url or url
+                extracted_links = (
+                    prelinks
+                    if prelinks is not None
+                    else self._extract_with_profile(html, base_url=final_url or url)
                 )
-                should_try_alt = len(extracted) < self._config.fast_path_min_links
+                should_try_alt = len(extracted_links) < self._config.fast_path_min_links
             else:
                 should_try_alt = False
             if should_try_alt:
@@ -285,8 +292,13 @@ class ScrapeService:
                 article=article, final_url=final_url,
             )
 
-        # links / auto mode — use extracted links from html.
-        links = self._extract_with_profile(html, base_url=final_url or url)
+        # links / auto mode — reuse the single extraction done above (links
+        # mode) or extract once here (auto mode never extracted yet).
+        links = (
+            extracted_links
+            if extracted_links is not None
+            else self._extract_with_profile(html, base_url=final_url or url)
+        )
         return self._finalize_links(
             url, mode, links, fetch_strategy, loop_start, cache_key,
             http_meta=http_meta, final_url=final_url,
@@ -615,8 +627,16 @@ class ScrapeService:
         force_refresh: bool,
         override_strategy: str = "auto",
         actions: Optional[list[dict]] = None,
-    ) -> tuple[Optional[str], bool, dict, Optional[str], bool, str]:
-        """Return (html, used_renderer, http_meta, final_url, not_modified, strategy)."""
+    ) -> tuple[Optional[str], bool, dict, Optional[str], bool, str, Optional[list[NormalizedLink]]]:
+        """Return (html, used_renderer, http_meta, final_url, not_modified, strategy, prelinks).
+
+        ``prelinks`` carries the links already extracted from ``html`` when this
+        method had to run the extractor itself (the links-mode HTTP fast-path),
+        so the caller can reuse them instead of re-parsing the same body.
+        It is ``None`` whenever ``html`` was not produced by that path (obscura
+        render, browser snapshot, non-links mode), since those bodies are either
+        different from what was extracted or were never extracted here.
+        """
         etag = cached.etag if cached and not force_refresh else None
         last_modified = (
             cached.last_modified if cached and not force_refresh else None
@@ -631,15 +651,16 @@ class ScrapeService:
         if override_strategy == "browser":
             if self._browser is None:
                 logger.warning("render='browser' but no browser fetcher wired for %s", url)
-                return None, True, http_meta, final_url or url, False, "browser"
+                return None, True, http_meta, final_url or url, False, "browser", None
             try:
                 r = await self._browser.render(url, actions or [])
-                return r.html, True, http_meta, r.final_url or url, False, "browser"
+                return r.html, True, http_meta, r.final_url or url, False, "browser", None
             except Exception as exc:  # noqa: BLE001
                 logger.warning("browser render failed for %s: %s", url, exc)
-                return None, True, http_meta, final_url or url, False, "browser"
+                return None, True, http_meta, final_url or url, False, "browser", None
 
         thin_body: Optional[str] = None
+        prelinks: Optional[list[NormalizedLink]] = None
         if override_strategy not in ("obscura",):
             try:
                 resp = await self._http.get(
@@ -652,19 +673,19 @@ class ScrapeService:
                     "status": resp.status,
                 }
                 if resp.not_modified:
-                    return None, False, http_meta, final_url, True, "http_304"
+                    return None, False, http_meta, final_url, True, "http_304", None
                 if resp.status == 200 and resp.body:
                     if mode != "links":
-                        return resp.body, False, http_meta, final_url, False, "http"
-                    links = self._extract_with_profile(
+                        return resp.body, False, http_meta, final_url, False, "http", None
+                    prelinks = self._extract_with_profile(
                         resp.body, base_url=final_url or url
                     )
-                    if len(links) >= self._config.fast_path_min_links:
-                        return resp.body, False, http_meta, final_url, False, "http"
+                    if len(prelinks) >= self._config.fast_path_min_links:
+                        return resp.body, False, http_meta, final_url, False, "http", prelinks
                     thin_body = resp.body
                     logger.debug(
                         "HTTP fast-path: only %d links for %s; trying obscura",
-                        len(links), url,
+                        len(prelinks), url,
                     )
                 elif 400 <= resp.status < 600:
                     logger.info(
@@ -679,14 +700,16 @@ class ScrapeService:
             # User pinned this host to HTTP only; don't escalate — but a thin
             # 200 is still an answer, not a failure (0.4.0 fix: previously
             # the body was discarded and the scrape failed outright).
-            return thin_body, False, http_meta, final_url, False, "http"
+            # `prelinks` matches `thin_body` (both come from resp.body) when we
+            # extracted; it's None when the fetch never produced a 200 body.
+            return thin_body, False, http_meta, final_url, False, "http", prelinks
 
         try:
             result = await self._obscura.render_html(url)
-            return result.html, True, http_meta, final_url or url, False, "obscura"
+            return result.html, True, http_meta, final_url or url, False, "obscura", None
         except Exception as exc:  # noqa: BLE001
             logger.warning("obscura render failed for %s: %s", url, exc)
-            return None, True, http_meta, final_url, False, "obscura"
+            return None, True, http_meta, final_url, False, "obscura", None
 
     async def _walk_altpath_chain(
         self, url: str, override

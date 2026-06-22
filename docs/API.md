@@ -63,7 +63,7 @@ Response (`ScrapeResponse`, abridged):
 { "url": "...", "kind": "links|article|structured|empty|error",
   "fingerprint": "sha256…", "fetched_at": 1780000000.0,
   "cached": false, "age_secs": 0.0, "used_renderer": false,
-  "strategy_used": "http|http_304|obscura|sitemap_news|rss|cache|combined",
+  "strategy_used": "http|http_304|obscura|browser|sitemap_news|rss|combined|cache",
   "links": [ { "url": "...", "text": "...", "summary": "", "published": "",
                "seen_in": ["rss","html"], "tier": "generic",
                "breaking_score": 0.0, "score_components": {} } ],
@@ -81,7 +81,10 @@ Errors: `400` empty url · `429` host on cooldown with no cache (`HostCooldown`)
 
 ### `POST /scrape:batch`
 Fan out many scrapes concurrently. Per-item failures come back inline as
-`kind:"error"` (the batch as a whole still returns 200).
+`kind:"error"` (the batch as a whole still returns 200). Each item honours only
+`url`, `mode`, and `force_refresh`; per-item `render`/`actions`/`page_size`/
+`cursor`/`enrich_html_top_n` are ignored in batch mode — use single `POST /scrape`
+for those.
 
 ```json
 { "requests": [ { "url": "https://a.example", "mode": "links" },
@@ -135,6 +138,7 @@ Drives `ujin.engine.PollEngine` and streams change events. Run `ujin api`.
 | `POST /targets` | add a target: `{ kind, config, base?, min?, max?, jitter? }` → `{ key }` |
 | `DELETE /targets/{key}` | remove a target |
 | `POST /sweep` | poll all targets once; `{ changed: [...], targets: N }` |
+| `GET /content?key=…` | the body ujin last fetched for a target (reuse it instead of re-hitting the origin): `{ key, changed, fingerprint, ts, status, body }`; `404` until that target has polled |
 | `WS /ws` | stream `{ "event":"change", "key", "fingerprint", "ts" }` |
 
 `kind` ∈ `http` · `rss` · `api` · `command` · `site`. `config` is the kind's

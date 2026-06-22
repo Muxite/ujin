@@ -133,12 +133,13 @@ class LinkItem(BaseModel):
     tier: str = Field(
         "mainstream",
         description=(
-            "Coarse source class — `wire` (AP/Reuters/AFP), "
-            "`mainstream` (BBC/NYT/CNN), `specialty` (trade press), "
-            "`social` (X/Mastodon/Truth), `trend` (corroborated cluster). "
-            "Set from per_host.yaml `tier:` field; defaults to mainstream."
+            "Coarse source class. The default `NullScorer` stamps every link "
+            "`generic`; a wired `BreakingScorer` classifies from per_host.yaml "
+            "`tier:` into `wire` (AP/Reuters/AFP), `mainstream` (BBC/NYT/CNN, "
+            "the per-host default), `specialty` (trade press), `social` "
+            "(X/Mastodon/Truth), or `trend` (corroborated cluster)."
         ),
-        examples=["wire", "mainstream", "specialty", "social", "trend"],
+        examples=["generic", "wire", "mainstream", "specialty", "social", "trend"],
     )
     breaking_score: float = Field(
         0.0,
@@ -281,11 +282,12 @@ class ScrapeResponse(BaseModel):
         ...,
         description=(
             "What this response contains. One of: `links` (headline link-set "
-            "in `links`), `article` (parsed body in `article`), `empty` "
+            "in `links`), `article` (parsed body in `article`), `structured` "
+            "(JSON-LD/OpenGraph/microdata in `structured`), `empty` "
             "(fetch succeeded but extractor found nothing usable), `error` "
             "(batch-only — wrapping a per-item failure)."
         ),
-        examples=["links", "article", "empty", "error"],
+        examples=["links", "article", "structured", "empty", "error"],
     )
     fingerprint: str = Field(
         ...,
@@ -325,11 +327,14 @@ class ScrapeResponse(BaseModel):
         description=(
             "Which fetch path produced the payload. One of: `http` "
             "(plain HTTP fast path), `http_304` (revalidated, served from "
-            "cache), `obscura` (headless render), `sitemap_news` (altpath "
-            "via news sitemap), `rss` (altpath via RSS), `cache` (host on "
+            "cache), `obscura` (headless render), `browser` (pinned "
+            "`render='browser'` recipe run), `sitemap_news` (altpath "
+            "via news sitemap), `rss` (altpath via RSS), `combined` "
+            "(parallel RSS+HTML merge, `mode='combined'`), `cache` (host on "
             "cooldown, cache served), `error` (batch-only wrap)."
         ),
-        examples=["http", "obscura", "sitemap_news", "rss", "cache", "http_304"],
+        examples=["http", "obscura", "browser", "sitemap_news", "rss",
+                  "combined", "cache", "http_304"],
     )
     links: list[LinkItem] = Field(
         default_factory=list,
@@ -404,9 +409,11 @@ class BatchScrapeRequest(BaseModel):
         ...,
         description=(
             "List of scrape requests to fan out concurrently. Bounded by "
-            "the service `batch_max_items` setting (default 32). Per-item "
-            "failures are returned in-line with `kind='error'` rather "
-            "than failing the whole batch."
+            "the service `batch_max_items` setting (default 64). Each item "
+            "honours only `url`, `mode`, and `force_refresh` — per-item "
+            "`render`/`actions`/`page_size`/`cursor`/`enrich_html_top_n` are "
+            "ignored in batch mode. Per-item failures are returned in-line "
+            "with `kind='error'` rather than failing the whole batch."
         ),
         examples=[[
             {"url": "https://apnews.com", "mode": "links"},
