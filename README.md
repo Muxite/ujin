@@ -3,8 +3,9 @@
 The **ultimate scraper-poller**. Two halves that share one toolkit:
 
 1. **Adaptive multi-role poller** — poll *anything* (HTTP pages, RSS, JSON APIs,
-   shell commands, Python callables, or scoped page regions) on a cadence that
-   **adapts** to change, with **jitter** so aggregate load stays smooth.
+   GraphQL endpoints, shell commands, Python callables, scoped page regions, or
+   browser-driven interaction recipes) on a cadence that **adapts** to change,
+   with **jitter** so aggregate load stays smooth.
 2. **Rich scrape service** — one-shot rendering + extraction with an
    HTTP → obscura → sitemap → RSS fallback chain, per-host cooldown,
    fingerprinted change detection, structured-data + HTML-table + image +
@@ -244,8 +245,11 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
 
 - **Roles** (`ujin.poll`): `HttpPollable`, `RssPollable`, `ApiPollable`,
   `GraphQLPollable` (POST a GraphQL query; narrows to a dotted `data_path`),
-  `CommandPollable`, `CallablePollable`, and `SitePollable` (selector-scoped
-  change). Each returns a `PollResult` with a content fingerprint.
+  `CommandPollable`, `CallablePollable`, `SitePollable` (selector-scoped
+  change), and `BrowserPollable` (runs a declarative interaction recipe via
+  Playwright/Selenium, then feeds the loaded HTML to the extractors —
+  see [docs/BROWSER.md](docs/BROWSER.md)). Each returns a `PollResult` with a
+  content fingerprint.
 - **Adaptive** (`ujin.adapt`): `AdaptiveInterval` grows/shrinks the interval;
   full/equal/decorrelated **jitter**; `TokenBucket` + AIMD smoothing;
   exponential `Backoff` (honors `Retry-After`) and a `CircuitBreaker`.

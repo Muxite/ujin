@@ -52,6 +52,10 @@ Request (`ScrapeRequest`):
 | `modes` | list of `links`\|`article`\|`auto`\|`structured`\|`tables`\|`images`\|`metadata`\|`feeds`\|`html` | `null` | multi-extract: several modes over one fetch (see below) |
 | `force_refresh` | bool | `false` | bypass cache + revalidation |
 | `enrich_html_top_n` | int 0–20 | `0` | (combined) fan out article fetches for the top-N HTML-only links |
+| `render` | `auto`\|`http`\|`obscura`\|`browser` | `auto` | pin the fetch strategy; `browser` runs the `actions` recipe in a real browser (JS pages, `load_more`) |
+| `actions` | list of dicts | `null` | browser interaction recipe (used when `render="browser"`): steps like `{"action":"load_more","button":".more","results":".item","max_clicks":200}` |
+| `page_size` | int | `null` | return only this many links/items and a `next_cursor` for the next page (LLM-sized bites); omit for the full list |
+| `cursor` | string | `null` | opaque cursor from a prior response's `next_cursor`; a stale cursor (list changed) yields HTTP 409 |
 
 Modes:
 - **links** — headline link-set for a homepage/section page.
@@ -255,6 +259,8 @@ curl -X POST localhost:8900/targets -H 'content-type: application/json' \
 | `OBSCURA_URL` / `OBSCURA_BIN` | — | headless renderer (URL service or binary path) |
 | `SEARCH_API_KEY` | — | Brave token for the social legs |
 | `NITTER_POOL_PATH` | — | YAML list of nitter mirrors |
+| `UJIN_LEARN_STRATEGY` | `0` | enable durable adaptive backend selection: the `auto` path biases toward each host's proven-best `(backend, render_mode)` and records every outcome to `UJIN_STRATEGY_DB` |
+| `UJIN_STRATEGY_DB` | — | SQLite path for `StrategyFeedback` (empty = ephemeral `:memory:`; requires `UJIN_LEARN_STRATEGY=1`) |
 | `UJIN_BREAKING_SCORER` | `0` | wire the news-trading scorer (below) |
 | `CORROBORATION_*`, `TIER_W_*`, `BREAKING_THRESHOLD` | — | scorer tuning |
 
