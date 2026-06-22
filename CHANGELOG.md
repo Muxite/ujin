@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **docs(sync/0.17)**: Audited README and all `docs/` pages against the shipped 0.17 surface — corrected four omissions: (1) `docs/JOBS.md` transforms table was missing the `filter` kind added in 0.17; (2) `docs/LIST_TRANSFORMS.md` intro said "Eight" job kinds but nine are now documented (`filter` added); (3) `README.md` docs-index reference for LIST_TRANSFORMS omitted `filter`; (4) `docs/API.md` abridged `ScrapeResponse` JSON example omitted the `total`/`next_cursor` pagination fields. Also added "feed-URL extraction" to the README intro feature description to reflect the 0.17 `feeds` mode. No production code changed.
+
 ## 0.17.0 — 2026-06-22
 
 ### Added

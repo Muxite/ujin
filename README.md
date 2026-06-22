@@ -9,8 +9,8 @@ The **ultimate scraper-poller**. Two halves that share one toolkit:
 2. **Rich scrape service** — one-shot rendering + extraction with an
    HTTP → obscura → sitemap → RSS fallback chain, per-host cooldown,
    fingerprinted change detection, structured-data + HTML-table + image +
-   head-metadata extraction, and optional social/trends sources — all behind a
-   small HTTP API.
+   head-metadata + feed-URL extraction, and optional social/trends sources —
+   all behind a small HTTP API.
 
 It bundles the [obscura](https://github.com/Muxite/obscura) headless renderer as
 a submodule, and stays a **pure-python pip install** (the renderer is built
@@ -315,7 +315,7 @@ Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [ADAPTIVE](docs/ADAPTIVE.md) ·
 [PERFORMANCE](docs/PERFORMANCE.md) · [CONSUMERS](docs/CONSUMERS.md)
 (downstream submodule contracts) · [API](docs/API.md) · [JOBS](docs/JOBS.md) ·
 [WORKFLOWS](docs/WORKFLOWS.md) · [PLUGINS](docs/PLUGINS.md) ·
-[LIST_TRANSFORMS](docs/LIST_TRANSFORMS.md) (flatten/sort/limit/rename/aggregate/unique/fill/csv) ·
+[LIST_TRANSFORMS](docs/LIST_TRANSFORMS.md) (filter/flatten/sort/limit/rename/aggregate/unique/fill/csv) ·
 [BROWSER](docs/BROWSER.md) · [MCP](docs/MCP.md) · [CHANGELOG](CHANGELOG.md)
 
 ## Troubleshooting
