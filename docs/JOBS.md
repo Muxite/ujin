@@ -61,6 +61,9 @@ in-memory `POST /targets` left open.
 | `sort` | `path?`, `key?` (dotted), `reverse?` | sort a list payload by a key; missing/uncomparable values never raise — they land last in ascending order, first under `reverse: true` |
 | `limit` | `path?`, `count` (required), `from?` (`head`/`tail`) | cap a list payload to the first/last N items |
 | `rename` | `path?`, `mapping` (required), `drop_missing?` | rename keys on a dict (or each dict in a list) |
+| `aggregate` | `by` (required, dotted), `path?`, `out?`, `fields?[{field,op}]` | group a list by a key; emit one row per group with `count` and optional `sum`/`min`/`max`/`collect` aggregates — see [LIST_TRANSFORMS.md](LIST_TRANSFORMS.md) |
+| `unique` | `path?`, `key?` (dotted) | drop duplicate items from a list by a dotted key (or whole-item identity when key omitted); first occurrence wins — see [LIST_TRANSFORMS.md](LIST_TRANSFORMS.md) |
+| `fill` | `path?`, `fields?{dotted:val}`, `paths?[]`, `value?` | add default values for missing (None) dotted fields on dicts in a list, without overwriting existing values — see [LIST_TRANSFORMS.md](LIST_TRANSFORMS.md) |
 
 ### Sinks (`kind`) — fan out concurrently; one failing sink never blocks the others
 | kind | config | effect |

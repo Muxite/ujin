@@ -8,7 +8,10 @@
 
 ### Added
 - **`unique` and `fill` transforms** — `unique` drops duplicate items from a list payload by a dotted `key` (or whole-item identity when key omitted), preserving first-occurrence order and passing non-list payloads through unchanged; `fill` ensures named dotted fields exist on a dict payload or each dict in a list-of-dicts, setting a per-path or shared default without overwriting existing non-None values and passing non-dict items through unchanged. Both are discoverable at `GET /kinds` and documented in `docs/LIST_TRANSFORMS.md`.
-## [Unreleased]
+## 0.16.0 — 2026-06-22
+
+- **docs-sync** — audited all docs against the 0.15.0 shipped set; added `graphql` to the poller-control `kind` list in `docs/API.md`; added `unique`/`fill` to the `LIST_TRANSFORMS` reference in `README.md`; and added `aggregate`, `unique`, and `fill` rows to the transforms table in `docs/JOBS.md` so every built-in transform kind is discoverable from the job reference.
+- **HTML head-metadata extraction** — new `ujin.extract.extract_metadata(html, base_url=None) -> dict` parses page-level head metadata into one flat, normalized summary: `title`, meta `description`, `canonical` URL, `language` (`<html lang>`), optional `author`/`published`/`modified`/`favicon`, plus the OpenGraph (`og:*`) and Twitter-card (`twitter:*`) fields collected under `og`/`twitter` sub-dicts with the prefix stripped. `canonical`, `favicon`, and og/twitter URL values are resolved against `base_url`; flat `title`/`description` fall back to `og:title`/`og:description` when absent; empty/malformed input returns `{}` rather than raising. Pure stdlib (`html.parser`), and a deliberately flat *complement* to `extract_structured` (it does not duplicate JSON-LD/microdata). A new additive `metadata` scrape mode surfaces it: `POST /scrape {"mode":"metadata"}` (or `metadata` inside a `modes` multi-extract list) returns the summary in the new `ScrapeResponse.metadata` field — under the `extracts` map for multi-extract requests. Strictly additive — every existing mode, field, and default is byte-for-byte unchanged. Documented in `README.md` and `docs/API.md`.
 
 ## 0.15.0 — 2026-06-22
 

@@ -48,8 +48,8 @@ Request (`ScrapeRequest`):
 |---|---|---|---|
 | `url` | string | — | absolute URL (required unless `urls` is set) |
 | `urls` | list of string | `null` | multi-URL batch: scrape several URLs, one result per URL (see below) |
-| `mode` | `links`\|`article`\|`auto`\|`combined`\|`structured`\|`tables`\|`images` | `links` | what to extract (single mode) |
-| `modes` | list of `links`\|`article`\|`auto`\|`structured`\|`tables`\|`images`\|`html` | `null` | multi-extract: several modes over one fetch (see below) |
+| `mode` | `links`\|`article`\|`auto`\|`combined`\|`structured`\|`tables`\|`images`\|`metadata` | `links` | what to extract (single mode) |
+| `modes` | list of `links`\|`article`\|`auto`\|`structured`\|`tables`\|`images`\|`metadata`\|`html` | `null` | multi-extract: several modes over one fetch (see below) |
 | `force_refresh` | bool | `false` | bypass cache + revalidation |
 | `enrich_html_top_n` | int 0–20 | `0` | (combined) fan out article fetches for the top-N HTML-only links |
 
@@ -65,11 +65,18 @@ Modes:
   resolved against the page URL; lazy-load `data-src`/`data-original` and the
   first `srcset` candidate are honored, a `data:` placeholder is skipped when a
   real src exists, and identical srcs are de-duplicated in document order.
+- **metadata** — a flat head-metadata summary, returned in `metadata`: `title`,
+  `description`, `canonical`, `language`, optional `author`/`published`/
+  `modified`/`favicon`, plus `og`/`twitter` sub-dicts of the OpenGraph and
+  Twitter-card fields (prefix stripped). `canonical`, `favicon`, and og/twitter
+  URL values are resolved against the page URL; flat `title`/`description` fall
+  back to `og:title`/`og:description` when no `<title>`/`<meta name=description>`
+  is present. Complements `structured` (it does not duplicate JSON-LD/microdata).
 - **html** — the raw fetched HTML, returned in `html` (multi-extract only).
 
 Response (`ScrapeResponse`, abridged):
 ```json
-{ "url": "...", "kind": "links|article|structured|tables|images|html|empty|error",
+{ "url": "...", "kind": "links|article|structured|tables|images|metadata|html|empty|error",
   "fingerprint": "sha256…", "fetched_at": 1780000000.0,
   "cached": false, "age_secs": 0.0, "used_renderer": false,
   "strategy_used": "http|http_304|obscura|browser|sitemap_news|rss|combined|cache",
@@ -77,7 +84,7 @@ Response (`ScrapeResponse`, abridged):
                "seen_in": ["rss","html"], "tier": "generic",
                "breaking_score": 0.0, "score_components": {} } ],
   "article": null, "structured": null, "tables": null, "images": null,
-  "html": null, "final_url": null, "note": null,
+  "metadata": null, "html": null, "final_url": null, "note": null,
   "next_poll_hint_secs": 60.0, "max_breaking_score": 0.0,
   "extracts": null, "batch": null }
 ```
@@ -204,7 +211,7 @@ Drives `ujin.engine.PollEngine` and streams change events. Run `ujin api`.
 | `GET /content?key=…` | the body ujin last fetched for a target (reuse it instead of re-hitting the origin): `{ key, changed, fingerprint, ts, status, body }`; `404` until that target has polled |
 | `WS /ws` | stream `{ "event":"change", "key", "fingerprint", "ts" }` |
 
-`kind` ∈ `http` · `rss` · `api` · `command` · `site`. `config` is the kind's
+`kind` ∈ `http` · `rss` · `api` · `graphql` · `command` · `site`. `config` is the kind's
 constructor args, e.g. `{"url": "https://x"}`, or for `site`:
 `{"url": "...", "selectors": ["main"], "render": false}`.
 

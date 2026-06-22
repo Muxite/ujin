@@ -12,6 +12,7 @@ from .links import (
     normalize_url,
 )
 from .images import extract_images
+from .metadata import extract_metadata
 from .profile import apply_article_profile, apply_link_profile
 from .tables import extract_tables
 
@@ -27,4 +28,5 @@ __all__ = [
     "apply_article_profile",
     "extract_tables",
     "extract_images",
+    "extract_metadata",
 ]

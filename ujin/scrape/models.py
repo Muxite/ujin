@@ -39,7 +39,7 @@ class ScrapeRequest(BaseModel):
         ),
         examples=[["https://apnews.com", "https://www.reuters.com/world/"]],
     )
-    mode: Literal["links", "article", "auto", "combined", "structured", "tables", "images"] = Field(
+    mode: Literal["links", "article", "auto", "combined", "structured", "tables", "images", "metadata"] = Field(
         "links",
         description=(
             "What to extract. `links` returns the headline link-set "
@@ -53,11 +53,14 @@ class ScrapeRequest(BaseModel):
             "HTML `<table>` parsed into header-keyed row dicts in the `tables` "
             "field. `images` returns every `<img>` as a dict with an absolute "
             "`src` (lazy-load/`srcset` aware), `alt`, and optional "
-            "`width`/`height`/`title` in the `images` field."
+            "`width`/`height`/`title` in the `images` field. `metadata` returns "
+            "a flat head-metadata summary (title, description, canonical, "
+            "language, OpenGraph/Twitter-card fields, optional author/published/"
+            "modified/favicon) in the `metadata` field."
         ),
-        examples=["links", "article", "auto", "combined", "structured", "tables", "images"],
+        examples=["links", "article", "auto", "combined", "structured", "tables", "images", "metadata"],
     )
-    modes: Optional[list[Literal["links", "article", "auto", "structured", "tables", "images", "html"]]] = Field(
+    modes: Optional[list[Literal["links", "article", "auto", "structured", "tables", "images", "metadata", "html"]]] = Field(
         None,
         description=(
             "Opt-in multi-extract: request several extract modes over a single "
@@ -71,10 +74,12 @@ class ScrapeRequest(BaseModel):
             "`combined` strategy is single-`mode` only and not accepted here; "
             "`html` returns the raw fetched HTML in `html`; `tables` returns "
             "every HTML `<table>` as header-keyed row dicts in `tables`; "
-            "`images` returns every `<img>` as a normalized dict in `images`."
+            "`images` returns every `<img>` as a normalized dict in `images`; "
+            "`metadata` returns the flat head-metadata summary in `metadata`."
         ),
         examples=[["links", "structured"], ["article", "html"],
-                  ["tables", "structured"], ["images", "structured"]],
+                  ["tables", "structured"], ["images", "structured"],
+                  ["metadata", "structured"]],
     )
     force_refresh: bool = Field(
         False,
@@ -332,13 +337,14 @@ class ScrapeResponse(BaseModel):
             "in `links`), `article` (parsed body in `article`), `structured` "
             "(JSON-LD/OpenGraph/microdata in `structured`), `tables` (HTML "
             "`<table>` rows in `tables`), `images` (every `<img>` as a "
-            "normalized dict in `images`), `html` (raw fetched "
+            "normalized dict in `images`), `metadata` (flat head-metadata "
+            "summary in `metadata`), `html` (raw fetched "
             "HTML in `html`, multi-extract only), `empty` "
             "(fetch succeeded but extractor found nothing usable), `error` "
             "(batch-only, or a per-mode failure inside `extracts` — wrapping a "
             "single failure)."
         ),
-        examples=["links", "article", "structured", "tables", "images", "html", "empty", "error"],
+        examples=["links", "article", "structured", "tables", "images", "metadata", "html", "empty", "error"],
     )
     fingerprint: str = Field(
         ...,
@@ -429,6 +435,25 @@ class ScrapeResponse(BaseModel):
             None,
             [{"src": "https://apnews.com/img/lead.jpg", "alt": "Senate floor",
               "width": 1024, "height": 576}],
+        ],
+    )
+    metadata: Optional[dict] = Field(
+        None,
+        description=(
+            "Flat head-metadata summary when `kind == 'metadata'` — `title`, "
+            "`description`, `canonical`, `language`, optional `author`/"
+            "`published`/`modified`/`favicon`, plus `og`/`twitter` sub-dicts of "
+            "the OpenGraph and Twitter-card fields (prefix stripped). Canonical, "
+            "favicon, and og/twitter URL values are resolved against the page "
+            "URL. None for every other mode. Complements `structured` (it does "
+            "not duplicate JSON-LD/microdata)."
+        ),
+        examples=[
+            None,
+            {"title": "Senate passes bill", "description": "…",
+             "canonical": "https://apnews.com/article/abc123", "language": "en",
+             "og": {"title": "Senate passes bill",
+                    "image": "https://apnews.com/img/lead.jpg"}},
         ],
     )
     html: Optional[str] = Field(
