@@ -8,10 +8,12 @@ frozen consumer-contract surface on its own.
 
 ## How it runs
 
-A systemd user timer fires one **tick** every 10 minutes. Each tick advances the state
-machine one bounded step (at most `max_concurrent` expensive agent operations), writes
-everything to `orchestrator/state/` (gitignored), and exits — so the loop is crash-safe
-and resumable.
+A systemd user service runs the orchestrator as a **continuous daemon** (`--serve`):
+it ticks the state machine back-to-back so agents work without idle gaps — the only
+pauses are gate (test) runs. Each tick is bounded and writes everything to
+`orchestrator/state/` (gitignored), so the loop is crash-safe and resumable, and
+`Restart=always` brings it back after a crash. (A `--tick` mode also exists for
+cron/manual stepping.)
 
 ```
 cycle:  planning ─▶ working ─▶ integrating ─▶ releasing ─▶ done ─▶ (next cycle)
@@ -69,20 +71,20 @@ Edit `orchestrator/config.toml` (re-read every tick — no restart needed). Key 
 # Dry-run the whole pipeline offline (no LLM cost) with the fake backend:
 python3 -m orchestrator.orchestrator --run-cycle --fake
 
-# One real tick / status / digest:
-python3 -m orchestrator.orchestrator --tick
+# Status / digest / one manual tick:
 python3 -m orchestrator.orchestrator --status
 python3 -m orchestrator.orchestrator --digest
+python3 -m orchestrator.orchestrator --tick
 
-# Install + enable the 24/7 loop (user services):
-cp orchestrator/systemd/*.{service,timer} ~/.config/systemd/user/
+# Install + enable the continuous 24/7 daemon (+ daily GC) as user services:
+cp orchestrator/systemd/*.service orchestrator/systemd/*.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now ujin-orchestrator.timer ujin-orchestrator-gc.timer
+systemctl --user enable --now ujin-orchestrator.service ujin-orchestrator-gc.timer
 
-# Watch it live / stop it:
+# Watch it live / pause work / stop the daemon:
 journalctl --user -u ujin-orchestrator -f
-touch orchestrator/state/KILL          # emergency brake
-systemctl --user disable --now ujin-orchestrator.timer
+touch orchestrator/state/KILL          # pause work (daemon stays up, rechecks)
+systemctl --user stop ujin-orchestrator.service   # stop entirely
 ```
 
 ## Tests

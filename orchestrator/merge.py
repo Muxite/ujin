@@ -33,7 +33,13 @@ def _ensure_worktree(cfg: Config, name: str, branch: str, *, create_from: str | 
     wt = cfg.worktrees_dir / name
     root = cfg.repo_root
     if wt.exists():
-        gitutil.git("checkout", branch, cwd=wt, check=False)
+        if gitutil.branch_exists(branch, root):
+            gitutil.git("checkout", branch, cwd=wt, check=False)
+        elif create_from is not None:
+            # New cycle: the reused worktree must switch to a not-yet-created branch.
+            gitutil.git("checkout", "-b", branch, create_from, cwd=wt, check=False)
+        else:
+            gitutil.git("checkout", branch, cwd=wt, check=False)
         return wt
     wt.parent.mkdir(parents=True, exist_ok=True)
     if gitutil.branch_exists(branch, root):

@@ -13,6 +13,8 @@ from pathlib import Path
 from orchestrator import gitutil, worktree
 from orchestrator.agents import FakeAgentBackend
 from orchestrator.cycle import next_cycle, tick
+from orchestrator.orchestrator import serve
+from orchestrator.state import StateStore as _StateStore
 from orchestrator.state import (
     CYCLE_DONE,
     PHASE_DEAD,
@@ -106,6 +108,25 @@ def test_contract_touch_is_hard_blocked(temp_repo: Path):
     # Never merged: master untouched, branch quarantined to dead/*.
     assert "Cycle 0.6" not in _git_out(temp_repo, "log", "--oneline", "master")
     assert gitutil.branch_exists("dead/agent/demo-0.6", temp_repo)
+
+
+def test_serve_runs_continuously_until_release(temp_repo: Path):
+    cfg = make_cfg(temp_repo)
+    loader = lambda: (cfg, _StateStore(cfg.state_dir))
+    serve(loader, FakeAgentBackend(backlog=DEMO), idle_sleep=0, busy_sleep=0,
+          max_iterations=40, sleep_fn=lambda s: None)
+    events = {e["event"] for e in _StateStore(cfg.state_dir).read_events("0.6")}
+    assert "released" in events  # the daemon drove a full cycle without manual ticks
+
+
+def test_serve_respects_kill(temp_repo: Path):
+    cfg = make_cfg(temp_repo)
+    cfg.state_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.state_dir / "KILL").write_text("stop")
+    loader = lambda: (cfg, _StateStore(cfg.state_dir))
+    serve(loader, FakeAgentBackend(backlog=DEMO), idle_sleep=0, busy_sleep=0,
+          max_iterations=5, sleep_fn=lambda s: None)
+    assert _StateStore(cfg.state_dir).read_cycle() == {}  # never started any work
 
 
 def test_coverage_drop_dies_after_retries(temp_repo: Path):
