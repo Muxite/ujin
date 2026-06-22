@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **`aggregate` transform** — new built-in kind that groups a list payload by a dotted `by` key and emits one dict per group with `count` plus optional `sum`/`min`/`max`/`collect` aggregates over configurable dotted `fields`; supports a separate `out` path; non-list and empty payloads pass through unchanged. Discoverable at `GET /kinds`.
+
 ## 0.11.0 — 2026-06-22
 
 ### Added

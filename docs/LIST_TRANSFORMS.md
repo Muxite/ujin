@@ -1,19 +1,20 @@
 # List reshaping transforms + the CSV sink
 
-Five additive job kinds for the common "narrow a list, reorder it, fan it out,
+Six additive job kinds for the common "narrow a list, reorder it, fan it out,
 and write it somewhere tabular" shape — all pure stdlib, all wired through the
 same registry as the existing kinds. They slot anywhere in a job's
 `transforms` / `sinks` arrays (see [JOBS.md](JOBS.md)).
 
 | kind | category | one-liner |
 |------|----------|-----------|
-| `flatten` | transform | fan a list payload into one event per item |
-| `sort`    | transform | sort a list payload by a dotted key |
-| `limit`   | transform | keep the first/last N items |
-| `rename`  | transform | rename dict keys (across a list too) |
-| `csv`     | sink      | append event rows to a CSV/TSV file |
+| `flatten`   | transform | fan a list payload into one event per item |
+| `sort`      | transform | sort a list payload by a dotted key |
+| `limit`     | transform | keep the first/last N items |
+| `rename`    | transform | rename dict keys (across a list too) |
+| `aggregate` | transform | group a list by a key; compute count/sum/min/max/collect |
+| `csv`       | sink      | append event rows to a CSV/TSV file |
 
-All five are discoverable at `GET /kinds` and build through `ujin.registry`.
+All six are discoverable at `GET /kinds` and build through `ujin.registry`.
 
 ## `flatten` — one event per list item
 
@@ -82,6 +83,62 @@ transforms:
 
 Applies to a dict payload or each dict in a list payload. Keys not in `mapping`
 are preserved; non-dict items in a list pass through untouched.
+
+## `aggregate` — group by a key and compute per-group stats
+
+Where a list payload contains categorised items, `aggregate` collapses them into
+one dict per distinct group value — always with a `count`, optionally with
+`sum`, `min`, `max`, or `collect` over any dotted field.
+
+```yaml
+transforms:
+  - kind: aggregate
+    config:
+      by: category          # dotted path to group on (required)
+      path: payload         # default; where the list lives
+      out: payload          # default: write result back to the same path
+      fields:               # optional per-group aggregates
+        - field: score      # dotted path to the value field
+          op: sum           # sum | min | max | collect
+        - field: score
+          op: max
+```
+
+Each output row has the group label (last segment of `by`), `count`, and any
+requested aggregates named `<field-label>_<op>`:
+
+```json
+[
+  {"category": "A", "count": 3, "score_sum": 42, "score_max": 20},
+  {"category": "B", "count": 1, "score_sum": 7,  "score_max": 7}
+]
+```
+
+**Notes**:
+- Items missing the `by` key land in a `null` group.
+- Items missing a `fields` value are excluded from that aggregate (but still
+  counted). A group where *all* items lack the field yields `0` for `sum` and
+  `null` for `min`/`max`/`collect`.
+- Groups appear in first-seen insertion order.
+- A non-list or empty payload passes through unchanged (no error, no output
+  rewrite).
+- Use `out` to write the result to a different path than `path` — handy for
+  keeping the raw list alongside its summary.
+
+**Example** — count papers per journal and collect their DOIs:
+
+```yaml
+transforms:
+  - kind: aggregate
+    config:
+      by: container-title
+      fields:
+        - field: DOI
+          op: collect
+        - field: is-referenced-by-count
+          op: sum
+      out: by_journal
+```
 
 ## `csv` sink — append rows to a file
 
