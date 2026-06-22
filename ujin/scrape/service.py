@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
+from ..adapt.site_store import HostRecord
 from ..cache import CachedEntry, HostPolicy, ScrapeCache
 from ..extract import (
     NormalizedLink,
@@ -45,6 +46,17 @@ logger = logging.getLogger("ujin.scrape.service")
 
 
 Mode = Literal["links", "article", "auto", "combined", "structured"]
+
+# Canonical (backend, render_mode) pairs recorded into StrategyFeedback, one per
+# fetch backend the service can drive. These match the tuples the adapt layer's
+# tests/recommend() use, so a recommendation maps straight back onto a backend.
+_HTTP_STRATEGY = ("http", "html")
+_OBSCURA_STRATEGY = ("obscura", "js")
+_BROWSER_STRATEGY = ("browser", "html")
+
+# Reverse map: a recommended backend → the ``override_strategy`` string the
+# fetch path understands. Only these backends are biasable in the 'auto' path.
+_BACKEND_TO_OVERRIDE = {"http": "http", "obscura": "obscura", "browser": "browser"}
 
 
 @dataclass
@@ -83,6 +95,8 @@ class ScrapeService:
         overrides: Optional[HostOverrideRegistry] = None,
         scorer: Optional[Scorer] = None,
         browser: Any = None,
+        strategy_feedback: Any = None,
+        site_store: Any = None,
     ):
         self._http = http
         self._obscura = obscura
@@ -93,6 +107,17 @@ class ScrapeService:
         self._overrides = overrides or HostOverrideRegistry()
         self._scorer = scorer or NullScorer()
         self._browser = browser  # optional BrowserFetcher for render="browser"
+        # Optional adaptive strategy loop. ``strategy_feedback`` is a durable
+        # ujin.adapt.StrategyFeedback; ``site_store`` is an optional ujin.adapt
+        # SiteStore consulted for the is_penalized() health check (its absence
+        # means a zero-valued HostRecord, i.e. never penalized). Learning is on
+        # only when the config flag AND a feedback store are both present, so a
+        # default service is byte-identical to before.
+        self._strategy = strategy_feedback
+        self._site_store = site_store
+        self._learn_strategy = bool(
+            self._config.learn_strategy and strategy_feedback is not None
+        )
 
     async def scrape(
         self,
@@ -161,6 +186,14 @@ class ScrapeService:
         # An explicit `render=` pins the strategy (overriding the per-host
         # override); "auto" keeps the per-host/default escalation.
         effective_strategy = render if render != "auto" else override.strategy
+
+        # Adaptive bias: when learning is enabled and nothing has pinned a
+        # strategy, let the proven-best (backend, render_mode) for this host
+        # choose which backend the 'auto' path tries first.
+        if self._learn_strategy and effective_strategy == "auto":
+            biased = self._biased_auto_strategy(url)
+            if biased is not None:
+                effective_strategy = biased
 
         html, used_renderer, http_meta, final_url, not_modified, fetch_strategy, prelinks = (
             await self._fetch_html(
@@ -820,6 +853,70 @@ class ScrapeService:
             next_poll_hint_secs=hint,
         )
 
+    # ── adaptive strategy loop ─────────────────────────────────────────────
+
+    def _biased_auto_strategy(self, url: str) -> Optional[str]:
+        """Return a backend to try first for ``url``, or ``None`` to keep auto.
+
+        Consults :meth:`StrategyFeedback.recommend` for the host's proven-best
+        ``(backend, render_mode)`` and maps it onto the fetch path's
+        ``override_strategy``. Returns ``None`` (→ unchanged auto order) when the
+        host has no confident recommendation, when the recommended pair is
+        penalized, or when the backend can't be honored (browser with no fetcher
+        wired). Never raises: a broken store falls back to the auto order.
+        """
+        try:
+            host = self._metrics.host_of(url)
+            rec = self._strategy.recommend(host)
+            if rec is None:
+                return None
+            override = _BACKEND_TO_OVERRIDE.get(rec[0])
+            if override is None:
+                return None
+            if override == "browser" and self._browser is None:
+                return None
+            if self._is_penalized(host, rec):
+                return None
+            return override
+        except Exception:  # noqa: BLE001 — biasing must never break a scrape
+            logger.debug("strategy bias failed for %s", url, exc_info=True)
+            return None
+
+    def _is_penalized(self, host: str, strategy: tuple[str, str]) -> bool:
+        """True when host health says to avoid ``strategy`` right now.
+
+        Sources the :class:`~ujin.adapt.site_store.HostRecord` from the optional
+        injected ``SiteStore``; without one, a zero-valued record means the host
+        is never penalized. The check itself is pure (no I/O).
+        """
+        record = (
+            self._site_store.get(host)
+            if self._site_store is not None
+            else HostRecord(host=host)
+        )
+        return self._strategy.is_penalized(host, strategy, record)
+
+    def _record_attempt(
+        self,
+        url: str,
+        strategy: tuple[str, str],
+        *,
+        ok: bool,
+        latency: float,
+    ) -> None:
+        """Record one fetch outcome into StrategyFeedback (no-op when off).
+
+        Guarded so a closed/broken store can never propagate into a fetch.
+        """
+        if not self._learn_strategy:
+            return
+        try:
+            self._strategy.record(
+                self._metrics.host_of(url), strategy, ok=ok, latency=max(0.0, latency)
+            )
+        except Exception:  # noqa: BLE001 — learning must never break a fetch
+            logger.debug("strategy record failed for %s", url, exc_info=True)
+
     async def _fetch_html(
         self,
         url: str,
@@ -854,16 +951,24 @@ class ScrapeService:
             if self._browser is None:
                 logger.warning("render='browser' but no browser fetcher wired for %s", url)
                 return None, True, http_meta, final_url or url, False, "browser", None
+            t0 = time.monotonic()
             try:
                 r = await self._browser.render(url, actions or [])
+                self._record_attempt(
+                    url, _BROWSER_STRATEGY, ok=True, latency=time.monotonic() - t0
+                )
                 return r.html, True, http_meta, r.final_url or url, False, "browser", None
             except Exception as exc:  # noqa: BLE001
                 logger.warning("browser render failed for %s: %s", url, exc)
+                self._record_attempt(
+                    url, _BROWSER_STRATEGY, ok=False, latency=time.monotonic() - t0
+                )
                 return None, True, http_meta, final_url or url, False, "browser", None
 
         thin_body: Optional[str] = None
         prelinks: Optional[list[NormalizedLink]] = None
         if override_strategy not in ("obscura",):
+            t0 = time.monotonic()
             try:
                 resp = await self._http.get(
                     url, etag=etag, last_modified=last_modified
@@ -875,25 +980,51 @@ class ScrapeService:
                     "status": resp.status,
                 }
                 if resp.not_modified:
+                    # 304: the host answered and the content is unchanged — a win
+                    # for the HTTP strategy.
+                    self._record_attempt(
+                        url, _HTTP_STRATEGY, ok=True, latency=time.monotonic() - t0
+                    )
                     return None, False, http_meta, final_url, True, "http_304", None
                 if resp.status == 200 and resp.body:
                     if mode != "links":
+                        self._record_attempt(
+                            url, _HTTP_STRATEGY, ok=True, latency=time.monotonic() - t0
+                        )
                         return resp.body, False, http_meta, final_url, False, "http", None
                     prelinks = self._extract_with_profile(
                         resp.body, base_url=final_url or url
                     )
                     if len(prelinks) >= self._config.fast_path_min_links:
+                        self._record_attempt(
+                            url, _HTTP_STRATEGY, ok=True, latency=time.monotonic() - t0
+                        )
                         return resp.body, False, http_meta, final_url, False, "http", prelinks
                     thin_body = resp.body
+                    # A thin body escalates to obscura, so HTTP alone did not
+                    # produce a usable result for this host.
+                    self._record_attempt(
+                        url, _HTTP_STRATEGY, ok=False, latency=time.monotonic() - t0
+                    )
                     logger.debug(
                         "HTTP fast-path: only %d links for %s; trying obscura",
                         len(prelinks), url,
                     )
                 elif 400 <= resp.status < 600:
+                    self._record_attempt(
+                        url, _HTTP_STRATEGY, ok=False, latency=time.monotonic() - t0
+                    )
                     logger.info(
                         "HTTP %s for %s; trying obscura", resp.status, url
                     )
+                else:
+                    self._record_attempt(
+                        url, _HTTP_STRATEGY, ok=False, latency=time.monotonic() - t0
+                    )
             except Exception as exc:  # noqa: BLE001
+                self._record_attempt(
+                    url, _HTTP_STRATEGY, ok=False, latency=time.monotonic() - t0
+                )
                 logger.info(
                     "HTTP fetch error for %s: %s; trying obscura", url, exc
                 )
@@ -906,11 +1037,18 @@ class ScrapeService:
             # extracted; it's None when the fetch never produced a 200 body.
             return thin_body, False, http_meta, final_url, False, "http", prelinks
 
+        t0 = time.monotonic()
         try:
             result = await self._obscura.render_html(url)
+            self._record_attempt(
+                url, _OBSCURA_STRATEGY, ok=True, latency=time.monotonic() - t0
+            )
             return result.html, True, http_meta, final_url or url, False, "obscura", None
         except Exception as exc:  # noqa: BLE001
             logger.warning("obscura render failed for %s: %s", url, exc)
+            self._record_attempt(
+                url, _OBSCURA_STRATEGY, ok=False, latency=time.monotonic() - t0
+            )
             return None, True, http_meta, final_url, False, "obscura", None
 
     async def _walk_altpath_chain(
