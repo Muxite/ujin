@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.9.0 — 2026-06-22
 
 ### Added
 - **Learned rate governor** (`ujin/adapt/rate.py`, pure stdlib) —
