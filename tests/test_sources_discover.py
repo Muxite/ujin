@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from conftest import FakeHttp
 from ujin.fetch.http import HttpResponse
-from ujin.sources.discover import _from_html, _from_robots, discover_sources
+from ujin.sources.discover import _from_html, _from_robots, _head_or_get_ok, discover_sources
 
 HOME = "https://site.example.com/"
 ORIGIN = "https://site.example.com"
@@ -80,3 +80,48 @@ def test_from_robots_parsing():
     assert f"{ORIGIN}/sitemap-main.xml" in out
     assert f"{ORIGIN}/sitemap-news.xml" in out
     assert len(out) == 2  # comments/other directives ignored
+
+
+async def test_head_or_get_ok_exception():
+    """Lines 82-83: exception during GET probe returns False."""
+    http = FakeHttp({f"{ORIGIN}/feed": RuntimeError("connection refused")})
+    assert await _head_or_get_ok(http, f"{ORIGIN}/feed") is False
+
+
+async def test_discover_robots_error_continues():
+    """Lines 106-107: robots.txt fetch raising continues, HTML alternates still found."""
+    http = FakeHttp({
+        HOME: _resp(HOME, HOME_HTML),
+        f"{ORIGIN}/robots.txt": RuntimeError("conn reset"),
+    })
+    found = await discover_sources(http, HOME)
+    assert f"{ORIGIN}/feed.xml" in found.rss
+    assert found.sitemap == []
+
+
+_FEED_IN_HTML = (
+    '<html><head>'
+    '<link rel="alternate" type="application/rss+xml" href="/feed">'
+    '</head><body></body></html>'
+)
+_SITEMAP_IN_ROBOTS = "Sitemap: https://site.example.com/sitemap.xml\n"
+
+
+async def test_discover_skips_already_known_rss():
+    """Line 114: well-known feed path found via HTML alternate is not double-added."""
+    http = FakeHttp({
+        HOME: _resp(HOME, _FEED_IN_HTML),
+        f"{ORIGIN}/robots.txt": _resp("r", ""),
+    })
+    found = await discover_sources(http, HOME)
+    assert found.rss.count(f"{ORIGIN}/feed") == 1
+
+
+async def test_discover_skips_already_known_sitemap():
+    """Line 123: well-known sitemap path found via robots.txt is not double-added."""
+    http = FakeHttp({
+        HOME: _resp(HOME, ""),
+        f"{ORIGIN}/robots.txt": _resp("r", _SITEMAP_IN_ROBOTS),
+    })
+    found = await discover_sources(http, HOME)
+    assert found.sitemap.count(f"{ORIGIN}/sitemap.xml") == 1
