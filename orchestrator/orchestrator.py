@@ -29,7 +29,7 @@ from .digest import digest_text, status_text
 from .state import CYCLE_DONE, StateStore
 
 # Tick actions that mean "nothing to do right now" — back off before re-ticking.
-IDLE_ACTIONS = frozenset({"killed", "plan_empty", "plan_skipped_budget"})
+IDLE_ACTIONS = frozenset({"killed", "plan_empty", "plan_skipped_budget", "halted"})
 
 
 def serve(cfg_store_loader, backend, *, idle_sleep=30.0, busy_sleep=0.5,
