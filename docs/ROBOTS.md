@@ -66,6 +66,38 @@ policy = await cache.get("https://example.com")  # re-fetches
 
 `RobotsCache` is **never instantiated** in the default scrape or poll path. Adding a `RobotsCache` call to your code is the only way robots.txt is ever fetched. A no-config deploy behaves identically to before this feature was added.
 
-## Future: learned rate limiting
+## Learned rate limiting
 
-`crawl_delay()` values are intended as future inputs to the `ujin.adapt.concurrency` learned-rate-limit system, so per-host crawl delays declared in robots.txt can automatically shape the token-bucket rate.
+`crawl_delay()` and the persisted host-policy signals now drive a learned, per-host
+rate governor: **`ujin.adapt.LearnedRateLimiter`** (`ujin/adapt/rate.py`). It
+composes `derive_signals(record)` output (`recommended_interval`,
+`concurrency_factor`, `rate_limited`, `cooldown_secs`) — read through the
+`SignalAdvisor` bridge over a `SiteStore` — with an optional robots `Crawl-delay`,
+backed by the existing `AdaptiveInterval` / `AIMDLimiter` / `TokenBucket`
+primitives.
+
+```python
+from ujin.adapt import LearnedRateLimiter, SiteStore
+
+store = SiteStore()                       # durable per-host observations
+robots = await RobotsCache().get("https://example.com")  # any .crawl_delay(host)
+gov = LearnedRateLimiter(store, robots=robots, base_interval=1.0)
+
+async with gov.acquire("example.com"):    # paces the interval + caps concurrency
+    resp = await fetch(...)
+gov.observe("example.com", status=resp.status, latency=elapsed)
+```
+
+- `interval_for(host)` / `concurrency_for(host)` report the current effective
+  cadence and concurrency. The effective interval is **never** below
+  `max(observed Crawl-delay, robots.crawl_delay(host))`.
+- `observe(host, status=..., latency=..., error=...)` feeds each response back into
+  both the store and the in-process controllers, so the governor self-calibrates: a
+  **429 raises the interval and throttles concurrency**; a run of **clean responses
+  relaxes both back toward `base_interval` and full concurrency**. Persisted state
+  warm-starts the controllers on a fresh process.
+- The robots argument is duck-typed — anything exposing `crawl_delay(host) -> float
+  | None` works.
+
+**Opt-in only.** `LearnedRateLimiter` is never instantiated in the default scrape or
+poll path; a no-config deploy behaves identically to before.
