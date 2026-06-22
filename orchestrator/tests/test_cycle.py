@@ -12,7 +12,7 @@ from pathlib import Path
 
 from orchestrator import gitutil, worktree
 from orchestrator.agents import FakeAgentBackend
-from orchestrator.cycle import next_cycle, tick
+from orchestrator.cycle import _dead_foci, _plan_context, next_cycle, tick
 from orchestrator.orchestrator import serve
 from orchestrator.state import StateStore as _StateStore
 from orchestrator.state import (
@@ -42,6 +42,16 @@ def run_until_done(cfg, backend, store, max_ticks=80):
 
 
 # --------------------------------------------------------------------------- #
+def test_dead_foci_surfaced_to_planner(temp_repo: Path):
+    cfg = make_cfg(temp_repo)
+    from orchestrator.state import StateStore
+    # Simulate a focus quarantined in a prior cycle.
+    gitutil.git("branch", "dead/agent/learned-rate-limit-0.8", "master", cwd=temp_repo)
+    assert "dead/agent/learned-rate-limit-0.8" in _dead_foci(cfg)
+    ctx = _plan_context(cfg, StateStore(cfg.state_dir))
+    assert "RE-ATTEMPT" in ctx and "learned-rate-limit" in ctx
+
+
 def test_next_cycle():
     assert next_cycle("0.6") == "0.7"
     assert next_cycle("0.9") == "0.10"

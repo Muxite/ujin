@@ -28,3 +28,7 @@ Output ONLY a JSON array, nothing else. Each element:
 }
 
 Keep each focus small enough to finish, test, and review in a single cycle.
+
+If the context lists PREVIOUSLY-QUARANTINED (dead) foci, prioritize re-attempting any
+that are still on the roadmap — whatever killed them (often a too-high coverage floor)
+may now be resolved. Reuse the same focus slug so the work resumes cleanly.
