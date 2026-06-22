@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Contact Us</title>
+</head>
+<body>
+  <h1>Get in Touch</h1>
+
+  <!-- mailto and tel hrefs -->
+  <p>Email: <a href="mailto:hello@example.com">hello@example.com</a></p>
+  <p>Support: <a href="mailto:support@example.com?subject=Help">support</a></p>
+  <p>Phone: <a href="tel:+15551234567">+1 (555) 123-4567</a></p>
+  <p>Fax: <a href="tel:+15559876543">+1 (555) 987-6543</a></p>
+
+  <!-- inline email and phone in body text -->
+  <p>You can also reach us at info@example.com or call (800) 555-0199.</p>
+
+  <!-- duplicate email — should appear only once -->
+  <p>Questions? Write to <a href="mailto:hello@example.com">us</a>.</p>
+
+  <!-- social / profile links -->
+  <ul>
+    <li><a href="https://twitter.com/example">Twitter</a></li>
+    <li><a href="https://github.com/example">GitHub</a></li>
+    <li><a href="https://linkedin.com/in/example">LinkedIn</a></li>
+    <!-- duplicate social link — should appear only once -->
+    <li><a href="https://twitter.com/example">Twitter (again)</a></li>
+  </ul>
+
+  <!-- rel="me" link to a non-listed domain -->
+  <a rel="me" href="https://mastodon.example/@user">Mastodon</a>
+
+  <!-- internal link — must NOT appear in social links -->
+  <a href="/about">About us</a>
+  <a href="https://example.com/team">Team</a>
+
+  <!-- email in a script tag — must NOT be extracted -->
+  <script>var contact = "noreply@skip.example.com";</script>
+</body>
+</html>

@@ -39,7 +39,7 @@ class ScrapeRequest(BaseModel):
         ),
         examples=[["https://apnews.com", "https://www.reuters.com/world/"]],
     )
-    mode: Literal["links", "article", "auto", "combined", "structured", "tables", "images", "metadata", "feeds"] = Field(
+    mode: Literal["links", "article", "auto", "combined", "structured", "tables", "images", "metadata", "feeds", "contacts"] = Field(
         "links",
         description=(
             "What to extract. `links` returns the headline link-set "
@@ -56,11 +56,13 @@ class ScrapeRequest(BaseModel):
             "`width`/`height`/`title` in the `images` field. `metadata` returns "
             "a flat head-metadata summary (title, description, canonical, "
             "language, OpenGraph/Twitter-card fields, optional author/published/"
-            "modified/favicon) in the `metadata` field."
+            "modified/favicon) in the `metadata` field. `contacts` returns "
+            "email addresses, phone numbers, and social/profile links found "
+            "on the page in the `contacts` field."
         ),
-        examples=["links", "article", "auto", "combined", "structured", "tables", "images", "metadata", "feeds"],
+        examples=["links", "article", "auto", "combined", "structured", "tables", "images", "metadata", "feeds", "contacts"],
     )
-    modes: Optional[list[Literal["links", "article", "auto", "structured", "tables", "images", "metadata", "feeds", "html"]]] = Field(
+    modes: Optional[list[Literal["links", "article", "auto", "structured", "tables", "images", "metadata", "feeds", "contacts", "html"]]] = Field(
         None,
         description=(
             "Opt-in multi-extract: request several extract modes over a single "
@@ -79,7 +81,8 @@ class ScrapeRequest(BaseModel):
         ),
         examples=[["links", "structured"], ["article", "html"],
                   ["tables", "structured"], ["images", "structured"],
-                  ["metadata", "structured"], ["feeds", "metadata"]],
+                  ["metadata", "structured"], ["feeds", "metadata"],
+                  ["contacts", "metadata"]],
     )
     force_refresh: bool = Field(
         False,
@@ -339,13 +342,14 @@ class ScrapeResponse(BaseModel):
             "`<table>` rows in `tables`), `images` (every `<img>` as a "
             "normalized dict in `images`), `metadata` (flat head-metadata "
             "summary in `metadata`), `feeds` (declared `<link rel='alternate'>` "
-            "feed URLs in `feeds`), `html` (raw fetched "
+            "feed URLs in `feeds`), `contacts` (email addresses, phone numbers, "
+            "and social/profile links in `contacts`), `html` (raw fetched "
             "HTML in `html`, multi-extract only), `empty` "
             "(fetch succeeded but extractor found nothing usable), `error` "
             "(batch-only, or a per-mode failure inside `extracts` — wrapping a "
             "single failure)."
         ),
-        examples=["links", "article", "structured", "tables", "images", "metadata", "feeds", "html", "empty", "error"],
+        examples=["links", "article", "structured", "tables", "images", "metadata", "feeds", "contacts", "html", "empty", "error"],
     )
     fingerprint: str = Field(
         ...,
@@ -472,6 +476,23 @@ class ScrapeResponse(BaseModel):
             None,
             [{"href": "https://apnews.com/index.rss", "type": "application/rss+xml",
               "title": "AP News RSS"}],
+        ],
+    )
+    contacts: Optional[dict] = Field(
+        None,
+        description=(
+            "Contact information when `kind == 'contacts'` — a dict with "
+            "`emails` (list of email addresses found in `mailto:` hrefs and "
+            "visible text), `phones` (list of phone numbers found in `tel:` "
+            "hrefs and visible text), and `links` (list of social/profile URLs "
+            "pointing to known platforms or carrying `rel=\"me\"`). All three "
+            "lists are de-duplicated in document order; hrefs in `links` are "
+            "resolved against the page URL. None for every other mode."
+        ),
+        examples=[
+            None,
+            {"emails": ["hello@example.com"], "phones": ["+15551234567"],
+             "links": ["https://twitter.com/example"]},
         ],
     )
     html: Optional[str] = Field(
