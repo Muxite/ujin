@@ -5,6 +5,10 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/projects/ujin
+# systemd user services get a minimal PATH that omits ~/.local/bin (where `claude`
+# lives) and the node/bun dirs. Mirror the interactive PATH so agents launch.
+# (Update the node version dir if you upgrade node.)
+Environment=PATH=%h/.local/bin:%h/.bun/bin:%h/.nvm/versions/node/v22.22.1/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Continuous loop: ticks back-to-back so agents work without idle gaps; the only
 # pauses are gate (test) runs. The KILL file (orchestrator/state/KILL) makes the loop
 # idle without exiting; remove it to resume. To stop entirely: systemctl --user stop.
