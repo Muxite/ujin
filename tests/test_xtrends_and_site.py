@@ -79,6 +79,51 @@ async def test_getdaytrends_parses_table():
     assert [i.tag for i in items] == ["#alpha", "#beta"]
 
 
+async def test_getdaytrends_non200():
+    """Line 98: non-200 response returns empty list."""
+    assert await _from_getdaytrends(
+        _Session({"getdaytrends": _Resp(status=503)}), "us", 5
+    ) == []
+
+
+async def test_getdaytrends_exception():
+    """Lines 100-102: network exception returns empty list."""
+    assert await _from_getdaytrends(
+        _Session({"getdaytrends": RuntimeError("net")}), "us", 5
+    ) == []
+
+
+GETDAYTRENDS_HTML_EDGE = """<html><body>
+<table class="ranking"><tbody>
+  <tr><td>no anchor here</td></tr>
+  <tr><td><a class="trend-link" href="/trend/blank">   </a></td></tr>
+  <tr><td><a class="trend-link" href="/trend/a">#alpha</a></td></tr>
+  <tr><td><a class="trend-link" href="/trend/b">#beta</a></td></tr>
+</tbody></table>
+</body></html>"""
+
+
+async def test_getdaytrends_no_anchor_blank_tag_and_count_cap():
+    """Lines 108, 111, 114: no-anchor skip, blank-text skip, count cap break."""
+    sess = _Session({"getdaytrends": _Resp(text=GETDAYTRENDS_HTML_EDGE)})
+    items = await _from_getdaytrends(sess, "us", 1)
+    assert len(items) == 1
+    assert items[0].tag == "#alpha"
+
+
+async def test_fetch_x_trends_trends24_source(monkeypatch):
+    """Line 48: fetch_x_trends returns source='trends24' when _from_trends24 succeeds."""
+    from ujin.sources.social.x_trends import TrendItem
+
+    async def t24_items(session, region, count):
+        return [TrendItem(rank=1, tag="#hit")]
+
+    monkeypatch.setattr("ujin.sources.social.x_trends._from_trends24", t24_items)
+    result = await fetch_x_trends("us", 5)
+    assert result.source == "trends24"
+    assert result.items[0].tag == "#hit"
+
+
 async def test_fetch_x_trends_chain(monkeypatch):
     async def t24_empty(session, region, count):
         return []
