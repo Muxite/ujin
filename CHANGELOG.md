@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **`PollEngine(respect_robots=True)`** — when `adaptive=True` is also set, automatically builds a `RobotsCache` (injectable `robots_fetcher`, configurable `robots_ttl`, 1 h default) and wires it into the engine's `robots=` hook on `LearnedRateLimiter`: `Crawl-delay` becomes a hard floor on the learned per-host interval, and any URL whose path is disallowed is silently skipped — counted as a poll but not a failure so backoff and penalty logic are unaffected. Off by default; the pre-existing engine/poll path is byte-identical when the flag is unset.
+
 ## 0.10.0 — 2026-06-22
 
 ### Added

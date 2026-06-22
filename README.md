@@ -55,6 +55,13 @@ await engine.run()           # long-running daemon (adaptive + jittered)
 # observed status/latency and survive a restart (default off, in-process store):
 #   PollEngine(adaptive=True)                       # in-memory SiteStore
 #   PollEngine(adaptive=True, site_store_path="state.db")  # persist + warm-restart
+#
+# Opt-in robots.txt auto-respect (requires adaptive=True):
+#   PollEngine(adaptive=True, respect_robots=True)
+#     — builds a RobotsCache; Crawl-delay floors the learned per-host interval;
+#       any URL whose path is Disallow-ed is silently skipped (not a failure).
+#   robots_ttl=3600.0   configures the robots.txt cache TTL (default 1 h)
+#   robots_fetcher=fn   inject an async fetcher for fully-offline tests
 ```
 
 ## Quick start — scraping
