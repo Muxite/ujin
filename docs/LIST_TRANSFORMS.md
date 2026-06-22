@@ -1,6 +1,6 @@
 # List reshaping transforms + the CSV sink
 
-Six additive job kinds for the common "narrow a list, reorder it, fan it out,
+Eight additive job kinds for the common "narrow a list, reorder it, fan it out,
 and write it somewhere tabular" shape — all pure stdlib, all wired through the
 same registry as the existing kinds. They slot anywhere in a job's
 `transforms` / `sinks` arrays (see [JOBS.md](JOBS.md)).
@@ -12,9 +12,11 @@ same registry as the existing kinds. They slot anywhere in a job's
 | `limit`     | transform | keep the first/last N items |
 | `rename`    | transform | rename dict keys (across a list too) |
 | `aggregate` | transform | group a list by a key; compute count/sum/min/max/collect |
+| `unique`    | transform | drop duplicate items from a list by a key or whole-item identity |
+| `fill`      | transform | add default values for missing dotted fields on dicts |
 | `csv`       | sink      | append event rows to a CSV/TSV file |
 
-All six are discoverable at `GET /kinds` and build through `ujin.registry`.
+All eight are discoverable at `GET /kinds` and build through `ujin.registry`.
 
 ## `flatten` — one event per list item
 
@@ -139,6 +141,71 @@ transforms:
           op: sum
       out: by_journal
 ```
+
+## `unique` — drop duplicate items from a list
+
+Where a poll returns a list that may contain repeated entries, `unique` keeps
+only the first occurrence of each item. A non-list target passes through
+unchanged.
+
+```yaml
+transforms:
+  - kind: unique
+    config:
+      path: payload        # default; dotted paths like "payload.items" work too
+      key: id              # dotted path within each item to use as the dedup key;
+                           # omit to compare whole-item values (repr for dicts/lists)
+```
+
+**Examples**:
+
+`payload: [{id:1,v:"a"},{id:2,v:"b"},{id:1,v:"c"}]` with `key: id` →
+`[{id:1,v:"a"},{id:2,v:"b"}]` — second `id:1` dropped, first kept.
+
+`payload: [3, 1, 2, 1, 3]` with no key → `[3, 1, 2]`.
+
+**Notes**:
+- Items missing the `key` field all map to the same `null` key — only the first
+  null-key item is kept.
+- Dotted keys (`meta.id`) are supported.
+- Order within the surviving items is the original insertion order.
+
+## `fill` — add default values for missing fields
+
+Where a pipeline stage may produce dicts that are sometimes missing optional
+fields, `fill` ensures every dict has those fields — without touching values
+that are already set.
+
+```yaml
+transforms:
+  - kind: fill
+    config:
+      path: payload                     # default; dotted paths work too
+      fields:                           # per-path defaults (use this form or paths+value)
+        score: 0
+        meta.source: "unknown"
+```
+
+Or with a shared default for several fields:
+
+```yaml
+transforms:
+  - kind: fill
+    config:
+      paths: [score, rank, weight]
+      value: 0
+```
+
+Applies to a dict payload **or** each dict in a list-of-dicts. Non-dict items
+in a list pass through untouched. A non-dict, non-list payload passes through
+unchanged.
+
+**Notes**:
+- "Missing" means `None` (key absent or explicitly set to `None`). Falsy values
+  (`0`, `False`, `""`) are **not** overwritten.
+- Dotted `fields` keys (`meta.score`) create intermediate dicts as needed.
+- Each filled item gets its own copy of the default so mutations of mutable
+  defaults (e.g. `[]`) don't bleed between items.
 
 ## `csv` sink — append rows to a file
 

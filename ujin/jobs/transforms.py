@@ -1,5 +1,5 @@
 """Built-in transforms: select, regex, template, dedupe, chunk, flatten, sort,
-limit, rename, aggregate.
+limit, rename, aggregate, unique, fill.
 
 Each is a small class exposing ``async apply(event) -> dict | list[dict] | None``
 (the :class:`ujin.jobs.pipeline.Transform` protocol — a list return fans out into
@@ -457,6 +457,89 @@ class AggregateTransform:
         return event
 
 
+class UniqueTransform:
+    """Drop duplicates from a list payload, preserving first-occurrence order.
+
+    config:
+        path: dotted path to the list (default: "payload")
+        key:  dotted path within each item used as the dedup key;
+              when omitted the whole item's value is used as identity
+    """
+
+    def __init__(self, cfg: dict) -> None:
+        self.path: str = cfg.get("path", "payload")
+        self.key: str | None = cfg.get("key")
+
+    async def apply(self, event: dict) -> dict | None:
+        items = dotted_get(event, self.path)
+        if not isinstance(items, list):
+            return event
+
+        seen: set = set()
+        out: list = []
+        for item in items:
+            raw = (
+                dotted_get(item, self.key)
+                if (self.key is not None and isinstance(item, dict))
+                else item
+            )
+            try:
+                k: Any = raw
+                hash(k)
+            except TypeError:
+                k = repr(raw)
+            if k not in seen:
+                seen.add(k)
+                out.append(item)
+
+        event = copy.copy(event)
+        dotted_set(event, self.path, out)
+        return event
+
+
+class FillTransform:
+    """Ensure named dotted fields exist on every dict in the payload.
+
+    config (two forms):
+        fields: {"dotted.path": default, ...}   # per-path defaults
+    OR:
+        paths:  ["dotted.path", ...]             # all share one default value
+        value:  <default>
+
+    path:  dotted path to the target dict or list-of-dicts (default: "payload")
+
+    Existing non-None values are left untouched.  Non-dict items in a list
+    pass through unchanged.  A non-dict, non-list target passes through unchanged.
+    """
+
+    def __init__(self, cfg: dict) -> None:
+        self.path: str = cfg.get("path", "payload")
+        if "fields" in cfg:
+            self._fills: dict[str, Any] = dict(cfg["fields"])
+        else:
+            value: Any = cfg.get("value")
+            self._fills = {p: value for p in cfg.get("paths", [])}
+
+    def _fill_item(self, item: Any) -> Any:
+        if not isinstance(item, dict):
+            return item
+        item = dict(item)
+        for fpath, default in self._fills.items():
+            if dotted_get(item, fpath) is None:
+                dotted_set(item, fpath, copy.copy(default))
+        return item
+
+    async def apply(self, event: dict) -> dict | None:
+        target = dotted_get(event, self.path)
+        if isinstance(target, list):
+            event = copy.copy(event)
+            dotted_set(event, self.path, [self._fill_item(i) for i in target])
+        elif isinstance(target, dict):
+            event = copy.copy(event)
+            dotted_set(event, self.path, self._fill_item(target))
+        return event
+
+
 BUILTIN_TRANSFORMS = {
     "select": SelectTransform,
     "regex": RegexTransform,
@@ -468,6 +551,8 @@ BUILTIN_TRANSFORMS = {
     "limit": LimitTransform,
     "rename": RenameTransform,
     "aggregate": AggregateTransform,
+    "unique": UniqueTransform,
+    "fill": FillTransform,
 }
 
 

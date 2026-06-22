@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **`unique` and `fill` transforms** — `unique` drops duplicate items from a list payload by a dotted `key` (or whole-item identity when key omitted), preserving first-occurrence order and passing non-list payloads through unchanged; `fill` ensures named dotted fields exist on a dict payload or each dict in a list-of-dicts, setting a per-path or shared default without overwriting existing non-None values and passing non-dict items through unchanged. Both are discoverable at `GET /kinds` and documented in `docs/LIST_TRANSFORMS.md`.
+
 ## 0.14.0 — 2026-06-22
 
 ### Added
