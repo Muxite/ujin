@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.13.0 — 2026-06-22
 
 - **perf(bench)**: Added `benchmarks/test_extract_throughput.py` measuring single-process CPU-bound extraction throughput for `extract_headline_links`, `extract_article`, `extract_structured`, and `extract_tables` (events/sec and ms/page); per-poll cost (all four extractors, fetch excluded) recorded in `baseline.json` at ~7.1 ms/page (~140 pages/sec ceiling). New **Multiprocessing (Track 3) gate** section in `docs/PERFORMANCE.md` reports the measured ceiling and explicit go/no-go recommendation: Track 3 is not justified for polling workloads (≈17 pages/sec, 14× below the ceiling) and is only warranted above ~140 pages/sec sustained fetch rate (full extraction) or ~815 pages/sec (links-only mode).
 ### Added
