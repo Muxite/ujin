@@ -27,6 +27,7 @@ or Docker target was renamed or removed, so the three consumer-contract surfaces
 ### Added
 - **Test coverage for social sources and jobs client** — fixture-driven offline unit tests for `mastodon.py` (47%→100%), `twitter.py` (44%→100%), `jobs/client.py` (67%→100%), and `sitemap.py` (79%→100%); total suite coverage rises to 88.9% (floor 85%).
 - **Coverage gap-fill** — offline tests for `poll/__init__` lazy imports, `_nitter.nitter_posts` (success/failure/cooldown paths), and `_syndication.syndication_posts` (JSON/HTML/error paths); closes the 87%→88% gap flagged in prior review.
+- **Scrape subsystem coverage** (`tests/test_cov_scrape.py`) — 49 offline fixture-driven tests raising `app.py` 67%→97%, `build.py` 75%→100%, `config.py` 76%→100%, `host_overrides.py` 78%→97%, `service.py` 83%→97%; total suite coverage rises to 91.4% (floor 89%).
 
 ## 0.5.0 — 2026-06-17
 
