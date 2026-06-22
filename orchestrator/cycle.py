@@ -346,4 +346,24 @@ def _plan_context(cfg: Config, store: StateStore) -> str:
         diff = gitutil.git("diff", "--stat", f"{cfg.base_branch}...{cfg.integration_branch}",
                            cwd=cfg.repo_root, check=False).stdout
         parts.append(f"Last integration diffstat vs {cfg.base_branch}:\n{diff[:4000]}")
+
+    dead = _dead_foci(cfg)
+    if dead:
+        parts.append(
+            "PREVIOUSLY-QUARANTINED (dead) foci — RE-ATTEMPT these this cycle if still "
+            "on the roadmap; the blocker that killed them (e.g. the coverage floor) may "
+            "now be resolved. Branch names encode focus-cycle:\n"
+            + "\n".join(f"- {d}" for d in dead)
+        )
     return "\n\n".join(parts)
+
+
+def _dead_foci(cfg: Config) -> list[str]:
+    """Live ``dead/agent/*`` branches — surfaced to the planner for retry until they
+    either land or the daily GC removes them (7-day window)."""
+    out = gitutil.git(
+        "for-each-ref", "--format=%(refname:short)",
+        f"refs/heads/{cfg.dead_prefix}{cfg.agent_prefix}",
+        cwd=cfg.repo_root, check=False,
+    ).stdout
+    return [ln.strip() for ln in out.splitlines() if ln.strip()]
