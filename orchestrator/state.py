@@ -44,6 +44,9 @@ CYCLE_WORKING = "working"
 CYCLE_INTEGRATING = "integrating"
 CYCLE_RELEASING = "releasing"
 CYCLE_DONE = "done"
+# Drain mode: the current cycle finished and integrated, and we are NOT starting a new
+# one (no new tasks). Flip drain=false to resume from here.
+CYCLE_HALTED = "halted"
 
 
 @dataclass

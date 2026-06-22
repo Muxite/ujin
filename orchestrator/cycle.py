@@ -21,6 +21,7 @@ from .gates import contracts_touched, gate_passed, run_gates
 from .state import (
     ACTIVE_PHASES,
     CYCLE_DONE,
+    CYCLE_HALTED,
     CYCLE_INTEGRATING,
     CYCLE_PLANNING,
     CYCLE_RELEASING,
@@ -76,6 +77,7 @@ def tick(cfg: Config, backend: AgentBackend, store: StateStore | None = None) ->
         CYCLE_INTEGRATING: _do_integrate,
         CYCLE_RELEASING: _do_release,
         CYCLE_DONE: _start_next_cycle,
+        CYCLE_HALTED: _resume_or_idle,
     }
     handler = dispatch.get(phase)
     if handler is None:
@@ -315,7 +317,22 @@ def _do_release(cfg, backend, store, cycle) -> dict[str, Any]:
     return {"action": "released", **result}
 
 
+def _resume_or_idle(cfg, backend, store, cycle) -> dict[str, Any]:
+    """Halted (drain) state: idle until drain is turned off, then roll to next cycle."""
+    if cfg.drain:
+        return {"action": "halted"}
+    return _start_next_cycle(cfg, backend, store, cycle)
+
+
 def _start_next_cycle(cfg, backend, store, cycle) -> dict[str, Any]:
+    # Drain mode: the current cycle is done + merged; stop here, plan nothing new.
+    if cfg.drain:
+        if cycle.get("phase") != CYCLE_HALTED:
+            cycle["phase"] = CYCLE_HALTED
+            store.write_cycle(cycle)
+            store.log_event(cfg.cycle, "drained_halt", note="no new tasks; flip drain=false to resume")
+        return {"action": "halted"}
+
     prev = cfg.cycle
     nxt = next_cycle(prev)
     store.log_event(prev, "cycle_complete")

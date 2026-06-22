@@ -12,6 +12,9 @@ cycle = "0.6"
 autonomy = "full_auto"
 # Push the base branch to origin on release. Keep false until you trust the loop.
 push_on_release = false
+# Drain: finish + merge the current cycle's in-flight foci, then halt with no new
+# tasks. Set back to false to resume planning new cycles.
+drain = true
 
 # Concurrency + retry caps (runaway prevention).
 max_concurrent = 3
@@ -48,4 +51,4 @@ triage = "haiku"
 # per_cycle/per_day throttle how much plan usage the loop consumes before pausing.
 per_agent = 5.0
 per_cycle = 40.0
-per_day = 100.0
+per_day = 2000.0

@@ -137,6 +137,21 @@ def test_coverage_floor_ratchet_is_capped(temp_repo: Path):
     assert store.read_cov_floor(cfg.coverage_floor) == 90.0
 
 
+def test_drain_finishes_cycle_then_halts(temp_repo: Path):
+    import dataclasses
+    from orchestrator.state import CYCLE_HALTED
+    cfg = dataclasses.replace(make_cfg(temp_repo), drain=True)
+    store = StateStore(cfg.state_dir)
+    run_until_done(cfg, FakeAgentBackend(backlog=DEMO), store)
+    # The current cycle still released (in-flight work merged)...
+    assert "released" in {e["event"] for e in store.read_events("0.6")}
+    # ...but draining halts instead of starting cycle 0.7.
+    res = tick(cfg, FakeAgentBackend(backlog=DEMO), store)
+    assert res == {"action": "halted"}
+    assert store.read_cycle()["phase"] == CYCLE_HALTED
+    assert store.read_cycle()["cycle"] == "0.6"  # never advanced
+
+
 def test_serve_respects_kill(temp_repo: Path):
     cfg = make_cfg(temp_repo)
     cfg.state_dir.mkdir(parents=True, exist_ok=True)

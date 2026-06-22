@@ -60,6 +60,9 @@ class Config:
     # Whether a successful release pushes the base branch to origin. Default off so
     # enabling origin writes is an explicit, separate decision.
     push_on_release: bool = False
+    # Drain mode: finish + integrate the current cycle's in-flight foci, then HALT
+    # without planning a new cycle (no new tasks). Flip back to false to resume.
+    drain: bool = False
     max_concurrent: int = 3
     max_build_retries: int = 2
     coverage_floor: float = 85.0
