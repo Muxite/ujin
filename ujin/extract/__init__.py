@@ -11,6 +11,7 @@ from .links import (
     fingerprint_links,
     normalize_url,
 )
+from .images import extract_images
 from .profile import apply_article_profile, apply_link_profile
 from .tables import extract_tables
 
@@ -25,4 +26,5 @@ __all__ = [
     "apply_link_profile",
     "apply_article_profile",
     "extract_tables",
+    "extract_images",
 ]

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.15.0 — 2026-06-22
+
+### Added
+- **HTML image extraction** — new `ujin.extract.extract_images(html, base_url=None) -> list[dict]` parses every `<img>` on a page into one normalized dict with an absolute `src`, an `alt` string, and an optional integer `width`/`height` and `title` when present. Relative srcs are resolved against `base_url`; lazy-load `data-src`/`data-original` and the first `srcset` candidate are honored (a `data:` placeholder is skipped whenever a real src exists for the same image); identical srcs are de-duplicated in document order; and empty/malformed input returns `[]` rather than raising. A new additive `images` scrape mode surfaces it: `POST /scrape {"mode":"images"}` (or `images` inside a `modes` multi-extract list) returns the dicts in the new `ScrapeResponse.images` field — under the `extracts` map for multi-extract requests. Strictly additive — every existing mode, field, and default is byte-for-byte unchanged. Documented in `README.md` and `docs/API.md`.
+
 ## 0.14.0 — 2026-06-22
 
 ### Added

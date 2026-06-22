@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+  <head><title>Image corpus</title></head>
+  <body>
+    <article>
+      <!-- relative src, resolved against base_url -->
+      <img src="/media/lead.jpg" alt="Lead photo" width="1024" height="576" title="On the floor">
+      <!-- absolute src, left untouched -->
+      <img src="https://cdn.example.net/abs/hero.png" alt="Hero">
+      <!-- lazy-load: data: placeholder skipped in favour of data-src -->
+      <img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
+           data-src="/lazy/real.jpg" alt="Lazy">
+      <!-- lazy-load via data-original -->
+      <img data-original="/lazy/original.jpg" alt="Original">
+      <!-- srcset: first candidate wins, descriptor dropped -->
+      <img srcset="/img/small.jpg 480w, /img/large.jpg 1024w" alt="Responsive">
+      <!-- duplicate of the lead image src → de-duplicated -->
+      <img src="/media/lead.jpg" alt="Lead photo again">
+      <!-- no usable source → skipped entirely -->
+      <img alt="missing">
+    </article>
+  </body>
+</html>
