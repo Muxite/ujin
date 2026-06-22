@@ -1,116 +1,97 @@
-"""Site-profile registry — add a marketplace by adding a profile, not code.
+"""Generic, profile-driven marketplace search — the *engine*, not the site specifics.
 
-A profile says how to search a site (URL template), how to read its product cards (CSS
-selector overrides; JSON-LD/OpenGraph need none), the render engine, and a default per-category
-keyterm bank. ``MarketplaceSearchPollable`` samples a few (category, term) pairs per run and
-scrapes each via the generic, site-agnostic :class:`~ujin.poll.amazon.AmazonSearchPollable`.
+ujin ships the site-agnostic machinery (sample a profile's keyterms per poll, scrape each
+via :class:`~ujin.poll.amazon.AmazonSearchPollable`, dedupe, combine). It does NOT ship any
+site profiles. A **profile** is plain data describing how to search and read one site, and is
+supplied by the caller — either inline in the job/source config or from a file/volume mount
+via ``UJIN_MARKETPLACE_PROFILES`` (so the specific scraping config can live in and be owned
+by the consuming program, e.g. wordle-max).
 
-To add a site: add an entry to ``SITE_PROFILES`` and point a workflow at ``marketplace_search``.
+Profile schema (all keys but ``domain``/``search_url`` optional)::
+
+    <name>:
+      domain: ebay.com
+      search_url: "https://www.{domain}/sch/?_nkw={query}"   # {domain},{query} filled in
+      selectors:            # CSS overrides for the product card; null => JSON-LD/OG defaults
+        card: ".s-card, .s-item"
+        id_attr: "data-id"
+        title: [".s-card__title", "h3"]
+        image: [".s-card__image img", "img"]
+        price: [".s-card__price"]
+        link: ["a.su-link", "a[href*='/itm/']"]
+      engine: browser       # auto | http | browser
+      wait_selector: ".s-card"
+      desc_selectors: [...]  # optional, for with_description detail scraping
+      keyterms:             # category -> sample terms (the per-poll sampling bank)
+        Electronics: ["wireless earbuds", "graphics card"]
+
+See ``examples/marketplace_profiles.yaml`` for a ready-to-mount reference set
+(amazon / newegg / ebay / walmart) and ``docs/MARKETPLACE.md`` for the full guide.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import random as _random_mod
+from pathlib import Path
 
 from ujin.poll.amazon import AmazonSearchPollable
 from ujin.poll.base import PollResult, decide_changed, fingerprint
 
 log = logging.getLogger("ujin.poll.marketplace")
 
+#: Env var holding a path to a YAML/JSON profile file (mountable as a volume).
+PROFILES_ENV = "UJIN_MARKETPLACE_PROFILES"
 
-SITE_PROFILES: dict[str, dict] = {
-    "amazon": {
-        "domain": "amazon.com",
-        "search_url": "https://{domain}/s?k={query}",
-        "selectors": None,                       # Amazon defaults live in extract/product.py
-        "engine": "auto",
-        "wait_selector": "div[data-component-type='s-search-result']",
-        "keyterms": {},                          # use amazon_category for Amazon sweeps
-    },
-    # PC components. Newegg is JS-heavy, so default to the browser engine.
-    "newegg": {
-        "domain": "newegg.com",
-        "search_url": "https://www.{domain}/p/pl?d={query}",
-        "selectors": {
-            "card": ".item-cell",
-            "id_attr": "data-id",
-            "title": (".item-title",),
-            "image": (".item-img img", "img"),
-            "price": (".price-current", ".price-current strong"),
-            "link": "a.item-title",
-        },
-        "engine": "browser",
-        "wait_selector": ".item-cell",
-        "keyterms": {
-            "RAM": ["ddr4 ram", "ddr5 ram", "16gb ram", "32gb ram", "ddr5 6000"],
-            "SSD": ["nvme ssd", "sata ssd", "1tb ssd", "2tb nvme ssd", "m.2 ssd"],
-            "HDD": ["internal hard drive", "2tb hard drive", "4tb hard drive", "external hdd"],
-        },
-    },
-    # eBay. The browser engine (with the stealth context) is required: the bare-headless
-    # fingerprint is bounced to an error page, AND the classic `/sch/i.html` search route is
-    # blocked even with stealth — but `/sch/?_nkw=` serves the full result grid (verified
-    # live: 70+ cards). Current SRP uses `.s-card`; legacy `.s-item` selectors are kept as
-    # fallbacks. The id is recovered from each card's `/itm/<digits>` link
-    # (see _HREF_ID_PATTERNS["ebay"]); eBay's first "Shop on eBay" promo card is skipped.
-    "ebay": {
-        "domain": "ebay.com",
-        "search_url": "https://www.{domain}/sch/?_nkw={query}",
-        "selectors": {
-            "card": ".s-card, .s-item",
-            "id_attr": "data-id",            # absent on eBay cards -> id from /itm/ link
-            "title": (".s-card__title", ".s-item__title span", ".s-item__title", "h3"),
-            "image": (".s-card__image img", ".s-item__image-wrapper img", "img"),
-            "price": (".s-card__price", ".s-item__price"),
-            "link": ("a.su-link", "a.s-item__link", "a[href*='/itm/']"),
-        },
-        "engine": "browser",
-        "wait_selector": ".s-card, .s-item",
-        "keyterms": {
-            "Electronics": ["wireless earbuds", "bluetooth speaker", "smart watch",
-                            "gaming mouse", "graphics card", "drone"],
-            "Collectibles": ["pokemon cards", "vintage camera", "lego set",
-                             "action figure", "comic book"],
-            "Apparel": ["leather jacket", "running shoes", "designer handbag",
-                        "mechanical watch", "sunglasses"],
-            "Home": ["espresso machine", "cast iron skillet", "power tool", "vacuum cleaner"],
-        },
-    },
-    # Walmart. Protected by PerimeterX ("Robot or human?") — best effort. Cards carry a
-    # numeric `data-item-id`; the JSON-LD detail path enriches each item page when reachable.
-    "walmart": {
-        "domain": "walmart.com",
-        "search_url": "https://www.{domain}/search?q={query}",
-        "selectors": {
-            "card": "[data-item-id]",
-            "id_attr": "data-item-id",
-            "title": ("[data-automation-id='product-title']", "span.w_iUH7", "a span"),
-            "image": ("img[data-testid='productTileImage']", "img[loading]", "img"),
-            "price": ("[data-automation-id='product-price'] .w_iUH7",
-                      "[data-automation-id='product-price']",
-                      "div[data-automation-id='product-price']"),
-            "link": ("a[link-identifier]", "a[href*='/ip/']"),
-        },
-        "engine": "browser",
-        "wait_selector": "[data-item-id]",
-        "keyterms": {
-            "Grocery": ["coffee", "olive oil", "protein powder", "cereal"],
-            "Home": ["bed sheets", "throw pillow", "storage bin", "area rug"],
-            "Electronics": ["bluetooth speaker", "tablet", "headphones", "smart bulb"],
-            "Toys": ["board game", "building blocks", "remote control car"],
-        },
-    },
-}
+
+def _load_file(path: str | Path) -> dict[str, dict]:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"marketplace profiles file not found: {p}")
+    text = p.read_text()
+    if p.suffix == ".json":
+        data = json.loads(text)
+    else:  # .yaml/.yml or unknown -> YAML (a superset of JSON)
+        import yaml  # from the `yaml` extra
+
+        data = yaml.safe_load(text)
+    if not isinstance(data, dict):
+        raise ValueError(f"profiles file {p} must be a mapping of name -> profile")
+    return data
+
+
+def load_profiles(
+    inline: dict[str, dict] | None = None,
+    path: str | Path | None = None,
+) -> dict[str, dict]:
+    """Resolve site profiles from a file (``path`` arg or ``$UJIN_MARKETPLACE_PROFILES``)
+    and/or an ``inline`` mapping. Inline entries override file entries of the same name.
+    ujin ships no built-in profiles, so the result is empty unless a source is given."""
+    profiles: dict[str, dict] = {}
+    src = path or os.environ.get(PROFILES_ENV)
+    if src:
+        profiles.update(_load_file(src))
+    if inline:
+        profiles.update(inline)
+    return profiles
 
 
 class MarketplaceSearchPollable:
-    """Scrape a sample of a site profile's keyterms per poll -> combined product list."""
+    """Scrape a sample of a site profile's keyterms per poll -> combined product list.
+
+    The profile is resolved at construction from (in precedence order) ``profiles`` inline,
+    then the ``profiles_path`` file, then ``$UJIN_MARKETPLACE_PROFILES``. An unknown profile
+    name is a hard error — ujin no longer ships site specifics.
+    """
 
     def __init__(
         self,
         *,
         profile: str = "amazon",
+        profiles: dict[str, dict] | None = None,
+        profiles_path: str | None = None,
         categories: dict[str, list[str]] | None = None,
         terms_per_poll: int = 3,
         max_results: int = 8,
@@ -122,8 +103,15 @@ class MarketplaceSearchPollable:
         with_description: bool = False,
         key: str | None = None,
     ) -> None:
-        self.profile_name = profile if profile in SITE_PROFILES else "amazon"
-        self.profile = SITE_PROFILES[self.profile_name]
+        available = load_profiles(inline=profiles, path=profiles_path)
+        if profile not in available:
+            raise ValueError(
+                f"unknown marketplace profile {profile!r}; available: "
+                f"{sorted(available) or '(none)'}. Provide profiles inline, via "
+                f"profiles_path, or the {PROFILES_ENV} env var (see docs/MARKETPLACE.md)."
+            )
+        self.profile_name = profile
+        self.profile = available[profile]
         self.categories = categories or self.profile.get("keyterms") or {}
         self.terms_per_poll = max(1, int(terms_per_poll))
         self.max_results = max(1, int(max_results))
