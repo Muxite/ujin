@@ -293,13 +293,24 @@ async def test_gate_await_then_release(store, fake_clock):
 
 
 # --------------------------------------------------------------------------- #
-# Opt-in: the default scrape/poll path does not import the limiter
+# Opt-in: the scrape path and the poll roles never import the limiter, and a
+# default (non-adaptive) PollEngine constructs none.
 # --------------------------------------------------------------------------- #
-def test_default_path_does_not_import_limiter():
-    import ujin.engine as engine
+def test_scrape_and_poll_paths_do_not_import_limiter():
     import ujin.scrape.service as service
     import ujin.poll as poll
 
-    for mod in (engine, service, poll):
+    for mod in (service, poll):
         src = inspect.getsource(mod)
         assert "LearnedRateLimiter" not in src
+
+
+def test_default_engine_constructs_no_limiter():
+    """The engine may *reference* the limiter (opt-in wiring), but a default
+    ``PollEngine()`` builds no SiteStore and no LearnedRateLimiter."""
+    from ujin.engine import PollEngine
+
+    eng = PollEngine()
+    assert eng.adaptive is False
+    assert eng.limiter is None
+    assert eng.site_store is None

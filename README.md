@@ -50,6 +50,11 @@ engine.add(CallablePollable(lambda: db.count(), key="rows"), base=30)
 
 await engine.run()           # long-running daemon (adaptive + jittered)
 # or: results = await engine.sweep()   # one pass — cron-friendly
+
+# Opt-in learned pacing: per-host interval + concurrency that calibrate from
+# observed status/latency and survive a restart (default off, in-process store):
+#   PollEngine(adaptive=True)                       # in-memory SiteStore
+#   PollEngine(adaptive=True, site_store_path="state.db")  # persist + warm-restart
 ```
 
 ## Quick start — scraping
@@ -65,6 +70,10 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
 # multi-extract: fetch once, get several modes back under `extracts`
 curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
   -d '{"url":"https://apnews.com","modes":["links","structured","html"]}'
+
+# multi-URL batch: scrape many URLs concurrently, one result per URL under `batch`
+curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
+  -d '{"urls":["https://apnews.com","https://www.reuters.com/world/"],"mode":"links"}'
 ```
 
 ## Watch a page for change
@@ -175,7 +184,8 @@ Three FastAPI apps — run any combination. Full reference in
   `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.
 - **Scrape** (`:8901`): `POST /scrape` (modes `links|article|auto|combined|structured`,
   or a `modes` list for multi-extract — several modes over one fetch, results in
-  `extracts`), `/scrape:batch`, `/feed`, `/sitemap`, `/discover`, `/capabilities`,
+  `extracts`; or a `urls` list to scrape many URLs concurrently — one result per
+  URL in `batch`), `/scrape:batch`, `/feed`, `/sitemap`, `/discover`, `/capabilities`,
   `/metrics`, plus optional `/social/*` and `/trends/*`.
 
 Set `UJIN_API_KEY` to require `X-API-Key`/Bearer auth on every service
@@ -217,10 +227,19 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
   change). Each returns a `PollResult` with a content fingerprint.
 - **Adaptive** (`ujin.adapt`): `AdaptiveInterval` grows/shrinks the interval;
   full/equal/decorrelated **jitter**; `TokenBucket` + AIMD smoothing;
-  exponential `Backoff` (honors `Retry-After`) and a `CircuitBreaker`. Opt-in
-  `LearnedRateLimiter` composes the persisted `SiteStore` signals + robots
+  exponential `Backoff` (honors `Retry-After`) and a `CircuitBreaker`.
+  `SiteStore`/`HostRecord` persist per-host observations to SQLite; the pure
+  `derive_signals(record)` function converts a record into a frozen `PolicySignals`
+  struct (recommended interval, health score, cooldown, concurrency factor);
+  `SignalAdvisor` is a read-only bridge from store to signals. `StrategyFeedback`
+  tracks per-host `(backend, render_mode)` outcome rates for adaptive backend
+  selection. `LearnedRateLimiter` composes all of the above + `ujin.robots`
   `Crawl-delay` into a self-calibrating per-host rate/concurrency governor
-  (see [docs/ROBOTS.md](docs/ROBOTS.md)).
+  (see [docs/ADAPTIVE.md](docs/ADAPTIVE.md) and [docs/ROBOTS.md](docs/ROBOTS.md)).
+  Pass `PollEngine(adaptive=True)` to wire it into the live engine: each host is
+  paced by its learned interval and a 429 durably backs it off
+  (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). Off by default — a no-config
+  engine is byte-identical to before.
 - **Scrape** (`ujin.scrape`): `ScrapeService` orchestrates fetch + cache +
   extract + the fallback chain; a pluggable `Scorer` ranks links and paces polls
   (`NullScorer` by default, `ujin.trends.BreakingScorer` for news-trading).
@@ -258,7 +277,8 @@ make cov           # the CI gate: full offline suite + coverage (fail_under=85)
 make bench         # benchmarks vs the committed baseline
 ```
 
-Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [TESTING](docs/TESTING.md) ·
+Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [ADAPTIVE](docs/ADAPTIVE.md) ·
+[ROBOTS](docs/ROBOTS.md) · [TESTING](docs/TESTING.md) ·
 [BACKENDS](docs/BACKENDS.md) (aiohttp vs obscura vs playwright vs selenium) ·
 [PERFORMANCE](docs/PERFORMANCE.md) · [CONSUMERS](docs/CONSUMERS.md)
 (downstream submodule contracts) · [API](docs/API.md) · [JOBS](docs/JOBS.md) ·

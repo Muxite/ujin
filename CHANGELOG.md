@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.10.0 — 2026-06-22
+
+### Added
+- **Opt-in adaptive poll engine** — `PollEngine(adaptive=True)` wires the
+  already-shipped Track-1 governor into the live loop: the engine constructs a
+  per-process `SiteStore` + `LearnedRateLimiter`, paces each poll through the
+  async `acquire(host)` gate, floors every target's next interval by
+  `interval_for(host)`, and persists each response via `observe(...)` so a 429
+  durably backs the host off and a restarted process resumes calibrated. The
+  store path (`site_store_path`, default in-process `:memory:`),
+  `adaptive_base_interval`, and an optional `robots` adapter are configurable, and
+  the limiter shares the engine's injectable `clock`/`sleep`. Strictly additive
+  and off by default — with the flag unset no `SiteStore`/limiter is built, no
+  extra I/O happens, and the poll path is byte-identical to before.
+- **scrape multi-URL batch**: `POST /scrape` now accepts an optional `urls` list so one request scrapes several URLs and returns one result per URL under a new additive `batch` list (in request order); the top-level fields mirror the first URL's result. The URLs are fetched concurrently with a bounded concurrency cap — `ScrapeService.scrape_urls()` fans out the per-URL `scrape()` calls under an `asyncio.Semaphore` (`batch_max_concurrency`, env `BATCH_MAX_CONCURRENCY`, default 8) and isolates per-URL failures as `kind='error'` entries so one failing URL never sinks the batch. The batch form is single-`mode` (the `modes` multi-extract map and `page_size`/`cursor` pagination are not applied per URL) and is bounded by `batch_max_items` (default 64). Omitting `urls` keeps the classic single-`url` behaviour byte-for-byte unchanged.
+- **docs/ADAPTIVE.md** — end-to-end user guide for the durable adaptive-learning
+  subsystem (SiteStore/HostRecord, derive_signals/PolicySignals/SignalAdvisor,
+  StrategyFeedback/StrategyOutcome, LearnedRateLimiter, ujin.robots); surfaces all
+  adaptive symbols in the README.md feature list.
+
 ## 0.9.0 — 2026-06-22
 
 ### Added
