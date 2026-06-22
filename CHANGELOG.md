@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.18.0 — 2026-06-22
 
 ### Added
 - **Coverage hardening (extract + browser)** — 116 new offline, deterministic unit tests close coverage gaps in `ujin/extract/links.py` (80% → 95%), `ujin/extract/article.py` (78% → 100%), `ujin/extract/structured.py` (82% → 99%), and `ujin/poll/browser.py` (80% → 100%); total suite coverage moves from ~90% to 97%. Tests target error/edge/fallback branches: `_is_boilerplate_text` variants, slop URL/text filters, photo-credit patterns, excluded-element detection (role/aria-label/class), `normalize_url` edge cases, `extract_article_lenient`, `_run_trafilatura` ImportError and generic-exception paths, JSON-LD/OpenGraph/microdata edge inputs, and all four `BrowserPollable` extract modes plus lazy-fetcher init.
