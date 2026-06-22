@@ -1,0 +1,13 @@
+[Unit]
+Description=ujin orchestrator GC (prune worktrees + old dead/* branches)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/ujin
+ExecStart=/usr/bin/python3 -m orchestrator.gc
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=default.target

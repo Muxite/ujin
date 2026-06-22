@@ -1,0 +1,18 @@
+[Unit]
+Description=ujin autonomous dev orchestrator (advance one cycle tick)
+# Each invocation advances the state machine one bounded step and exits.
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/ujin
+# Fast kill switch: if state/KILL exists, ExecStart never runs. The Python tick also
+# checks it, so this is belt-and-suspenders (a "failed" start here just means skipped).
+ExecStartPre=/usr/bin/test ! -f %h/projects/ujin/orchestrator/state/KILL
+ExecStart=/usr/bin/python3 -m orchestrator.orchestrator --tick
+StandardOutput=journal
+StandardError=journal
+# A tick does at most max_concurrent expensive agent ops; cap generously.
+TimeoutStartSec=6h
+
+[Install]
+WantedBy=default.target

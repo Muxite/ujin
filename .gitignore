@@ -16,3 +16,5 @@ ujin-jobs.db
 .idea/
 # Claude Code worktrees / local state
 .claude/
+# Orchestrator runtime state (cycle/backlog/verdicts/logs) — never tracked.
+orchestrator/state/
