@@ -1,5 +1,5 @@
 """Built-in transforms: select, regex, template, dedupe, chunk, flatten, sort,
-limit, rename, aggregate, unique, fill.
+limit, rename, aggregate, unique, fill, filter.
 
 Each is a small class exposing ``async apply(event) -> dict | list[dict] | None``
 (the :class:`ujin.jobs.pipeline.Transform` protocol — a list return fans out into
@@ -540,6 +540,86 @@ class FillTransform:
         return event
 
 
+class FilterTransform:
+    """Keep or drop items from a list payload (or a whole dict event) by a predicate.
+
+    config:
+      path:     dotted path to operate on (default "payload")
+      key:      dotted path within each item to evaluate (required)
+      op:       eq | ne | gt | lt | ge | le | in | contains | exists | regex | matches
+                (default "exists")
+      value:    RHS for the comparison (not used by "exists")
+      negate:   invert — keep items that do NOT satisfy the predicate (default false)
+      exclude:  alias for negate
+
+    On a list payload: keep only items satisfying the predicate, preserving order.
+    On a dict payload: return the event if the predicate holds, else None (drop).
+    Non-list / non-dict payloads and empty inputs pass through unchanged without
+    raising.
+    """
+
+    _OPS = frozenset((
+        "eq", "ne", "gt", "lt", "ge", "le",
+        "in", "contains", "exists", "regex", "matches",
+    ))
+
+    def __init__(self, cfg: dict) -> None:
+        self.path = cfg.get("path", "payload")
+        if "key" not in cfg:
+            raise ValueError("filter transform requires 'key'")
+        self.key = cfg["key"]
+        self.op = cfg.get("op", "exists")
+        if self.op not in self._OPS:
+            raise ValueError(f"filter: unknown op {self.op!r}")
+        self.value = cfg.get("value")
+        self.negate = bool(cfg.get("negate", cfg.get("exclude", False)))
+        self._pattern = (
+            re.compile(self.value)
+            if self.op in ("regex", "matches") and self.value is not None
+            else None
+        )
+
+    def _test(self, item: Any) -> bool:
+        val = dotted_get(item, self.key) if isinstance(item, dict) else item
+        op = self.op
+        rhs = self.value
+        try:
+            if op == "exists":
+                result = val is not None
+            elif op == "eq":
+                result = val == rhs
+            elif op == "ne":
+                result = val != rhs
+            elif op == "gt":
+                result = val is not None and val > rhs
+            elif op == "lt":
+                result = val is not None and val < rhs
+            elif op == "ge":
+                result = val is not None and val >= rhs
+            elif op == "le":
+                result = val is not None and val <= rhs
+            elif op == "in":
+                result = val in rhs
+            elif op == "contains":
+                result = rhs in val
+            else:  # regex / matches
+                result = bool(self._pattern.search(str(val))) if val is not None else False
+        except (TypeError, ValueError):
+            result = False
+        return result ^ self.negate
+
+    async def apply(self, event: dict) -> "dict | None":
+        target = dotted_get(event, self.path)
+        if isinstance(target, list):
+            kept = [it for it in target if self._test(it)]
+            event = copy.copy(event)
+            dotted_set(event, self.path, kept)
+            return event
+        if isinstance(target, dict):
+            return event if self._test(target) else None
+        return event  # non-list/non-dict pass through unchanged
+
+
 BUILTIN_TRANSFORMS = {
     "select": SelectTransform,
     "regex": RegexTransform,
@@ -553,6 +633,7 @@ BUILTIN_TRANSFORMS = {
     "aggregate": AggregateTransform,
     "unique": UniqueTransform,
     "fill": FillTransform,
+    "filter": FilterTransform,
 }
 
 

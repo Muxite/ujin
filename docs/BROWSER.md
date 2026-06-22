@@ -30,7 +30,8 @@ POST /jobs
     "engine": "playwright",          // or "selenium"
     "actions": [ ...recipe... ],
     "extract": "links",              // links | article | structured | raw
-    "results_selector": ".item"      // optional: harvest items directly (raw)
+    "results_selector": ".item",     // optional: harvest items directly (raw)
+    "headless": true                 // default true; set false for headed debugging
   } },
   "transforms": [ { "kind": "chunk", "config": { "size": 25 } } ],
   "sinks": [ ... ]

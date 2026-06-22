@@ -39,7 +39,7 @@ class ScrapeRequest(BaseModel):
         ),
         examples=[["https://apnews.com", "https://www.reuters.com/world/"]],
     )
-    mode: Literal["links", "article", "auto", "combined", "structured", "tables", "images", "metadata"] = Field(
+    mode: Literal["links", "article", "auto", "combined", "structured", "tables", "images", "metadata", "feeds"] = Field(
         "links",
         description=(
             "What to extract. `links` returns the headline link-set "
@@ -58,9 +58,9 @@ class ScrapeRequest(BaseModel):
             "language, OpenGraph/Twitter-card fields, optional author/published/"
             "modified/favicon) in the `metadata` field."
         ),
-        examples=["links", "article", "auto", "combined", "structured", "tables", "images", "metadata"],
+        examples=["links", "article", "auto", "combined", "structured", "tables", "images", "metadata", "feeds"],
     )
-    modes: Optional[list[Literal["links", "article", "auto", "structured", "tables", "images", "metadata", "html"]]] = Field(
+    modes: Optional[list[Literal["links", "article", "auto", "structured", "tables", "images", "metadata", "feeds", "html"]]] = Field(
         None,
         description=(
             "Opt-in multi-extract: request several extract modes over a single "
@@ -79,7 +79,7 @@ class ScrapeRequest(BaseModel):
         ),
         examples=[["links", "structured"], ["article", "html"],
                   ["tables", "structured"], ["images", "structured"],
-                  ["metadata", "structured"]],
+                  ["metadata", "structured"], ["feeds", "metadata"]],
     )
     force_refresh: bool = Field(
         False,
@@ -338,13 +338,14 @@ class ScrapeResponse(BaseModel):
             "(JSON-LD/OpenGraph/microdata in `structured`), `tables` (HTML "
             "`<table>` rows in `tables`), `images` (every `<img>` as a "
             "normalized dict in `images`), `metadata` (flat head-metadata "
-            "summary in `metadata`), `html` (raw fetched "
+            "summary in `metadata`), `feeds` (declared `<link rel='alternate'>` "
+            "feed URLs in `feeds`), `html` (raw fetched "
             "HTML in `html`, multi-extract only), `empty` "
             "(fetch succeeded but extractor found nothing usable), `error` "
             "(batch-only, or a per-mode failure inside `extracts` — wrapping a "
             "single failure)."
         ),
-        examples=["links", "article", "structured", "tables", "images", "metadata", "html", "empty", "error"],
+        examples=["links", "article", "structured", "tables", "images", "metadata", "feeds", "html", "empty", "error"],
     )
     fingerprint: str = Field(
         ...,
@@ -454,6 +455,23 @@ class ScrapeResponse(BaseModel):
              "canonical": "https://apnews.com/article/abc123", "language": "en",
              "og": {"title": "Senate passes bill",
                     "image": "https://apnews.com/img/lead.jpg"}},
+        ],
+    )
+    feeds: Optional[list[dict]] = Field(
+        None,
+        description=(
+            "Declared feed URLs when `kind == 'feeds'` — one dict per "
+            "`<link rel='alternate'>` in the page head whose `type` is a "
+            "recognized feed MIME type (`application/rss+xml`, "
+            "`application/atom+xml`, `application/feed+json`). Each dict has "
+            "an absolute `href` (resolved against the page URL), a lowercase "
+            "`type`, and an optional `title` when present. Identical hrefs are "
+            "de-duplicated in document order. None for every other mode."
+        ),
+        examples=[
+            None,
+            [{"href": "https://apnews.com/index.rss", "type": "application/rss+xml",
+              "title": "AP News RSS"}],
         ],
     )
     html: Optional[str] = Field(

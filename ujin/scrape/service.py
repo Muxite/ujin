@@ -75,6 +75,7 @@ class ScrapeResult:
     tables: Optional[list] = None  # row dicts, populated by the "tables" mode
     images: Optional[list] = None  # img dicts, populated by the "images" mode
     metadata: Optional[dict] = None  # head summary, populated by the "metadata" mode
+    feeds: Optional[list] = None  # feed dicts, populated by the "feeds" mode
     html: Optional[str] = None  # raw body, only populated by the multi-extract "html" mode
     final_url: Optional[str] = None
     note: Optional[str] = None
@@ -367,6 +368,32 @@ class ScrapeService:
                 metadata=metadata, final_url=final_url,
             )
 
+        if mode == "feeds":
+            from ..extract.feeds import extract_feeds
+
+            feeds = extract_feeds(html, base_url=final_url or url)
+            fingerprint = _fingerprint(feeds)
+            entry = CachedEntry(
+                url=url,
+                fingerprint=fingerprint,
+                payload={"feeds": feeds},
+                fetched_at=time.monotonic(),
+                etag=http_meta.get("etag"),
+                last_modified=http_meta.get("last_modified"),
+            )
+            self._cache.put(cache_key, entry)
+            self._metrics.record(
+                url, success=True,
+                latency_ms=(time.monotonic() - loop_start) * 1000,
+                used_renderer=used_renderer, strategy=fetch_strategy,
+            )
+            return ScrapeResult(
+                url=url, kind="feeds", fingerprint=fingerprint,
+                fetched_at=time.time(), cached=False, age_secs=0.0,
+                used_renderer=used_renderer, strategy_used=fetch_strategy,
+                feeds=feeds, final_url=final_url,
+            )
+
         if mode == "article":
             override = self._overrides.lookup(url)
             article = None
@@ -565,6 +592,17 @@ class ScrapeService:
                 used_renderer, fetch_strategy, final_url,
             )
             res.metadata = metadata
+            return res
+
+        if mode == "feeds":
+            from ..extract.feeds import extract_feeds
+
+            feeds = extract_feeds(html, base_url=base_url)
+            res = self._mode_result(
+                url, "feeds", _fingerprint(feeds),
+                used_renderer, fetch_strategy, final_url,
+            )
+            res.feeds = feeds
             return res
 
         if mode == "article":
@@ -1350,6 +1388,18 @@ class ScrapeService:
                 cached=True, age_secs=entry.age_secs,
                 used_renderer=False, strategy_used="cache",
                 metadata=metadata,
+                note=note,
+            )
+        if mode == "feeds":
+            feeds = entry.payload.get("feeds")
+            return ScrapeResult(
+                url=entry.url,
+                kind="feeds",
+                fingerprint=entry.fingerprint,
+                fetched_at=time.time(),
+                cached=True, age_secs=entry.age_secs,
+                used_renderer=False, strategy_used="cache",
+                feeds=feeds,
                 note=note,
             )
         return ScrapeResult(
