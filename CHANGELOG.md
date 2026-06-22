@@ -29,6 +29,7 @@ or Docker target was renamed or removed, so the three consumer-contract surfaces
 ## [Unreleased]
 
 ### Added
+- **tests**: Added `tests/test_jobs_coverage.py` (38 offline tests) raising per-file coverage of `ujin/jobs/app.py` to 99%, `ujin/jobs/pipeline.py` to 100%, `ujin/jobs/cron.py` to 100%, and `ujin/jobs/transforms.py` to 98%, lifting TOTAL coverage from ~91% to 95%.
 - **Host policy signals** (`ujin/adapt/signals.py`, pure stdlib) — a deterministic
   interpretation layer over `SiteStore`/`HostRecord`. `derive_signals(record, *,
   base_interval=0.0, robots_crawl_delay=None)` returns a frozen `PolicySignals`
