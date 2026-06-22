@@ -10,6 +10,14 @@ aggregate load is smooth, not spiky.
 Determinism: ``clock`` (time source), ``rng`` (jitter), and ``sleep`` are
 injectable, so the scheduler can be driven by a fake clock in tests with no real
 waiting.
+
+Opt-in learned pacing: pass ``adaptive=True`` to compose a per-process
+:class:`~ujin.adapt.site_store.SiteStore` +
+:class:`~ujin.adapt.rate.LearnedRateLimiter`. The engine then paces each host
+through ``acquire(host)``, floors each target's next interval by
+``interval_for(host)``, and feeds every response back via ``observe(...)`` so a
+restarted process resumes calibrated. With the flag unset the path is
+byte-identical to before — no store, no limiter, no extra I/O.
 """
 from __future__ import annotations
 
@@ -18,12 +26,16 @@ import logging
 import random
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable
+from urllib.parse import urlparse
 
 from ujin.adapt import jitter as _jitter
 from ujin.adapt.backoff import Backoff, CircuitBreaker
 from ujin.adapt.concurrency import TokenBucket
 from ujin.adapt.interval import AdaptiveInterval
+from ujin.adapt.rate import LearnedRateLimiter
+from ujin.adapt.site_store import SiteStore
 from ujin.poll.base import Pollable, PollResult
 
 log = logging.getLogger("ujin.engine")
@@ -46,6 +58,7 @@ class Target:
     polls: int = 0
     changes: int = 0
     last_delay: float = 0.0
+    host: str = ""  # learned-rate-limit identity; only set when adaptive is on
 
     @property
     def key(self) -> str:
@@ -61,6 +74,11 @@ class PollEngine:
         rng: random.Random | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        adaptive: bool = False,
+        site_store: SiteStore | None = None,
+        site_store_path: str | Path = ":memory:",
+        adaptive_base_interval: float = 0.0,
+        robots: Any | None = None,
     ) -> None:
         self.targets: dict[str, Target] = {}
         self.bucket = token_bucket or TokenBucket(rate=10.0, burst=10.0, clock=clock)
@@ -69,6 +87,27 @@ class PollEngine:
         self.clock = clock
         self.sleep = sleep
         self._started_at = clock()
+
+        # -- opt-in adaptive subsystem (Track-1) ------------------------------- #
+        # Off by default: no SiteStore, no LearnedRateLimiter, no extra I/O — the
+        # poll path stays byte-identical to a non-adaptive engine. When enabled,
+        # the engine constructs a per-process SiteStore + LearnedRateLimiter and
+        # paces/observes each host's polls through them.
+        self.adaptive = bool(adaptive)
+        self.site_store: SiteStore | None = None
+        self.limiter: LearnedRateLimiter | None = None
+        if self.adaptive:
+            self.site_store = site_store or SiteStore(
+                path=site_store_path, clock=clock
+            )
+            self.limiter = LearnedRateLimiter(
+                self.site_store,
+                robots=robots,
+                base_interval=adaptive_base_interval,
+                clock=clock,
+                sleep=sleep,
+                max_concurrency=max_concurrency,
+            )
 
     # -- registration ------------------------------------------------------ #
     def add(
@@ -89,10 +128,25 @@ class PollEngine:
         )
         target = Target(pollable=pollable, interval=interval, jitter=jitter,
                         on_change=on_change)
+        if self.limiter is not None:
+            target.host = self._host_for(pollable)
         # phase jitter: start out-of-phase so targets never fire together
         target.next_due = self.clock() + _jitter.phase(base, rng=self.rng)
         self.targets[pollable.key] = target
         return target
+
+    @staticmethod
+    def _host_for(pollable: Pollable) -> str:
+        """Per-host identity for the learned rate limiter / site store.
+
+        Prefers a pollable's ``url`` (the web roles) and falls back to its
+        ``key``; the host component is extracted so every target on the same
+        origin shares one learned cadence. A non-URL key (e.g. a callable's
+        label) is used verbatim as its own host.
+        """
+        raw = getattr(pollable, "url", None) or getattr(pollable, "key", "") or ""
+        parsed = urlparse(raw if "://" in raw else f"//{raw}")
+        return parsed.hostname or raw
 
     # -- one poll ---------------------------------------------------------- #
     async def poll_once(self, target: Target) -> PollResult:
@@ -102,12 +156,20 @@ class PollEngine:
         scheduler to drive ``once``/``cron``/run-now jobs through the same global
         :class:`TokenBucket` + concurrency gate.
         """
+        gate = None
         async with self.sem:
             await self.bucket.acquire(sleep=self.sleep)
+            if self.limiter is not None:
+                # Per-host learned pacing + concurrency cap (opt-in). On a
+                # never-throttled host this is a no-op (effective interval 0).
+                gate = await self.limiter.acquire(target.host)
             try:
                 result = await target.pollable.poll(target.prev)
             except Exception as exc:  # noqa: BLE001
                 result = PollResult.failure(f"{type(exc).__name__}: {exc}")
+            finally:
+                if gate is not None:
+                    await gate.release()
 
         target.polls += 1
         now = self.clock()
@@ -127,6 +189,18 @@ class PollEngine:
                 target.changes += 1
                 await self._fire(target, result)
             target.prev = result
+
+        if self.limiter is not None:
+            # Feed the response back so the limiter self-calibrates and the
+            # SiteStore stays warm for a restart, then floor the next interval by
+            # the learned per-host cadence (a 429 raises it above a clean host).
+            self.limiter.observe(
+                target.host,
+                status=result.status,
+                latency=(result.latency_ms / 1000.0) if result.latency_ms else None,
+                error=not result.ok,
+            )
+            delay = max(delay, self.limiter.interval_for(target.host))
 
         target.last_delay = delay
         target.next_due = now + delay

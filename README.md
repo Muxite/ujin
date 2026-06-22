@@ -50,6 +50,11 @@ engine.add(CallablePollable(lambda: db.count(), key="rows"), base=30)
 
 await engine.run()           # long-running daemon (adaptive + jittered)
 # or: results = await engine.sweep()   # one pass — cron-friendly
+
+# Opt-in learned pacing: per-host interval + concurrency that calibrate from
+# observed status/latency and survive a restart (default off, in-process store):
+#   PollEngine(adaptive=True)                       # in-memory SiteStore
+#   PollEngine(adaptive=True, site_store_path="state.db")  # persist + warm-restart
 ```
 
 ## Quick start — scraping
@@ -220,7 +225,10 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
   exponential `Backoff` (honors `Retry-After`) and a `CircuitBreaker`. Opt-in
   `LearnedRateLimiter` composes the persisted `SiteStore` signals + robots
   `Crawl-delay` into a self-calibrating per-host rate/concurrency governor
-  (see [docs/ROBOTS.md](docs/ROBOTS.md)).
+  (see [docs/ROBOTS.md](docs/ROBOTS.md)). Pass `PollEngine(adaptive=True)` to wire
+  it into the live engine: each host is paced by its learned interval and a 429
+  durably backs it off (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). Off by
+  default — a no-config engine is byte-identical to before.
 - **Scrape** (`ujin.scrape`): `ScrapeService` orchestrates fetch + cache +
   extract + the fallback chain; a pluggable `Scorer` ranks links and paces polls
   (`NullScorer` by default, `ujin.trends.BreakingScorer` for news-trading).

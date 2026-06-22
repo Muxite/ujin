@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Opt-in adaptive poll engine** — `PollEngine(adaptive=True)` wires the
+  already-shipped Track-1 governor into the live loop: the engine constructs a
+  per-process `SiteStore` + `LearnedRateLimiter`, paces each poll through the
+  async `acquire(host)` gate, floors every target's next interval by
+  `interval_for(host)`, and persists each response via `observe(...)` so a 429
+  durably backs the host off and a restarted process resumes calibrated. The
+  store path (`site_store_path`, default in-process `:memory:`),
+  `adaptive_base_interval`, and an optional `robots` adapter are configurable, and
+  the limiter shares the engine's injectable `clock`/`sleep`. Strictly additive
+  and off by default — with the flag unset no `SiteStore`/limiter is built, no
+  extra I/O happens, and the poll path is byte-identical to before.
+
 ## 0.9.0 — 2026-06-22
 
 ### Added
