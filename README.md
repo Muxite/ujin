@@ -61,6 +61,10 @@ from ujin.scrape.service import ScrapeService
 ```bash
 curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
   -d '{"url":"https://apnews.com","mode":"links"}'
+
+# multi-extract: fetch once, get several modes back under `extracts`
+curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
+  -d '{"url":"https://apnews.com","modes":["links","structured","html"]}'
 ```
 
 ## Watch a page for change
@@ -169,9 +173,10 @@ Three FastAPI apps — run any combination. Full reference in
 - **Poller control** (`:8900`): `GET /health /metrics /targets`,
   `GET /content?key=…` (reuse the body ujin last fetched), `POST /targets`,
   `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.
-- **Scrape** (`:8901`): `POST /scrape` (modes `links|article|auto|combined|structured`),
-  `/scrape:batch`, `/feed`, `/sitemap`, `/discover`, `/capabilities`, `/metrics`,
-  plus optional `/social/*` and `/trends/*`.
+- **Scrape** (`:8901`): `POST /scrape` (modes `links|article|auto|combined|structured`,
+  or a `modes` list for multi-extract — several modes over one fetch, results in
+  `extracts`), `/scrape:batch`, `/feed`, `/sitemap`, `/discover`, `/capabilities`,
+  `/metrics`, plus optional `/social/*` and `/trends/*`.
 
 Set `UJIN_API_KEY` to require `X-API-Key`/Bearer auth on every service
 (`/health` stays open).

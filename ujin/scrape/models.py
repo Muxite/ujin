@@ -29,6 +29,22 @@ class ScrapeRequest(BaseModel):
         ),
         examples=["links", "article", "auto", "combined", "structured"],
     )
+    modes: Optional[list[Literal["links", "article", "auto", "structured", "html"]]] = Field(
+        None,
+        description=(
+            "Opt-in multi-extract: request several extract modes over a single "
+            "fetch and receive a result per mode. When set (non-empty), the page "
+            "is fetched once and each mode is extracted from the same body; the "
+            "per-mode `ScrapeResponse`s come back under the `extracts` mapping "
+            "(keyed by mode), and the top-level fields mirror the first listed "
+            "mode. A failure in one mode is isolated as a `kind='error'` entry "
+            "and never fails the others. Omit (the default) for the classic "
+            "single-`mode` behaviour, which is byte-for-byte unchanged. The "
+            "`combined` strategy is single-`mode` only and not accepted here; "
+            "`html` returns the raw fetched HTML in `html`."
+        ),
+        examples=[["links", "structured"], ["article", "html"]],
+    )
     force_refresh: bool = Field(
         False,
         description=(
@@ -283,11 +299,13 @@ class ScrapeResponse(BaseModel):
         description=(
             "What this response contains. One of: `links` (headline link-set "
             "in `links`), `article` (parsed body in `article`), `structured` "
-            "(JSON-LD/OpenGraph/microdata in `structured`), `empty` "
+            "(JSON-LD/OpenGraph/microdata in `structured`), `html` (raw fetched "
+            "HTML in `html`, multi-extract only), `empty` "
             "(fetch succeeded but extractor found nothing usable), `error` "
-            "(batch-only — wrapping a per-item failure)."
+            "(batch-only, or a per-mode failure inside `extracts` — wrapping a "
+            "single failure)."
         ),
-        examples=["links", "article", "structured", "empty", "error"],
+        examples=["links", "article", "structured", "html", "empty", "error"],
     )
     fingerprint: str = Field(
         ...,
@@ -354,6 +372,14 @@ class ScrapeResponse(BaseModel):
         ),
         examples=[None],
     )
+    html: Optional[str] = Field(
+        None,
+        description=(
+            "Raw fetched HTML when `kind == 'html'` (multi-extract `html` mode). "
+            "None for every other mode."
+        ),
+        examples=[None],
+    )
     final_url: Optional[str] = Field(
         None,
         description="Post-redirect URL when different from the request URL.",
@@ -402,6 +428,20 @@ class ScrapeResponse(BaseModel):
             "is the last page or pagination was not requested."
         ),
     )
+    extracts: Optional[dict[str, "ScrapeResponse"]] = Field(
+        None,
+        description=(
+            "Multi-extract result map (only when the request set `modes`). Keyed "
+            "by mode name, each value is a full `ScrapeResponse` for that mode "
+            "(its own `extracts` is always null — no nesting). A mode that failed "
+            "appears here with `kind='error'`. None for classic single-`mode` "
+            "requests."
+        ),
+    )
+
+
+# Resolve the self-reference in `extracts` (forward-ref under deferred annotations).
+ScrapeResponse.model_rebuild()
 
 
 class BatchScrapeRequest(BaseModel):

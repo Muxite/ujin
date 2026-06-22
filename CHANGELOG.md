@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **scrape multi-extract**: `POST /scrape` now accepts an optional `modes` list (`links`/`article`/`auto`/`structured`/`html`) so one request fetches the page once and returns a result per mode under a new additive `extracts` map (keyed by mode); the top-level fields mirror the first listed mode. Backed by `ScrapeService.scrape_multi()`, which runs each mode over the already-fetched body and isolates per-mode failures as `kind='error'` entries so one failing mode never sinks the others. The `html` mode returns the raw fetched HTML in the new `html` response field. Omitting `modes` keeps the classic single-`mode` behaviour byte-for-byte unchanged.
+
 ## 0.7.0 — 2026-06-22
 
 - **tests**: Added `tests/test_cov_trends_mcp.py` (35 offline tests) raising per-file coverage of `ujin/trends/corroboration.py`, `ujin/trends/scorer.py`, `ujin/mcp/server.py`, `ujin/service.py`, and `ujin/sources/social/x.py` to ≥99% each, lifting TOTAL coverage from ~89% to 90.7%.

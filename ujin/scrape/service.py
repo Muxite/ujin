@@ -60,6 +60,7 @@ class ScrapeResult:
     links: list[NormalizedLink] = field(default_factory=list)
     article: Optional["Article"] = None
     structured: Optional[dict] = None
+    html: Optional[str] = None  # raw body, only populated by the multi-extract "html" mode
     final_url: Optional[str] = None
     note: Optional[str] = None
     next_poll_hint_secs: Optional[float] = None
@@ -303,6 +304,166 @@ class ScrapeService:
             url, mode, links, fetch_strategy, loop_start, cache_key,
             http_meta=http_meta, final_url=final_url,
             used_renderer=used_renderer,
+        )
+
+    # ── multi-extract (one fetch, several modes) ───────────────────────────
+
+    async def scrape_multi(
+        self,
+        url: str,
+        *,
+        modes: list[str],
+        force_refresh: bool = False,
+        render: str = "auto",
+        actions: Optional[list[dict]] = None,
+    ) -> "dict[str, ScrapeResult]":
+        """Fetch ``url`` once and run several extract modes over the same body.
+
+        Returns a mapping ``mode -> ScrapeResult`` (order-preserving, duplicates
+        dropped). Each mode is extracted independently from the already-fetched
+        content, so the work the single-mode :meth:`scrape` does per ``mode=`` is
+        reused without re-fetching. A failure in one mode is isolated as a
+        ``kind='error'`` result for that mode and never aborts the others.
+
+        Multi-extract is an opt-in, fresh-fetch surface: it adds no per-mode
+        caching, cooldown short-circuiting, or altpath fallbacks — those stay on
+        the classic single-``mode`` path, which is unchanged.
+        """
+        loop_start = time.monotonic()
+
+        ordered: list[str] = []
+        for m in modes:
+            if m not in ordered:
+                ordered.append(m)
+        if not ordered:
+            ordered = ["links"]
+
+        override = self._overrides.lookup(url)
+        # An explicit render= pins the strategy; "auto" keeps the per-host one.
+        effective_strategy = render if render != "auto" else override.strategy
+
+        # One fetch for every mode. Use the non-links fetch path so we get the
+        # full body back (the links fast-path would early-extract and discard a
+        # thin body); each mode then extracts from this same body.
+        try:
+            html, used_renderer, _http_meta, final_url, _not_modified, fetch_strategy, _prelinks = (
+                await self._fetch_html(
+                    url,
+                    mode="article",
+                    cached=None,
+                    force_refresh=force_refresh,
+                    override_strategy=effective_strategy,
+                    actions=actions,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — a fetch blow-up still yields per-mode errors
+            self._metrics.record(
+                url, success=False,
+                latency_ms=(time.monotonic() - loop_start) * 1000,
+                strategy="multi",
+            )
+            return {m: self._error_result(url, exc) for m in ordered}
+
+        results: dict[str, ScrapeResult] = {}
+        for mode in ordered:
+            try:
+                results[mode] = self._extract_mode(
+                    mode, html, url=url, final_url=final_url,
+                    used_renderer=used_renderer, fetch_strategy=fetch_strategy,
+                )
+            except Exception as exc:  # noqa: BLE001 — isolate per-mode failure
+                results[mode] = self._error_result(url, exc)
+
+        if html is not None:
+            self._policy.record_success(url)
+        self._metrics.record(
+            url, success=html is not None,
+            latency_ms=(time.monotonic() - loop_start) * 1000,
+            used_renderer=used_renderer, strategy="multi",
+        )
+        return results
+
+    def _extract_mode(
+        self,
+        mode: str,
+        html: Optional[str],
+        *,
+        url: str,
+        final_url: Optional[str],
+        used_renderer: bool,
+        fetch_strategy: str,
+    ) -> ScrapeResult:
+        """Run a single extract mode over an already-fetched body.
+
+        Mirrors the per-mode extraction :meth:`scrape` does (minus the
+        cache/altpath machinery) so a multi-extract entry matches what the same
+        ``mode=`` would return on the same body.
+        """
+        base_url = final_url or url
+        if html is None:
+            return self._mode_result(url, "empty", "", used_renderer, fetch_strategy, final_url)
+
+        if mode == "html":
+            fingerprint = hashlib.sha256(html.encode("utf-8")).hexdigest()
+            res = self._mode_result(url, "html", fingerprint, used_renderer, fetch_strategy, final_url)
+            res.html = html
+            return res
+
+        if mode == "structured":
+            from ..extract.structured import extract_structured
+
+            structured = extract_structured(html)
+            res = self._mode_result(
+                url, "structured", _fingerprint(structured),
+                used_renderer, fetch_strategy, final_url,
+            )
+            res.structured = structured
+            return res
+
+        if mode == "article":
+            override = self._overrides.lookup(url)
+            article = None
+            if override.extract.has_article_profile:
+                article = apply_article_profile(html, base_url, override.extract.article)
+            if article is None:
+                article = extract_article(html, url=base_url)
+            if article is None:
+                return self._mode_result(url, "empty", "", used_renderer, fetch_strategy, final_url)
+            fingerprint = hashlib.sha256(article.text.encode("utf-8")).hexdigest()
+            res = self._mode_result(url, "article", fingerprint, used_renderer, fetch_strategy, final_url)
+            res.article = article
+            return res
+
+        # links / auto — extract, filter, and score exactly as the links path does.
+        links = self._extract_with_profile(html, base_url=base_url)
+        links = self._filter_named_links(base_url, links)
+        self._scorer.score_links(links, base_url=base_url)
+        res = self._mode_result(
+            url, "links" if links else "empty", fingerprint_links(links),
+            used_renderer, fetch_strategy, final_url,
+        )
+        res.links = links
+        return res
+
+    @staticmethod
+    def _mode_result(
+        url: str, kind: str, fingerprint: str,
+        used_renderer: bool, strategy: str, final_url: Optional[str],
+    ) -> ScrapeResult:
+        return ScrapeResult(
+            url=url, kind=kind, fingerprint=fingerprint,
+            fetched_at=time.time(), cached=False, age_secs=0.0,
+            used_renderer=used_renderer, strategy_used=strategy,
+            final_url=final_url,
+        )
+
+    @staticmethod
+    def _error_result(url: str, exc: Exception) -> ScrapeResult:
+        return ScrapeResult(
+            url=url, kind="error", fingerprint="",
+            fetched_at=time.time(), cached=False, age_secs=0.0,
+            used_renderer=False, strategy_used="error",
+            note=f"{type(exc).__name__}: {exc}",
         )
 
     # ── combined RSS+HTML strategy ─────────────────────────────────────────

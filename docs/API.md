@@ -47,7 +47,8 @@ Request (`ScrapeRequest`):
 | field | type | default | notes |
 |---|---|---|---|
 | `url` | string | — | absolute URL (required) |
-| `mode` | `links`\|`article`\|`auto`\|`combined`\|`structured` | `links` | what to extract |
+| `mode` | `links`\|`article`\|`auto`\|`combined`\|`structured` | `links` | what to extract (single mode) |
+| `modes` | list of `links`\|`article`\|`auto`\|`structured`\|`html` | `null` | multi-extract: several modes over one fetch (see below) |
 | `force_refresh` | bool | `false` | bypass cache + revalidation |
 | `enrich_html_top_n` | int 0–20 | `0` | (combined) fan out article fetches for the top-N HTML-only links |
 
@@ -57,24 +58,50 @@ Modes:
 - **auto** — pick based on page shape.
 - **combined** — RSS + HTML in parallel, merged by canonical URL.
 - **structured** — JSON-LD / OpenGraph / microdata, returned in `structured`.
+- **html** — the raw fetched HTML, returned in `html` (multi-extract only).
 
 Response (`ScrapeResponse`, abridged):
 ```json
-{ "url": "...", "kind": "links|article|structured|empty|error",
+{ "url": "...", "kind": "links|article|structured|html|empty|error",
   "fingerprint": "sha256…", "fetched_at": 1780000000.0,
   "cached": false, "age_secs": 0.0, "used_renderer": false,
   "strategy_used": "http|http_304|obscura|browser|sitemap_news|rss|combined|cache",
   "links": [ { "url": "...", "text": "...", "summary": "", "published": "",
                "seen_in": ["rss","html"], "tier": "generic",
                "breaking_score": 0.0, "score_components": {} } ],
-  "article": null, "structured": null, "final_url": null, "note": null,
-  "next_poll_hint_secs": 60.0, "max_breaking_score": 0.0 }
+  "article": null, "structured": null, "html": null, "final_url": null, "note": null,
+  "next_poll_hint_secs": 60.0, "max_breaking_score": 0.0, "extracts": null }
 ```
 - `fingerprint` is a stable SHA-256 over the normalized payload — compare across
   calls to detect real change.
 - `next_poll_hint_secs` is the scraper's suggested wait before re-polling.
 - `tier` / `breaking_score` / `score_components` are neutral unless a
   `BreakingScorer` is wired (see [Scoring](#scoring--news-trading-mode)).
+
+#### Multi-extract (`modes`)
+Set `modes` (instead of, or alongside, `mode`) to run several extract modes over
+a **single fetch** and get a result per mode:
+```json
+{ "url": "https://apnews.com", "modes": ["links", "structured", "html"] }
+```
+The page is fetched once, each mode is extracted from that same body, and the
+per-mode `ScrapeResponse`s come back under a new `extracts` map keyed by mode:
+```json
+{ "kind": "links", "links": [ … ],            // top-level mirrors the FIRST listed mode
+  "extracts": {
+    "links":      { "kind": "links",      "links": [ … ], "extracts": null },
+    "structured": { "kind": "structured", "structured": { … }, "extracts": null },
+    "html":       { "kind": "html",       "html": "<html>…", "extracts": null } } }
+```
+- Each mode is isolated: a mode whose extractor fails appears with
+  `kind:"error"` (its message in `note`) and never fails the others.
+- Duplicate modes are de-duplicated, first-seen order preserved; the top-level
+  fields echo the first listed mode so single-mode clients still see a coherent
+  body. Nested `extracts` are always `null` (one level only).
+- `combined` is single-`mode` only (it runs its own RSS+HTML fan-out) and is not
+  accepted in `modes`. Pagination (`page_size`/`cursor`) is ignored for
+  multi-extract requests. Omitting `modes` leaves the single-`mode` path and its
+  response byte-for-byte unchanged.
 
 Errors: `400` empty url · `429` host on cooldown with no cache (`HostCooldown`) ·
 `502` fetch/render/parse failure.
