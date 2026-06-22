@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head><title>Tables corpus</title></head>
+<body>
+  <h1>Reports</h1>
+
+  <!-- 1. Plain header table (thead <th> + tbody rows). -->
+  <table id="people">
+    <thead>
+      <tr><th>Name</th><th>Role</th><th>City</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Alice</td><td>Engineer</td><td>Berlin</td></tr>
+      <tr><td>Bob</td><td>Designer</td><td>Lisbon</td></tr>
+      <tr><td>Carol</td><td>PM</td><td>Oslo</td></tr>
+    </tbody>
+  </table>
+
+  <!-- 2. colspan + rowspan: a quarter spans two region rows, a footer spans
+       two label columns. -->
+  <table id="sales">
+    <tr><th>Quarter</th><th>Region</th><th>Units</th></tr>
+    <tr><td rowspan="2">Q1</td><td>North</td><td>10</td></tr>
+    <tr><td>South</td><td>20</td></tr>
+    <tr><td colspan="2">Total</td><td>30</td></tr>
+  </table>
+
+  <!-- 3. Header-less table (no <th> anywhere) → positional keys. -->
+  <table id="grid">
+    <tr><td>r1c0</td><td>r1c1</td></tr>
+    <tr><td>r2c0</td><td>r2c1</td></tr>
+  </table>
+
+  <!-- 4. A cell with inline markup wrapping a nested table. The outer cell text
+       must NOT absorb the nested rows; the nested table is parsed separately. -->
+  <table id="outer">
+    <tr><th>Section</th><th>Detail</th></tr>
+    <tr>
+      <td>Overview</td>
+      <td>see <a href="/x">notes</a> below
+        <table id="inner">
+          <tr><th>Key</th><th>Value</th></tr>
+          <tr><td>depth</td><td>nested</td></tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

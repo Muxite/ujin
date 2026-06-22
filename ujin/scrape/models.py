@@ -39,7 +39,7 @@ class ScrapeRequest(BaseModel):
         ),
         examples=[["https://apnews.com", "https://www.reuters.com/world/"]],
     )
-    mode: Literal["links", "article", "auto", "combined", "structured"] = Field(
+    mode: Literal["links", "article", "auto", "combined", "structured", "tables"] = Field(
         "links",
         description=(
             "What to extract. `links` returns the headline link-set "
@@ -49,11 +49,13 @@ class ScrapeRequest(BaseModel):
             "the link sets by canonical URL; RSS contributes title + summary "
             "+ published, HTML contributes any breaking links not yet in "
             "the feed. `structured` returns JSON-LD / OpenGraph / microdata "
-            "from the page in the `structured` field."
+            "from the page in the `structured` field. `tables` returns every "
+            "HTML `<table>` parsed into header-keyed row dicts in the `tables` "
+            "field."
         ),
-        examples=["links", "article", "auto", "combined", "structured"],
+        examples=["links", "article", "auto", "combined", "structured", "tables"],
     )
-    modes: Optional[list[Literal["links", "article", "auto", "structured", "html"]]] = Field(
+    modes: Optional[list[Literal["links", "article", "auto", "structured", "tables", "html"]]] = Field(
         None,
         description=(
             "Opt-in multi-extract: request several extract modes over a single "
@@ -65,9 +67,10 @@ class ScrapeRequest(BaseModel):
             "and never fails the others. Omit (the default) for the classic "
             "single-`mode` behaviour, which is byte-for-byte unchanged. The "
             "`combined` strategy is single-`mode` only and not accepted here; "
-            "`html` returns the raw fetched HTML in `html`."
+            "`html` returns the raw fetched HTML in `html`; `tables` returns "
+            "every HTML `<table>` as header-keyed row dicts in `tables`."
         ),
-        examples=[["links", "structured"], ["article", "html"]],
+        examples=[["links", "structured"], ["article", "html"], ["tables", "structured"]],
     )
     force_refresh: bool = Field(
         False,
@@ -323,13 +326,14 @@ class ScrapeResponse(BaseModel):
         description=(
             "What this response contains. One of: `links` (headline link-set "
             "in `links`), `article` (parsed body in `article`), `structured` "
-            "(JSON-LD/OpenGraph/microdata in `structured`), `html` (raw fetched "
+            "(JSON-LD/OpenGraph/microdata in `structured`), `tables` (HTML "
+            "`<table>` rows in `tables`), `html` (raw fetched "
             "HTML in `html`, multi-extract only), `empty` "
             "(fetch succeeded but extractor found nothing usable), `error` "
             "(batch-only, or a per-mode failure inside `extracts` — wrapping a "
             "single failure)."
         ),
-        examples=["links", "article", "structured", "html", "empty", "error"],
+        examples=["links", "article", "structured", "tables", "html", "empty", "error"],
     )
     fingerprint: str = Field(
         ...,
@@ -395,6 +399,16 @@ class ScrapeResponse(BaseModel):
             "`kind == 'structured'`. None otherwise."
         ),
         examples=[None],
+    )
+    tables: Optional[list[dict]] = Field(
+        None,
+        description=(
+            "HTML tables parsed into row dicts when `kind == 'tables'` — one "
+            "dict per data row across every `<table>` on the page, keyed by the "
+            "table's header cells (or positional `col0`/`col1`… for header-less "
+            "tables). None for every other mode."
+        ),
+        examples=[None, [{"Name": "Alice", "Age": "30"}]],
     )
     html: Optional[str] = Field(
         None,
