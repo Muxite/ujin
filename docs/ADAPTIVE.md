@@ -334,6 +334,50 @@ if fb.is_penalized(host, strategy, rec):
 `is_penalized` is **pure (no I/O)**: it calls `derive_signals(record)` internally
 and returns `True` when `rate_limited` is set or `health < 0.5`.
 
+### The closed loop in the scrape service
+
+`ScrapeService` can drive `StrategyFeedback` end-to-end so the `auto` backend
+order *learns* per host. It is **opt-in and off by default** — a no-config scrape
+is byte-identical to before. Two `ScrapeConfig` fields (and their env aliases)
+turn it on:
+
+| Config field | Env var | Default | Meaning |
+|--------------|---------|---------|---------|
+| `learn_strategy` | `UJIN_LEARN_STRATEGY` | `False` | Enable the feedback loop |
+| `strategy_db` | `UJIN_STRATEGY_DB` | `""` | SQLite path; empty → ephemeral `:memory:` |
+
+```python
+from ujin.scrape.config import ScrapeConfig
+from ujin.scrape.build import build_scrape_service
+
+# Durable across restarts: outcomes accumulate in strategy.db.
+cfg = ScrapeConfig(learn_strategy=True, strategy_db="strategy.db")
+service, comps, aclose = await build_scrape_service(cfg)
+# ... service.scrape(...) ...
+await aclose()        # checkpoints + closes the StrategyFeedback store
+```
+
+When enabled, `build_scrape_components` constructs one shared `StrategyFeedback`
+(durable at `strategy_db`, or `:memory:` when unset — what the tests use) and
+`close_scrape_components` (called by the returned `aclose`) checkpoints and closes
+it on shutdown. The service then:
+
+- **Biases the first attempt.** On the `auto` path (no `render=`/per-host pin), it
+  consults `recommend(host)` and tries that proven-best `(backend, render_mode)`
+  first — e.g. a host that has been winning on `obscura` skips the HTTP attempt.
+- **Skips penalized strategies.** If an injected `SiteStore` reports the host as
+  rate-limited or unhealthy, `is_penalized()` suppresses the bias and the request
+  falls back to the normal auto order. Biasing **never raises**: a broken or
+  closed store degrades to the default order.
+- **Records every outcome.** After each fetch attempt — HTTP, obscura, or browser,
+  success *or* failure — it calls `record(host, strategy, ok=..., latency=...)`,
+  so the next request's recommendation reflects what just happened. The loop
+  closes: an HTTP `403` that escalates to obscura records `http=fail` + `obscura=ok`,
+  and the *next* scrape biases obscura first.
+
+With `learn_strategy=False` (the default) none of this runs: nothing is recorded
+and the auto order is untouched.
+
 ---
 
 ## ujin.robots — robots.txt policy

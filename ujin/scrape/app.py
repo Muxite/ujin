@@ -133,6 +133,7 @@ def create_scrape_app(
             overrides=overrides,
             scorer=the_scorer,
             browser=comps.browser,
+            strategy_feedback=comps.strategy,
         )
 
         app.state.config = cfg

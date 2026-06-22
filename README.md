@@ -233,7 +233,7 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
   struct (recommended interval, health score, cooldown, concurrency factor);
   `SignalAdvisor` is a read-only bridge from store to signals. `StrategyFeedback`
   tracks per-host `(backend, render_mode)` outcome rates for adaptive backend
-  selection. `LearnedRateLimiter` composes all of the above + `ujin.robots`
+  selection (opt-in in the scrape service, below). `LearnedRateLimiter` composes all of the above + `ujin.robots`
   `Crawl-delay` into a self-calibrating per-host rate/concurrency governor
   (see [docs/ADAPTIVE.md](docs/ADAPTIVE.md) and [docs/ROBOTS.md](docs/ROBOTS.md)).
   Pass `PollEngine(adaptive=True)` to wire it into the live engine: each host is
@@ -243,6 +243,13 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
 - **Scrape** (`ujin.scrape`): `ScrapeService` orchestrates fetch + cache +
   extract + the fallback chain; a pluggable `Scorer` ranks links and paces polls
   (`NullScorer` by default, `ujin.trends.BreakingScorer` for news-trading).
+  Set `ScrapeConfig(learn_strategy=True, strategy_db="strategy.db")` (env:
+  `UJIN_LEARN_STRATEGY` / `UJIN_STRATEGY_DB`) to close the adaptive loop: the
+  `auto` backend path biases its first `(backend, render_mode)` toward each host's
+  proven-best `StrategyFeedback.recommend()`, skips `is_penalized()` strategies,
+  and records every fetch outcome to a durable store (empty `strategy_db` →
+  ephemeral `:memory:`). Off by default — a no-config scrape is byte-identical
+  to before (see [docs/ADAPTIVE.md](docs/ADAPTIVE.md)).
 - **Toolkit**: `ujin.fetch` (HTTP + obscura + altpath), `ujin.extract`
   (article/links/profile/**structured** JSON-LD·OG·microdata), `ujin.cache`
   (LRU+TTL, SQLite, per-host cooldown), `ujin.sources` (RSS/sitemap/discover +
