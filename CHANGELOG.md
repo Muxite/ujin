@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **tests**: Added `tests/test_cov_trends_mcp.py` (35 offline tests) raising per-file coverage of `ujin/trends/corroboration.py`, `ujin/trends/scorer.py`, `ujin/mcp/server.py`, `ujin/service.py`, and `ujin/sources/social/x.py` to ≥99% each, lifting TOTAL coverage from ~89% to 90.7%.
+
 ## 0.6.0
 
 Additive only — no public symbol, CLI subcommand, flag, env var, response field,
