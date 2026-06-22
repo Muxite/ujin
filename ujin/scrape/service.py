@@ -45,7 +45,7 @@ from .scoring import NullScorer, Scorer
 logger = logging.getLogger("ujin.scrape.service")
 
 
-Mode = Literal["links", "article", "auto", "combined", "structured", "tables", "images"]
+Mode = Literal["links", "article", "auto", "combined", "structured", "tables", "images", "metadata"]
 
 # Canonical (backend, render_mode) pairs recorded into StrategyFeedback, one per
 # fetch backend the service can drive. These match the tuples the adapt layer's
@@ -74,6 +74,7 @@ class ScrapeResult:
     structured: Optional[dict] = None
     tables: Optional[list] = None  # row dicts, populated by the "tables" mode
     images: Optional[list] = None  # img dicts, populated by the "images" mode
+    metadata: Optional[dict] = None  # head summary, populated by the "metadata" mode
     html: Optional[str] = None  # raw body, only populated by the multi-extract "html" mode
     final_url: Optional[str] = None
     note: Optional[str] = None
@@ -340,6 +341,32 @@ class ScrapeService:
                 images=images, final_url=final_url,
             )
 
+        if mode == "metadata":
+            from ..extract.metadata import extract_metadata
+
+            metadata = extract_metadata(html, base_url=final_url or url)
+            fingerprint = _fingerprint(metadata)
+            entry = CachedEntry(
+                url=url,
+                fingerprint=fingerprint,
+                payload={"metadata": metadata},
+                fetched_at=time.monotonic(),
+                etag=http_meta.get("etag"),
+                last_modified=http_meta.get("last_modified"),
+            )
+            self._cache.put(cache_key, entry)
+            self._metrics.record(
+                url, success=True,
+                latency_ms=(time.monotonic() - loop_start) * 1000,
+                used_renderer=used_renderer, strategy=fetch_strategy,
+            )
+            return ScrapeResult(
+                url=url, kind="metadata", fingerprint=fingerprint,
+                fetched_at=time.time(), cached=False, age_secs=0.0,
+                used_renderer=used_renderer, strategy_used=fetch_strategy,
+                metadata=metadata, final_url=final_url,
+            )
+
         if mode == "article":
             override = self._overrides.lookup(url)
             article = None
@@ -527,6 +554,17 @@ class ScrapeService:
                 used_renderer, fetch_strategy, final_url,
             )
             res.images = images
+            return res
+
+        if mode == "metadata":
+            from ..extract.metadata import extract_metadata
+
+            metadata = extract_metadata(html, base_url=base_url)
+            res = self._mode_result(
+                url, "metadata", _fingerprint(metadata),
+                used_renderer, fetch_strategy, final_url,
+            )
+            res.metadata = metadata
             return res
 
         if mode == "article":
@@ -1300,6 +1338,18 @@ class ScrapeService:
                 cached=True, age_secs=entry.age_secs,
                 used_renderer=False, strategy_used="cache",
                 images=images,
+                note=note,
+            )
+        if mode == "metadata":
+            metadata = entry.payload.get("metadata")
+            return ScrapeResult(
+                url=entry.url,
+                kind="metadata" if metadata else "empty",
+                fingerprint=entry.fingerprint,
+                fetched_at=time.time(),
+                cached=True, age_secs=entry.age_secs,
+                used_renderer=False, strategy_used="cache",
+                metadata=metadata,
                 note=note,
             )
         return ScrapeResult(
