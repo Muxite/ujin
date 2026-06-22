@@ -7,6 +7,7 @@ same registry as the existing kinds. They slot anywhere in a job's
 
 | kind | category | one-liner |
 |------|----------|-----------|
+| `filter`    | transform | keep or drop list items (or whole dict events) by a predicate |
 | `flatten`   | transform | fan a list payload into one event per item |
 | `sort`      | transform | sort a list payload by a dotted key |
 | `limit`     | transform | keep the first/last N items |
@@ -16,7 +17,84 @@ same registry as the existing kinds. They slot anywhere in a job's
 | `fill`      | transform | add default values for missing dotted fields on dicts |
 | `csv`       | sink      | append event rows to a CSV/TSV file |
 
-All eight are discoverable at `GET /kinds` and build through `ujin.registry`.
+All nine are discoverable at `GET /kinds` and build through `ujin.registry`.
+
+## `filter` — keep or drop items by a predicate
+
+Where a source yields a list that contains a mix of wanted and unwanted items,
+`filter` keeps only the items (or dict events) that satisfy a configurable
+predicate — without requiring a custom plugin. A non-list / non-dict payload
+passes through unchanged; an empty list produces an empty list (no error).
+
+```yaml
+transforms:
+  - kind: filter
+    config:
+      path: payload        # default; dotted paths like "payload.items" work too
+      key: score           # dotted path within each item to evaluate (required)
+      op: gt               # eq | ne | gt | lt | ge | le | in | contains | exists | regex | matches
+      value: 0             # RHS for the comparison (not needed for "exists")
+      negate: false        # true → keep items that do NOT satisfy the predicate
+```
+
+**Operators**:
+
+| op | keeps items where… |
+|----|-------------------|
+| `eq` | `key == value` |
+| `ne` | `key != value` |
+| `gt` | `key > value` |
+| `lt` | `key < value` |
+| `ge` | `key >= value` |
+| `le` | `key <= value` |
+| `in` | `key` is a member of `value` (list/set) |
+| `contains` | `key` contains `value` (string substring or collection) |
+| `exists` | `key` is present and not `null` (default when `op` omitted) |
+| `regex` / `matches` | `key` matches the `value` regular expression |
+
+**Examples**:
+
+Keep only items with a positive score:
+
+```yaml
+- kind: filter
+  config: { key: score, op: gt, value: 0 }
+```
+
+`payload: [{score:5},{score:-1},{score:0}]` → `[{score:5}]`
+
+Keep only items whose `tag` is one of a set (membership test):
+
+```yaml
+- kind: filter
+  config: { key: tag, op: in, value: [python, rust] }
+```
+
+Drop items where `status` equals `"inactive"` (negate):
+
+```yaml
+- kind: filter
+  config: { key: status, op: eq, value: inactive, negate: true }
+```
+
+Keep only items whose `url` starts with `https` (regex):
+
+```yaml
+- kind: filter
+  config: { key: url, op: regex, value: "^https://" }
+```
+
+**Dict payloads**: when the target at `path` is a dict (not a list), `filter`
+tests the predicate against the dict itself — returning the event unchanged if it
+passes, or `null` (dropping the event) if it fails. This lets a single-item
+event be gated on a field without wrapping it in a list.
+
+**Notes**:
+- Items missing the `key` field are treated as `null`; comparisons that would
+  raise `TypeError` (e.g. comparing `null > 0`) quietly exclude the item.
+- `negate: true` and `exclude: true` are equivalent aliases.
+- Dotted `key` paths (`meta.score`, `payload.0.id`) are supported.
+- The `exclude` alias is provided for readability ("exclude inactive items").
 
 ## `flatten` — one event per list item
 
