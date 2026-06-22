@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.0 — 2026-06-22
+
+- **tests**: Added `tests/test_cov_trends_mcp.py` (35 offline tests) raising per-file coverage of `ujin/trends/corroboration.py`, `ujin/trends/scorer.py`, `ujin/mcp/server.py`, `ujin/service.py`, and `ujin/sources/social/x.py` to ≥99% each, lifting TOTAL coverage from ~89% to 90.7%.
+
 ## 0.6.0
 
 Additive only — no public symbol, CLI subcommand, flag, env var, response field,
@@ -25,8 +29,23 @@ or Docker target was renamed or removed, so the three consumer-contract surfaces
 ## [Unreleased]
 
 ### Added
+- **Host policy signals** (`ujin/adapt/signals.py`, pure stdlib) — a deterministic
+  interpretation layer over `SiteStore`/`HostRecord`. `derive_signals(record, *,
+  base_interval=0.0, robots_crawl_delay=None)` returns a frozen `PolicySignals`
+  (`recommended_interval`, `cooldown_secs`, `should_cooldown`, `rate_limited`,
+  `concurrency_factor`, `health` in 0..1) doing no I/O: a 429 (counter or last
+  status) sets `rate_limited`, raises the interval and throttles concurrency;
+  `recommended_interval` is never below `max(crawl_delay, robots_crawl_delay)`;
+  rising `error_count` lowers `health` and raises `cooldown_secs`; a clean record
+  is pristine (`health==1.0`, no cooldown, full concurrency, interval ==
+  `base_interval`). `SignalAdvisor(store)` is a read-only bridge whose
+  `for_host(host)` reads `store.get(host)` and derives signals without mutating it.
+  Exported additively from `ujin.adapt`; opt-in and wired into nothing by default —
+  it is the input layer the planned strategy-feedback and learned-rate-limit units
+  consume.
 - **Test coverage for social sources and jobs client** — fixture-driven offline unit tests for `mastodon.py` (47%→100%), `twitter.py` (44%→100%), `jobs/client.py` (67%→100%), and `sitemap.py` (79%→100%); total suite coverage rises to 88.9% (floor 85%).
 - **Coverage gap-fill** — offline tests for `poll/__init__` lazy imports, `_nitter.nitter_posts` (success/failure/cooldown paths), and `_syndication.syndication_posts` (JSON/HTML/error paths); closes the 87%→88% gap flagged in prior review.
+- **Scrape subsystem coverage** (`tests/test_cov_scrape.py`) — 49 offline fixture-driven tests raising `app.py` 67%→97%, `build.py` 75%→100%, `config.py` 76%→100%, `host_overrides.py` 78%→97%, `service.py` 83%→97%; total suite coverage rises to 91.4% (floor 89%).
 
 ## 0.5.0 — 2026-06-17
 

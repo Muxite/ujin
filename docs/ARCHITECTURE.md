@@ -11,7 +11,8 @@ services (plus an MCP server) on top. Heavier capabilities are opt-in extras;
 ujin/
 ├── engine.py        PollEngine: due-target loop, sweep(), poll_once()        [core]
 ├── adapt/           AdaptiveInterval, jitter, Backoff, CircuitBreaker,
-│                    TokenBucket, AIMDLimiter, SiteStore (durable per-host)    [core]
+│                    TokenBucket, AIMDLimiter, SiteStore (durable per-host),
+│                    derive_signals/SignalAdvisor (policy signals)             [core]
 ├── poll/            Pollable roles: callable, command                        [core]
 │                    http, rss, api, site, scrape, browser                    [web]
 ├── registry.py      plugin registry: source/transform/sink/scorer/action     [core]
@@ -68,6 +69,22 @@ the cache's durability pattern — one connection in WAL mode with
 `synchronous=NORMAL`, a single lock, and a truncating `wal_checkpoint` on
 `close()`. It is additive and wires into nothing by default; it is the
 foundation other Track-1 adaptive units consume.
+
+**`derive_signals` / `PolicySignals` / `SignalAdvisor`** (`adapt/signals.py`) is
+the pure, deterministic *interpretation* layer above that store. Given one
+`HostRecord`, `derive_signals(record, *, base_interval=0.0, robots_crawl_delay=None)`
+returns a frozen `PolicySignals` — `recommended_interval`, `cooldown_secs` /
+`should_cooldown`, `rate_limited`, `concurrency_factor`, and a single `health` in
+`0..1`. The rules are documented and side-effect-free: a 429 (counter or last
+status) sets `rate_limited`, raises the interval, and throttles concurrency;
+`recommended_interval` is never below `max(crawl_delay, robots_crawl_delay)`;
+rising `error_count` lowers `health` and raises `cooldown_secs`; a clean record is
+pristine (`health == 1.0`, no cooldown, full concurrency, interval ==
+`base_interval`). `SignalAdvisor(store)` is the only stateful piece — a read-only
+bridge whose `for_host(host)` reads `store.get(host)` and derives signals without
+mutating anything. It is additive and opt-in: nothing wires it into the
+scrape/poll path. It is the input layer the planned strategy-feedback and
+learned-rate-limit units consume.
 
 ## The scrape fallback chain (scrape/service.py)
 
