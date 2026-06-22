@@ -240,6 +240,7 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
 ## How it works
 
 - **Roles** (`ujin.poll`): `HttpPollable`, `RssPollable`, `ApiPollable`,
+  `GraphQLPollable` (POST a GraphQL query; narrows to a dotted `data_path`),
   `CommandPollable`, `CallablePollable`, and `SitePollable` (selector-scoped
   change). Each returns a `PollResult` with a content fingerprint.
 - **Adaptive** (`ujin.adapt`): `AdaptiveInterval` grows/shrinks the interval;

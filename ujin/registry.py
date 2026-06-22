@@ -196,9 +196,21 @@ def _install_builtins(reg: Registry) -> None:
             headless=cfg.get("headless", True), ctx=ctx,
         )
 
+    def _src_graphql(cfg):
+        from ujin.poll.graphql import GraphQLPollable
+
+        return GraphQLPollable(
+            cfg["url"],
+            query=cfg["query"],
+            variables=cfg.get("variables"),
+            headers=cfg.get("headers"),
+            data_path=cfg.get("data_path"),
+        )
+
     reg.register_builtin("source", "http", _src_http)
     reg.register_builtin("source", "rss", _src_rss)
     reg.register_builtin("source", "api", _src_api)
+    reg.register_builtin("source", "graphql", _src_graphql)
     reg.register_builtin("source", "command", _src_command)
     reg.register_builtin("source", "site", _src_site)
     reg.register_builtin("source", "scrape", _src_scrape)
