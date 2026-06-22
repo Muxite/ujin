@@ -19,6 +19,7 @@
   controllers on restart. Exported additively from `ujin.adapt`; opt-in and wired
   into nothing by default — the scrape/poll path is unchanged unless the limiter is
   explicitly used. `crawl_delay` and the host-policy signals now drive this governor.
+- **scrape multi-extract**: `POST /scrape` now accepts an optional `modes` list (`links`/`article`/`auto`/`structured`/`html`) so one request fetches the page once and returns a result per mode under a new additive `extracts` map (keyed by mode); the top-level fields mirror the first listed mode. Backed by `ScrapeService.scrape_multi()`, which runs each mode over the already-fetched body and isolates per-mode failures as `kind='error'` entries so one failing mode never sinks the others. The `html` mode returns the raw fetched HTML in the new `html` response field. Omitting `modes` keeps the classic single-`mode` behaviour byte-for-byte unchanged.
 
 ## 0.7.0 — 2026-06-22
 
