@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **test(cli)**: Added 9 tests covering previously-uncovered `ujin/cli.py` paths — `_version()` exception/metadata-fallback/`"unknown"` branches (lines 48-59), the YAML-error-without-`problem_mark` branch (line 99), `_cmd_obscura_build` success and missing-Cargo.toml paths (lines 200-216), and `_cmd_watch` callback/webhook/selector+render paths (lines 299-319); `cli.py` coverage rises from 82 % to 99 % and total suite coverage from ~95 % to 95.43 %.
+
 ## 0.10.0 — 2026-06-22
 
 ### Added

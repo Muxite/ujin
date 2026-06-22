@@ -1,6 +1,9 @@
 """CLI arg dispatch and the YAML target loader — serve functions mocked."""
 from __future__ import annotations
 
+import argparse
+import sys
+
 import pytest
 
 import ujin.cli as cli
@@ -266,3 +269,119 @@ def test_load_empty_document_is_empty_engine(tmp_path):
     p = tmp_path / "targets.yaml"
     p.write_text("# just a comment\n")
     assert len(cli._load(str(p)).targets) == 0
+
+
+# ── _version() fallback paths (lines 48-59) ──────────────────────────────────
+
+def test_version_import_ujin_exception_uses_metadata(monkeypatch):
+    """Lines 48-49: import ujin raises; metadata fallback returns a version."""
+    monkeypatch.setitem(sys.modules, "ujin", None)
+    v = cli._version()
+    assert isinstance(v, str) and v
+
+
+def test_version_package_not_found_returns_unknown(monkeypatch):
+    """Lines 48-49, 55-56, 59: import fails + PackageNotFoundError → 'unknown'."""
+    import importlib.metadata as _md
+
+    monkeypatch.setitem(sys.modules, "ujin", None)
+
+    def _boom(name):
+        raise _md.PackageNotFoundError(name)
+
+    monkeypatch.setattr(_md, "version", _boom)
+    assert cli._version() == "unknown"
+
+
+def test_version_metadata_import_blocked_returns_unknown(monkeypatch):
+    """Lines 57-58, 59: importlib.metadata blocked entirely → 'unknown'."""
+    monkeypatch.setitem(sys.modules, "ujin", None)
+    monkeypatch.setitem(sys.modules, "importlib.metadata", None)
+    assert cli._version() == "unknown"
+
+
+# ── YAML error without problem_mark (branch 99->101) ─────────────────────────
+
+def test_load_yaml_error_without_mark(monkeypatch, tmp_path):
+    """Branch 99->101: YAMLError with no problem_mark emits 'invalid YAML' without line info."""
+    import yaml
+
+    p = tmp_path / "t.yaml"
+    p.write_text("x: 1")
+    bare_exc = yaml.YAMLError("no mark here")
+
+    def _raiser(_text):
+        raise bare_exc
+
+    monkeypatch.setattr(yaml, "safe_load", _raiser)
+    with pytest.raises(SystemExit) as exc:
+        cli._load(str(p))
+    assert "invalid YAML" in str(exc.value)
+
+
+# ── obscura-build command (lines 200-216) ────────────────────────────────────
+
+def test_obscura_build_success(monkeypatch, tmp_path):
+    """Lines 200-216 happy path: git submodule + cargo called, returns 0."""
+    fake_file = tmp_path / "root" / "d" / "ujin" / "cli.py"
+    fake_file.parent.mkdir(parents=True)
+    submodule = tmp_path / "root" / "ujin" / "obscura"
+    submodule.mkdir(parents=True)
+    (submodule / "Cargo.toml").write_text("[workspace]\n")
+
+    monkeypatch.setattr(cli, "__file__", str(fake_file))
+    runs = []
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: runs.append(cmd))
+
+    rc = cli._cmd_obscura_build(argparse.Namespace())
+    assert rc == 0
+    assert any("git" in str(c) for c in runs)
+    assert any("cargo" in str(c) for c in runs)
+
+
+def test_obscura_build_missing_cargo_toml_returns_1(monkeypatch, tmp_path):
+    """Lines 209-211: git runs but Cargo.toml absent → returns 1."""
+    fake_file = tmp_path / "root" / "d" / "ujin" / "cli.py"
+    fake_file.parent.mkdir(parents=True)
+
+    monkeypatch.setattr(cli, "__file__", str(fake_file))
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: None)
+
+    rc = cli._cmd_obscura_build(argparse.Namespace())
+    assert rc == 1
+
+
+# ── watch command (lines 299-319) ────────────────────────────────────────────
+
+def test_watch_callback_sink(monkeypatch):
+    """Lines 299-319 no-webhook path: CallbackSink used, engine runs."""
+    async def _fake_run(self):
+        pass
+
+    monkeypatch.setattr("ujin.engine.PollEngine.run", _fake_run)
+    rc = cli.main(["watch", "http://example.com"])
+    assert rc == 0
+
+
+def test_watch_webhook_sink(monkeypatch):
+    """Lines 304-305: --webhook path creates WebhookSink."""
+    async def _fake_run(self):
+        pass
+
+    monkeypatch.setattr("ujin.engine.PollEngine.run", _fake_run)
+    rc = cli.main(["watch", "http://example.com", "--webhook", "http://hook.test"])
+    assert rc == 0
+
+
+def test_watch_with_selectors_and_render(monkeypatch):
+    """Lines 315-317: multiple --selector args and --render flag."""
+    async def _fake_run(self):
+        pass
+
+    monkeypatch.setattr("ujin.engine.PollEngine.run", _fake_run)
+    rc = cli.main([
+        "watch", "http://example.com",
+        "--selector", "h1", "--selector", ".price",
+        "--render",
+    ])
+    assert rc == 0
