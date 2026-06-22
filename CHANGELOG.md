@@ -10,6 +10,8 @@
 - **`unique` and `fill` transforms** — `unique` drops duplicate items from a list payload by a dotted `key` (or whole-item identity when key omitted), preserving first-occurrence order and passing non-list payloads through unchanged; `fill` ensures named dotted fields exist on a dict payload or each dict in a list-of-dicts, setting a per-path or shared default without overwriting existing non-None values and passing non-dict items through unchanged. Both are discoverable at `GET /kinds` and documented in `docs/LIST_TRANSFORMS.md`.
 ## [Unreleased]
 
+- **docs-sync** — audited all docs against the 0.15.0 shipped set; added `graphql` to the poller-control `kind` list in `docs/API.md`; added `unique`/`fill` to the `LIST_TRANSFORMS` reference in `README.md`; and added `aggregate`, `unique`, and `fill` rows to the transforms table in `docs/JOBS.md` so every built-in transform kind is discoverable from the job reference.
+
 ## 0.15.0 — 2026-06-22
 
 - **`graphql` source kind** — new `GraphQLPollable` POSTs a configured `query` (plus optional `variables`, `headers`) to a `url` and fingerprints events narrowed from a dotted `data_path` in the JSON response, reusing the same aiohttp client/timeout path as `ApiPollable`. A GraphQL `errors` array, non-200 status codes, and network exceptions are all surfaced as poll failures without crashing the poll loop. Registered as `kind: graphql` in YAML targets and the jobs control plane.

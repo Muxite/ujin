@@ -204,7 +204,7 @@ Drives `ujin.engine.PollEngine` and streams change events. Run `ujin api`.
 | `GET /content?key=…` | the body ujin last fetched for a target (reuse it instead of re-hitting the origin): `{ key, changed, fingerprint, ts, status, body }`; `404` until that target has polled |
 | `WS /ws` | stream `{ "event":"change", "key", "fingerprint", "ts" }` |
 
-`kind` ∈ `http` · `rss` · `api` · `command` · `site`. `config` is the kind's
+`kind` ∈ `http` · `rss` · `api` · `graphql` · `command` · `site`. `config` is the kind's
 constructor args, e.g. `{"url": "https://x"}`, or for `site`:
 `{"url": "...", "selectors": ["main"], "render": false}`.
 
