@@ -26,9 +26,11 @@ or Docker target was renamed or removed, so the three consumer-contract surfaces
 
 ### Added
 - **`ujin.robots`**: `RobotsPolicy` parses robots.txt into per-User-agent groups with Allow/Disallow longest-match precedence, `*` and `$` wildcard handling, `Crawl-delay` extraction, and `Sitemap:` directive collection; malformed/empty/missing file → allow-all. `RobotsPolicy.is_allowed(path, agent='*') -> bool` and `RobotsPolicy.crawl_delay(agent='*') -> float | None` are pure methods over already-parsed text. `RobotsCache(ttl, fetcher, clock)` adds a TTL fetch+cache layer with injectable fetcher and clock for deterministic tests; opt-in only — default scrape/poll behavior is unchanged unless `RobotsCache` is explicitly used. `crawl_delay()` values are a future input to the learned-rate-limit system (`ujin.adapt.concurrency`).
-## [Unreleased]
+## 0.8.0 — 2026-06-22
 
 ### Added
+- **`StrategyFeedback` / `StrategyOutcome`** (`ujin/adapt/strategy.py`, pure stdlib) — a durable per-host, per-strategy outcome store on SQLite. A *strategy* is a `(backend, render_mode)` pair. `StrategyFeedback(store=':memory:', clock=time.time)`: `record(host, strategy, *, ok, latency)` is an atomic serialized upsert (counters accumulate, latency gauges overwrite, `last_seen` stamped from the injectable clock); `recommend(host)` returns the highest-success-rate known strategy deterministically (ties broken by attempts then lexicographic order), or `None` for an unseen host; `is_penalized(host, strategy, record)` is a pure no-I/O helper that returns `True` when `derive_signals(record).rate_limited` or `health` is low; `close()` runs a truncating `wal_checkpoint`. Reuses the WAL-mode / `synchronous=NORMAL` durability pattern from `SiteStore`. Both names exported additively from `ujin.adapt`; opt-in only — not wired into any default scrape/poll path. Input layer for future learned strategy-selection.
+- **tests**: Added `tests/test_jobs_coverage.py` (38 offline tests) raising per-file coverage of `ujin/jobs/app.py` to 99%, `ujin/jobs/pipeline.py` to 100%, `ujin/jobs/cron.py` to 100%, and `ujin/jobs/transforms.py` to 98%, lifting TOTAL coverage from ~91% to 95%.
 - **Host policy signals** (`ujin/adapt/signals.py`, pure stdlib) — a deterministic
   interpretation layer over `SiteStore`/`HostRecord`. `derive_signals(record, *,
   base_interval=0.0, robots_crawl_delay=None)` returns a frozen `PolicySignals`
