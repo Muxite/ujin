@@ -75,6 +75,9 @@ class Config:
 
     # --- agent runtime ---
     claude_bin: str = "claude"
+    # Use regular Claude Code subscription auth (drop API-key env vars from agent
+    # subprocesses) so the loop consumes plan usage, never metered per-token billing.
+    use_subscription_auth: bool = True
     # Per-agent wall-clock ceilings (seconds). 2.1.185 has no --max-turns.
     builder_timeout_s: int = 5400
     verifier_timeout_s: int = 900

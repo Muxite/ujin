@@ -77,6 +77,44 @@ def test_state_budget_and_floor(tmp_path: Path):
     assert store.read_cov_floor(85.0) == 88.2
 
 
+def test_claude_backend_retries_transient(monkeypatch):
+    from orchestrator import agents
+    from orchestrator.agents import AgentResult, ClaudeAgentBackend
+
+    calls = {"n": 0}
+
+    def fake_run_once(argv, cwd, env, timeout):
+        calls["n"] += 1
+        if calls["n"] < 3:  # two 529s, then success
+            return AgentResult("", 0.0, False, "API Error: 529 Overloaded"), True
+        return AgentResult("OK", 0.5, True), False
+
+    monkeypatch.setattr(ClaudeAgentBackend, "_run_once", staticmethod(fake_run_once))
+    monkeypatch.setattr(agents.time, "sleep", lambda s: None)
+    cfg = Config(repo_root=Path("/tmp/x"))
+    r = ClaudeAgentBackend()._invoke(cfg, model="sonnet", system_prompt="s",
+                                     user_prompt="u", cwd=Path("/tmp/x"), timeout=10, budget=1.0)
+    assert r.ok and r.text == "OK" and calls["n"] == 3
+
+
+def test_claude_backend_no_retry_on_terminal(monkeypatch):
+    from orchestrator import agents
+    from orchestrator.agents import AgentResult, ClaudeAgentBackend
+
+    calls = {"n": 0}
+
+    def fake_run_once(argv, cwd, env, timeout):
+        calls["n"] += 1
+        return AgentResult("", 0.0, False, "invalid request"), False  # terminal
+
+    monkeypatch.setattr(ClaudeAgentBackend, "_run_once", staticmethod(fake_run_once))
+    monkeypatch.setattr(agents.time, "sleep", lambda s: None)
+    cfg = Config(repo_root=Path("/tmp/x"))
+    r = ClaudeAgentBackend()._invoke(cfg, model="sonnet", system_prompt="s",
+                                     user_prompt="u", cwd=Path("/tmp/x"), timeout=10, budget=1.0)
+    assert not r.ok and calls["n"] == 1
+
+
 def test_state_events(tmp_path: Path):
     store = StateStore(tmp_path / "state")
     store.log_event("0.6", "built", focus="demo")

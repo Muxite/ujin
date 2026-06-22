@@ -11,9 +11,16 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+
+# Server-side / transient API statuses worth retrying with backoff. The 24/7 loop
+# hits these routinely (esp. 529 Overloaded), so agents must not treat them as
+# terminal no-ops.
+TRANSIENT_STATUSES = frozenset({408, 409, 429, 500, 502, 503, 504, 529})
+MAX_AGENT_RETRIES = 4
 
 from . import gitutil
 from .config import PACKAGE_DIR, Config
@@ -86,26 +93,53 @@ class ClaudeAgentBackend:
             # run anywhere. Read/grep tools stay available for inspection.
             argv += ["--disallowedTools", "Edit", "Write", "NotebookEdit"]
         argv.append(cfg.permission_flag)
+        env = env_for(cwd)
+        if cfg.use_subscription_auth:
+            # Force regular Claude Code (subscription) usage: drop any API-key vars so
+            # the CLI uses the logged-in OAuth credentials and never bills per-token.
+            for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_API_KEY"):
+                env.pop(key, None)
+
+        last = AgentResult("", 0.0, False, "no attempt")
+        for attempt in range(MAX_AGENT_RETRIES):
+            last, transient = self._run_once(argv, cwd, env, timeout)
+            if last.ok or not transient:
+                return last
+            time.sleep(min(2 ** attempt * 2, 30))  # 2,4,8,16s backoff on overload
+        return last
+
+    @staticmethod
+    def _run_once(argv, cwd, env, timeout) -> tuple[AgentResult, bool]:
+        """Run claude once. Returns (result, transient) — transient => retry worthwhile."""
         try:
             proc = subprocess.run(
-                argv, cwd=str(cwd), env=env_for(cwd),
+                argv, cwd=str(cwd), env=env,
                 capture_output=True, text=True, timeout=timeout,
+                # Close stdin: `claude -p` otherwise blocks waiting for piped input,
+                # then emits a non-JSON warning that corrupts the result parse.
+                stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired:
-            return AgentResult("", 0.0, False, f"timeout after {timeout}s")
+            return AgentResult("", 0.0, False, f"timeout after {timeout}s"), False
         if proc.returncode != 0:
-            return AgentResult("", 0.0, False, proc.stderr.strip()[-500:])
+            err = proc.stderr.strip()[-500:]
+            transient = any(s in err.lower()
+                            for s in ("overload", "529", "503", "rate limit", "try again"))
+            return AgentResult("", 0.0, False, err), transient
         try:
             obj = json.loads(proc.stdout)
         except json.JSONDecodeError:
             # text leaked outside the JSON envelope; treat stdout as the reply.
-            return AgentResult(proc.stdout, 0.0, True)
+            return AgentResult(proc.stdout, 0.0, True), False
+        is_error = bool(obj.get("is_error", False))
+        result_text = str(obj.get("result", ""))
+        transient = is_error and obj.get("api_error_status") in TRANSIENT_STATUSES
         return AgentResult(
-            text=str(obj.get("result", "")),
+            text=result_text,
             cost_usd=float(obj.get("total_cost_usd", 0.0) or 0.0),
-            ok=not obj.get("is_error", False),
-            error=str(obj.get("error", "")),
-        )
+            ok=not is_error,
+            error=result_text if is_error else str(obj.get("error", "")),
+        ), transient
 
     def run_planner(self, cfg: Config, context: str) -> tuple[list[dict], float]:
         r = self._invoke(

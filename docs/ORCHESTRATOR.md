@@ -51,6 +51,11 @@ the worktree — guarding against wrong-tree false-greens.
 - **Runaway prevention:** `max_concurrent` cap, `max_build_retries` then quarantine, and
   a no-progress detector (identical diff across a retry → quarantine).
 - **Releases don't push** unless `push_on_release = true`.
+- **Subscription usage, not API billing:** with `use_subscription_auth = true` (default)
+  the agent subprocesses drop any `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` from their
+  env, so `claude -p` uses your logged-in Claude Code credentials and consumes plan
+  usage — never metered per-token charges. The budget numbers are equivalent-USD usage
+  guards, not bills.
 
 ## Configure
 

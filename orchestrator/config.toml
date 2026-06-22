@@ -24,6 +24,9 @@ contract_paths = ["tests/test_consumer_contracts.py"]
 
 # Agent runtime.
 claude_bin = "claude"
+# Use regular Claude Code (subscription) usage — strip API-key env vars so agents
+# authenticate with the logged-in OAuth credentials and never bill per-token.
+use_subscription_auth = true
 builder_timeout_s = 5400
 verifier_timeout_s = 900
 planner_timeout_s = 1800
@@ -39,7 +42,9 @@ verifier = "haiku"
 triage = "haiku"
 
 [budgets]
-# USD caps. per_agent is enforced by `claude --max-budget-usd`.
+# Usage guards in equivalent-USD (NOT bills — under subscription auth there is no
+# per-token charge). per_agent maps to `claude --max-budget-usd` as a runaway cap;
+# per_cycle/per_day throttle how much plan usage the loop consumes before pausing.
 per_agent = 5.0
 per_cycle = 40.0
 per_day = 100.0
