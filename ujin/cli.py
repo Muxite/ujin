@@ -294,6 +294,160 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _open_site_store_ro(path: str | None):
+    """Open an *existing* ``SiteStore`` for read-only introspection.
+
+    The store API has no record-creating side effects beyond ``record()`` (which
+    we never call here), but ``sqlite3.connect`` happily *creates* a missing
+    file — so we check existence first and emit a clean, actionable ``ujin: ...``
+    error (no traceback) for a missing or empty path, matching the rest of the
+    CLI's error style.
+    """
+    import sqlite3
+
+    from ujin.adapt import SiteStore
+
+    if not path:
+        raise SystemExit(
+            "ujin: a site-store database path is required\n"
+            "  usage: ujin learned <site_state.db>  "
+            "(the path your poller/scraper persists to)"
+        )
+    if not Path(path).exists():
+        raise SystemExit(
+            f"ujin: site-store database not found: {path}\n"
+            "  hint: pass the SiteStore db path your poller/scraper persists to"
+        )
+    try:
+        return SiteStore(path)
+    except sqlite3.DatabaseError:
+        raise SystemExit(f"ujin: not a valid ujin site-store database: {path}") from None
+
+
+def _open_strategy_feedback_ro(path: str):
+    """Open an existing ``StrategyFeedback`` db read-only (same error style)."""
+    import sqlite3
+
+    from ujin.adapt import StrategyFeedback
+
+    if not Path(path).exists():
+        raise SystemExit(
+            f"ujin: strategy-feedback database not found: {path}\n"
+            "  hint: pass the StrategyFeedback db path your scraper persists to"
+        )
+    try:
+        return StrategyFeedback(path)
+    except sqlite3.DatabaseError:
+        raise SystemExit(
+            f"ujin: not a valid ujin strategy database: {path}"
+        ) from None
+
+
+def _fmt_secs(value: float) -> str:
+    """Compact seconds with trailing zeros stripped, e.g. ``10s``/``0.42s``."""
+    s = f"{float(value):.3f}".rstrip("0").rstrip(".")
+    return f"{s}s"
+
+
+_LEARNED_COLUMNS = [
+    ("host", "host", str),
+    ("status", "last_status", str),
+    ("latency", "last_latency", _fmt_secs),
+    ("p50", "p50_latency", _fmt_secs),
+    ("interval", "interval", _fmt_secs),
+    ("rec.int", "recommended_interval", _fmt_secs),
+    ("conc", "concurrency_factor", lambda v: f"{v:.2f}"),
+    ("health", "health", lambda v: f"{v:.2f}"),
+    ("cooldown", "cooldown_secs", lambda v: _fmt_secs(v) if v else "-"),
+    ("crawl", "crawl_delay", lambda v: _fmt_secs(v) if v else "-"),
+    ("err", "error_count", str),
+    ("429", "rate_limit_count", str),
+]
+
+
+def _print_learned_table(args: argparse.Namespace, rows: list[dict]) -> None:
+    """Render the per-host learned state as an aligned, human-readable table."""
+    if not rows:
+        if args.host:
+            print(f"(host {args.host!r} not found in {args.db})")
+        else:
+            print(f"(no learned hosts in {args.db})")
+        return
+    cols = list(_LEARNED_COLUMNS)
+    if args.strategy_db:
+        cols.append(
+            ("best-strategy", "recommended_strategy",
+             lambda v: "/".join(v) if v else "-")
+        )
+    headers = [label for label, _, _ in cols]
+    cells = [[fmt(r[key]) for _, key, fmt in cols] for r in rows]
+    widths = [
+        max(len(headers[i]), *(len(row[i]) for row in cells))
+        for i in range(len(headers))
+    ]
+    fmt_row = lambda values: "  ".join(  # noqa: E731 - tiny local formatter
+        v.ljust(w) for v, w in zip(values, widths)
+    )
+    print(fmt_row(headers))
+    print("  ".join("-" * w for w in widths))
+    for row in cells:
+        print(fmt_row(row))
+
+
+def _cmd_learned(args: argparse.Namespace) -> int:
+    """Inspect the durable per-host learned state in a SiteStore database."""
+    import json as _json
+
+    from ujin.adapt import derive_signals
+
+    store = _open_site_store_ro(args.db)
+    feedback = _open_strategy_feedback_ro(args.strategy_db) if args.strategy_db else None
+    try:
+        known = store.hosts()
+        if args.host:
+            hosts = [args.host] if args.host in known else []
+        else:
+            hosts = known
+
+        rows: list[dict] = []
+        for host in hosts:
+            rec = store.get(host)
+            # The stored adaptive interval is the base; derive_signals layers any
+            # rate-limit slowdown and Crawl-delay floor on top of it.
+            sig = derive_signals(rec, base_interval=rec.interval)
+            row = {
+                "host": host,
+                "last_status": rec.last_status,
+                "last_latency": round(rec.last_latency, 6),
+                "p50_latency": round(rec.p50_latency, 6),
+                "error_count": rec.error_count,
+                "rate_limit_count": rec.rate_limit_count,
+                "crawl_delay": rec.crawl_delay,
+                "interval": rec.interval,
+                "last_seen": rec.last_seen,
+                "recommended_interval": round(sig.recommended_interval, 6),
+                "concurrency_factor": round(sig.concurrency_factor, 6),
+                "health": round(sig.health, 6),
+                "rate_limited": sig.rate_limited,
+                "should_cooldown": sig.should_cooldown,
+                "cooldown_secs": round(sig.cooldown_secs, 6),
+            }
+            if feedback is not None:
+                best = feedback.recommend(host)
+                row["recommended_strategy"] = list(best) if best else None
+            rows.append(row)
+
+        if args.json:
+            print(_json.dumps({"db": args.db, "hosts": rows}, indent=2))
+        else:
+            _print_learned_table(args, rows)
+        return 0
+    finally:
+        store.close()
+        if feedback is not None:
+            feedback.close()
+
+
 def _cmd_watch(args: argparse.Namespace) -> int:
     """Watch one URL's selected regions; log or webhook on change."""
     from ujin.diff.events import CallbackSink, WebhookSink
@@ -444,6 +598,34 @@ def main(argv: list[str] | None = None) -> int:
     p_watch.add_argument("--max", type=float, default=3600.0,
                          help="slowest interval in seconds (default: 3600)")
     p_watch.set_defaults(func=_cmd_watch)
+
+    p_learned = sub.add_parser(
+        "learned", help="inspect the durable per-host learned state in a SiteStore db",
+        description="Open an existing SiteStore database read-only and print, per "
+                    "host, the learned adaptive state: recommended interval (via "
+                    "ujin.adapt.derive_signals), concurrency factor, penalty/backoff "
+                    "(health, cooldown, rate-limited), last observed status/latency, "
+                    "and any observed robots Crawl-delay. With --strategy-db, also "
+                    "show the recommended (backend, render_mode) for each host. "
+                    "Defaults to a table; --json emits machine-readable output; "
+                    "--host filters to one host.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="examples:\n"
+               "  ujin learned site_state.db\n"
+               "  ujin learned site_state.db --host example.com --json\n"
+               "  ujin learned site_state.db --strategy-db strategy.db",
+    )
+    p_learned.add_argument("db", nargs="?", default=None,
+                           help="path to a SiteStore database (the path your "
+                                "poller/scraper persists to)")
+    p_learned.add_argument("--host", default=None, metavar="HOST",
+                           help="show only this host (default: every learned host)")
+    p_learned.add_argument("--strategy-db", default=None, metavar="PATH",
+                           help="also show StrategyFeedback.recommend(host) from "
+                                "this strategy-feedback database")
+    p_learned.add_argument("--json", action="store_true",
+                           help="emit machine-readable JSON instead of a table")
+    p_learned.set_defaults(func=_cmd_learned)
 
     p_mcp = sub.add_parser(
         "mcp-serve", help="run the MCP server for agents (stdio; --http for HTTP)",

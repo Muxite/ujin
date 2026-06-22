@@ -22,6 +22,18 @@ def test_names_exported():
         assert name in adapt.__all__
 
 
+# ── hosts() enumeration (additive read surface) ──────────────────────────────
+
+def test_hosts_enumerates_persisted_hosts():
+    s = SiteStore()  # :memory:
+    assert s.hosts() == []                       # never-written store
+    s.record("b.test", status=200)
+    s.record("a.test", latency=0.5)
+    assert set(s.hosts()) == {"a.test", "b.test"}
+    assert s.hosts() == ["a.test", "b.test"]     # sorted for stable output
+    s.close()
+
+
 # ── defaults ─────────────────────────────────────────────────────────────────
 
 def test_unknown_host_returns_zero_record():
