@@ -48,8 +48,8 @@ Request (`ScrapeRequest`):
 |---|---|---|---|
 | `url` | string | — | absolute URL (required unless `urls` is set) |
 | `urls` | list of string | `null` | multi-URL batch: scrape several URLs, one result per URL (see below) |
-| `mode` | `links`\|`article`\|`auto`\|`combined`\|`structured`\|`tables`\|`images`\|`metadata` | `links` | what to extract (single mode) |
-| `modes` | list of `links`\|`article`\|`auto`\|`structured`\|`tables`\|`images`\|`metadata`\|`html` | `null` | multi-extract: several modes over one fetch (see below) |
+| `mode` | `links`\|`article`\|`auto`\|`combined`\|`structured`\|`tables`\|`images`\|`metadata`\|`feeds` | `links` | what to extract (single mode) |
+| `modes` | list of `links`\|`article`\|`auto`\|`structured`\|`tables`\|`images`\|`metadata`\|`feeds`\|`html` | `null` | multi-extract: several modes over one fetch (see below) |
 | `force_refresh` | bool | `false` | bypass cache + revalidation |
 | `enrich_html_top_n` | int 0–20 | `0` | (combined) fan out article fetches for the top-N HTML-only links |
 
@@ -72,11 +72,23 @@ Modes:
   URL values are resolved against the page URL; flat `title`/`description` fall
   back to `og:title`/`og:description` when no `<title>`/`<meta name=description>`
   is present. Complements `structured` (it does not duplicate JSON-LD/microdata).
+- **feeds** — declared feed URLs from `<link rel="alternate">` head elements,
+  returned in `feeds`. Each dict has an absolute `href` (resolved against the
+  page URL), a lowercase `type` (`application/rss+xml`, `application/atom+xml`,
+  or `application/feed+json`), and an optional `title` when present. Identical
+  hrefs are de-duplicated in document order. Example:
+  ```json
+  { "mode": "feeds" }
+  // → "feeds": [
+  //     {"href": "https://apnews.com/index.rss", "type": "application/rss+xml", "title": "AP News"},
+  //     {"href": "https://apnews.com/atom.xml",  "type": "application/atom+xml"}
+  //   ]
+  ```
 - **html** — the raw fetched HTML, returned in `html` (multi-extract only).
 
 Response (`ScrapeResponse`, abridged):
 ```json
-{ "url": "...", "kind": "links|article|structured|tables|images|metadata|html|empty|error",
+{ "url": "...", "kind": "links|article|structured|tables|images|metadata|feeds|html|empty|error",
   "fingerprint": "sha256…", "fetched_at": 1780000000.0,
   "cached": false, "age_secs": 0.0, "used_renderer": false,
   "strategy_used": "http|http_304|obscura|browser|sitemap_news|rss|combined|cache",
@@ -84,7 +96,7 @@ Response (`ScrapeResponse`, abridged):
                "seen_in": ["rss","html"], "tier": "generic",
                "breaking_score": 0.0, "score_components": {} } ],
   "article": null, "structured": null, "tables": null, "images": null,
-  "metadata": null, "html": null, "final_url": null, "note": null,
+  "metadata": null, "feeds": null, "html": null, "final_url": null, "note": null,
   "next_poll_hint_secs": 60.0, "max_breaking_score": 0.0,
   "extracts": null, "batch": null }
 ```

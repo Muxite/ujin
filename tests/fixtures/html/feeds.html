@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Example News — Feed Discovery</title>
+  <link rel="alternate" type="application/rss+xml" title="Example News RSS" href="/feed.rss">
+  <link rel="alternate" type="application/atom+xml" title="Example News Atom" href="/feed.atom">
+  <link rel="alternate" type="application/feed+json" title="Example News JSON Feed" href="/feed.json">
+  <!-- stylesheet alternate — not a feed, must be ignored -->
+  <link rel="alternate" type="text/css" href="/print.css">
+  <!-- hreflang alternate — not a feed, must be ignored -->
+  <link rel="alternate" hreflang="fr" href="/fr/">
+  <!-- canonical — not a feed, must be ignored -->
+  <link rel="canonical" href="https://news.example.com/">
+  <!-- stylesheet -->
+  <link rel="stylesheet" type="text/css" href="/styles.css">
+</head>
+<body>
+  <h1>Welcome</h1>
+  <!-- a link element in <body> — must be ignored (past head) -->
+  <link rel="alternate" type="application/rss+xml" href="/body-feed.rss">
+</body>
+</html>
