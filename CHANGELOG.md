@@ -18,6 +18,10 @@ or Docker target was renamed or removed, so the three consumer-contract surfaces
   `wal_checkpoint`. Reuses the disk cache's WAL-mode / `synchronous=NORMAL`
   durability pattern. Both names are exported from `ujin.adapt`. This is the
   foundation other Track-1 adaptive units consume.
+## [Unreleased]
+
+### Added
+- **`ujin.robots`**: `RobotsPolicy` parses robots.txt into per-User-agent groups with Allow/Disallow longest-match precedence, `*` and `$` wildcard handling, `Crawl-delay` extraction, and `Sitemap:` directive collection; malformed/empty/missing file → allow-all. `RobotsPolicy.is_allowed(path, agent='*') -> bool` and `RobotsPolicy.crawl_delay(agent='*') -> float | None` are pure methods over already-parsed text. `RobotsCache(ttl, fetcher, clock)` adds a TTL fetch+cache layer with injectable fetcher and clock for deterministic tests; opt-in only — default scrape/poll behavior is unchanged unless `RobotsCache` is explicitly used. `crawl_delay()` values are a future input to the learned-rate-limit system (`ujin.adapt.concurrency`).
 
 ## 0.5.0 — 2026-06-17
 
