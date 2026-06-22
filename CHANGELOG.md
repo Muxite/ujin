@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.0
+
+Additive only — no public symbol, CLI subcommand, flag, env var, response field,
+or Docker target was renamed or removed, so the three consumer-contract surfaces
+(awork / hct-site / wordle-max) stay frozen and green.
+
+### Added
+- **`SiteStore` / `HostRecord`** (`ujin/adapt/site_store.py`, pure stdlib) — a
+  durable per-host observed-state store on SQLite. Persists last status,
+  p50/last latency, error count, 429 count, observed `Crawl-delay`, the adaptive
+  interval, and `last_seen` so a fresh process resumes calibrated, polite
+  polling. `SiteStore(path=':memory:', clock=time.time)`; `get(host)` returns a
+  zero-valued `HostRecord` for unknown hosts; `record(host, **signals)` is an
+  atomic serialized upsert (counters accumulate, gauges overwrite, `last_seen`
+  stamped from the injectable clock); `close()` runs a truncating
+  `wal_checkpoint`. Reuses the disk cache's WAL-mode / `synchronous=NORMAL`
+  durability pattern. Both names are exported from `ujin.adapt`. This is the
+  foundation other Track-1 adaptive units consume.
+
 ## 0.5.0 — 2026-06-17
 
 Feature + performance + developer-experience cycle. Every change is **additive** —

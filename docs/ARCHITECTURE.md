@@ -11,7 +11,7 @@ services (plus an MCP server) on top. Heavier capabilities are opt-in extras;
 ujin/
 ├── engine.py        PollEngine: due-target loop, sweep(), poll_once()        [core]
 ├── adapt/           AdaptiveInterval, jitter, Backoff, CircuitBreaker,
-│                    TokenBucket, AIMDLimiter                                  [core]
+│                    TokenBucket, AIMDLimiter, SiteStore (durable per-host)    [core]
 ├── poll/            Pollable roles: callable, command                        [core]
 │                    http, rss, api, site, scrape, browser                    [web]
 ├── registry.py      plugin registry: source/transform/sink/scorer/action     [core]
@@ -55,6 +55,19 @@ due? ── token bucket (global rate) ── semaphore (max_concurrency) ──
   the **CircuitBreaker** stops hammering dead targets (open → half-open probe).
 - Everything takes injectable `clock`/`sleep`, which is why the whole engine is
   testable with a fake clock in milliseconds.
+
+The controllers above are in-memory and reset on restart. **`SiteStore`**
+(`adapt/site_store.py`) is the durable floor under them: a stdlib-`sqlite3`
+table of per-host observed state — last status, p50/last latency, error and 429
+counts, observed `Crawl-delay`, the current adaptive interval, and `last_seen` —
+so a fresh process resumes calibrated, polite polling instead of relearning
+every target. `get(host)` returns a zero-valued `HostRecord` for unknown hosts;
+`record(host, **signals)` is an atomic, serialized upsert (counters accumulate,
+gauges overwrite, `last_seen` is stamped from an injectable clock). It reuses
+the cache's durability pattern — one connection in WAL mode with
+`synchronous=NORMAL`, a single lock, and a truncating `wal_checkpoint` on
+`close()`. It is additive and wires into nothing by default; it is the
+foundation other Track-1 adaptive units consume.
 
 ## The scrape fallback chain (scrape/service.py)
 
