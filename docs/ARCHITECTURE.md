@@ -101,6 +101,24 @@ threshold, letting callers skip a strategy without extra I/O.  Both names are
 exported additively from `ujin.adapt`; opt-in only and wired into nothing by
 default — it is the input layer for future learned strategy-selection.
 
+**`LearnedRateLimiter`** (`adapt/rate.py`) is the thin composition that wires the
+store + signals + control primitives into one self-calibrating per-host gate.
+`interval_for(host)` reports the effective cadence (never below
+`max(base_interval, observed Crawl-delay, robots Crawl-delay)`, raised by a
+learned penalty while backed off); the async `acquire(host)` gate paces a per-host
+token bucket and caps in-flight requests; `observe(host, status=…, latency=…,
+error=…)` feeds each response back so a 429 raises the interval and a run of clean
+responses relaxes it. **The poll engine consumes it behind one opt-in flag:**
+`PollEngine(adaptive=True)` constructs a per-process `SiteStore` +
+`LearnedRateLimiter` and, on every poll, paces through `acquire(host)`, floors the
+target's next interval by `interval_for(host)`, and persists the observation via
+`observe(…)` so a restarted process resumes calibrated. The path is byte-identical
+with the flag unset — no store, no limiter, no extra I/O. The store path
+(`site_store_path`, default in-process `:memory:`), `adaptive_base_interval`, and an
+optional `robots` adapter (anything exposing `crawl_delay(host) -> float | None`)
+are all configurable, and the limiter shares the engine's injectable `clock`/`sleep`
+so the adaptive path is deterministic in tests.
+
 ## The scrape fallback chain (scrape/service.py)
 
 `ScrapeService.scrape(url, mode, render)` is the only entry the routes/MCP use:
