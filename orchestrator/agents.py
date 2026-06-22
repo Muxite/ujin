@@ -121,6 +121,9 @@ class ClaudeAgentBackend:
             )
         except subprocess.TimeoutExpired:
             return AgentResult("", 0.0, False, f"timeout after {timeout}s"), False
+        except OSError as exc:
+            # e.g. claude binary not on PATH — never let this crash the daemon loop.
+            return AgentResult("", 0.0, False, f"failed to launch agent: {exc}"), False
         if proc.returncode != 0:
             err = proc.stderr.strip()[-500:]
             transient = any(s in err.lower()

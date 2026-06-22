@@ -97,6 +97,22 @@ def test_claude_backend_retries_transient(monkeypatch):
     assert r.ok and r.text == "OK" and calls["n"] == 3
 
 
+def test_claude_backend_survives_missing_binary(monkeypatch):
+    from orchestrator import agents
+    from orchestrator.agents import ClaudeAgentBackend
+
+    def boom(*a, **k):
+        raise FileNotFoundError(2, "No such file or directory", "claude")
+
+    monkeypatch.setattr(agents.subprocess, "run", boom)
+    monkeypatch.setattr(agents.time, "sleep", lambda s: None)
+    cfg = Config(repo_root=Path("/tmp/x"))
+    # Must return a failed result, never propagate (would crash-loop the daemon).
+    r = ClaudeAgentBackend()._invoke(cfg, model="sonnet", system_prompt="s",
+                                     user_prompt="u", cwd=Path("/tmp/x"), timeout=10, budget=1.0)
+    assert not r.ok and "failed to launch" in r.error
+
+
 def test_claude_backend_no_retry_on_terminal(monkeypatch):
     from orchestrator import agents
     from orchestrator.agents import AgentResult, ClaudeAgentBackend
