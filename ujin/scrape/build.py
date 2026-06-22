@@ -42,6 +42,7 @@ class ScrapeComponents:
     overrides: HostOverrideRegistry
     disk: Optional[DiskCache]
     browser: Any = None  # BrowserFetcher when cfg.browser_enabled and available
+    strategy: Any = None  # StrategyFeedback when cfg.learn_strategy
 
 
 async def build_scrape_components(cfg: ScrapeConfig) -> ScrapeComponents:
@@ -89,9 +90,21 @@ async def build_scrape_components(cfg: ScrapeConfig) -> ScrapeComponents:
             logger.warning("browser_enabled but %s not installed; "
                            "browser strategy disabled", cfg.browser_engine)
 
+    # Optional durable strategy-feedback store. Built only when learning is
+    # enabled; biases the 'auto' backend order per host and records outcomes.
+    # An empty ``strategy_db`` means an ephemeral in-process store.
+    strategy = None
+    if cfg.learn_strategy:
+        from ..adapt.strategy import StrategyFeedback
+
+        store = cfg.strategy_db or ":memory:"
+        strategy = StrategyFeedback(store)
+        logger.info("strategy feedback enabled (store=%s)", store)
+
     return ScrapeComponents(
         http=http, obscura=obscura, cache=cache, policy=policy,
         metrics=metrics, overrides=overrides, disk=disk, browser=browser,
+        strategy=strategy,
     )
 
 
@@ -108,6 +121,11 @@ async def close_scrape_components(comps: ScrapeComponents) -> None:
             await comps.browser.close()
         except Exception as exc:  # noqa: BLE001
             logger.warning("browser close failed: %s", exc)
+    if comps.strategy is not None:
+        try:
+            comps.strategy.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("strategy feedback close failed: %s", exc)
     await comps.http.close()
 
 
@@ -132,6 +150,7 @@ async def build_scrape_service(
         overrides=comps.overrides,
         scorer=scorer or NullScorer(),
         browser=comps.browser,
+        strategy_feedback=comps.strategy,
     )
 
     async def aclose() -> None:

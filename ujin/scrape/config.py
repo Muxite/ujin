@@ -66,6 +66,15 @@ class ScrapeConfig:
     # default — the generic app uses NullScorer.
     enable_breaking_scorer: bool = False
 
+    # Adaptive strategy learning (opt-in). When enabled, the scrape service
+    # constructs a durable ujin.adapt.StrategyFeedback: the 'auto' backend
+    # order is biased per host by the proven-best (backend, render_mode), and
+    # every fetch outcome is recorded so the loop closes. ``strategy_db`` is the
+    # SQLite path (empty → ephemeral ``:memory:``). Off by default → a no-config
+    # deploy is byte-identical to before.
+    learn_strategy: bool = False
+    strategy_db: str = ""
+
     # Trends / corroboration (used only when a BreakingScorer is wired).
     corroboration_window_secs: int = 1800
     corroboration_min_hosts: int = 3
@@ -105,6 +114,8 @@ class ScrapeConfig:
         "nitter_pool_path": "NITTER_POOL_PATH",
         "x_allow_brave": "X_ALLOW_BRAVE",
         "enable_breaking_scorer": "UJIN_BREAKING_SCORER",
+        "learn_strategy": "UJIN_LEARN_STRATEGY",
+        "strategy_db": "UJIN_STRATEGY_DB",
         "corroboration_window_secs": "CORROBORATION_WINDOW_SECS",
         "corroboration_min_hosts": "CORROBORATION_MIN_HOSTS",
         "corroboration_max_hosts_for_full_score": "CORROBORATION_MAX_HOSTS",

@@ -334,6 +334,50 @@ if fb.is_penalized(host, strategy, rec):
 `is_penalized` is **pure (no I/O)**: it calls `derive_signals(record)` internally
 and returns `True` when `rate_limited` is set or `health < 0.5`.
 
+### The closed loop in the scrape service
+
+`ScrapeService` can drive `StrategyFeedback` end-to-end so the `auto` backend
+order *learns* per host. It is **opt-in and off by default** — a no-config scrape
+is byte-identical to before. Two `ScrapeConfig` fields (and their env aliases)
+turn it on:
+
+| Config field | Env var | Default | Meaning |
+|--------------|---------|---------|---------|
+| `learn_strategy` | `UJIN_LEARN_STRATEGY` | `False` | Enable the feedback loop |
+| `strategy_db` | `UJIN_STRATEGY_DB` | `""` | SQLite path; empty → ephemeral `:memory:` |
+
+```python
+from ujin.scrape.config import ScrapeConfig
+from ujin.scrape.build import build_scrape_service
+
+# Durable across restarts: outcomes accumulate in strategy.db.
+cfg = ScrapeConfig(learn_strategy=True, strategy_db="strategy.db")
+service, comps, aclose = await build_scrape_service(cfg)
+# ... service.scrape(...) ...
+await aclose()        # checkpoints + closes the StrategyFeedback store
+```
+
+When enabled, `build_scrape_components` constructs one shared `StrategyFeedback`
+(durable at `strategy_db`, or `:memory:` when unset — what the tests use) and
+`close_scrape_components` (called by the returned `aclose`) checkpoints and closes
+it on shutdown. The service then:
+
+- **Biases the first attempt.** On the `auto` path (no `render=`/per-host pin), it
+  consults `recommend(host)` and tries that proven-best `(backend, render_mode)`
+  first — e.g. a host that has been winning on `obscura` skips the HTTP attempt.
+- **Skips penalized strategies.** If an injected `SiteStore` reports the host as
+  rate-limited or unhealthy, `is_penalized()` suppresses the bias and the request
+  falls back to the normal auto order. Biasing **never raises**: a broken or
+  closed store degrades to the default order.
+- **Records every outcome.** After each fetch attempt — HTTP, obscura, or browser,
+  success *or* failure — it calls `record(host, strategy, ok=..., latency=...)`,
+  so the next request's recommendation reflects what just happened. The loop
+  closes: an HTTP `403` that escalates to obscura records `http=fail` + `obscura=ok`,
+  and the *next* scrape biases obscura first.
+
+With `learn_strategy=False` (the default) none of this runs: nothing is recorded
+and the auto order is untouched.
+
 ---
 
 ## ujin.robots — robots.txt policy
@@ -395,6 +439,54 @@ class FixedDelays:
         return {"slow.com": 5.0}.get(host)
 
 gov = LearnedRateLimiter(store, robots=FixedDelays(), base_interval=1.0)
+```
+
+### robots auto-respect in `PollEngine`
+
+Pass `respect_robots=True` (requires `adaptive=True`) to have the engine
+automatically build a `RobotsCache` and wire it into the adaptive path.  No
+external configuration is needed; the TTL and fetcher are injectable for tests.
+
+```python
+engine = PollEngine(
+    adaptive=True,
+    respect_robots=True,             # off by default
+    robots_ttl=3600.0,               # re-fetch robots.txt after this many seconds (default 1 h)
+    robots_fetcher=None,             # async (url) -> str; None = default aiohttp fetcher
+)
+```
+
+**`Crawl-delay` floor** — every host's effective poll interval is raised to at
+least the `Crawl-delay` declared in that host's robots.txt.  This is applied
+through the existing `robots=` hook on `LearnedRateLimiter`, so it works the same
+way as passing a `RobotsPolicy` directly.
+
+**Disallow skip** — before each poll the engine checks whether the target URL's
+path is allowed.  If the path is disallowed the engine:
+- records the poll in `target.polls` (so stats are accurate)
+- returns `PollResult(ok=True, changed=False)` without calling `pollable.poll()`
+- does **not** advance backoff, circuit-breaker, or the penalty interval —
+  cooldown/rate-limit state is unaffected
+
+```python
+# Any target whose URL matches a Disallow: rule is silently skipped.
+# Targets whose URLs are allowed are fetched and paced normally.
+engine.add(HttpPollable("https://example.com/public/page"), base=60)
+engine.add(HttpPollable("https://example.com/private/data"), base=60)
+# ^ the second target will be skipped every tick if robots.txt says Disallow: /private
+```
+
+**Injected fetcher for tests** (fully offline):
+
+```python
+async def fake_robots(url: str) -> str:
+    return "User-agent: *\nCrawl-delay: 5\nDisallow: /private\n"
+
+engine = PollEngine(
+    adaptive=True,
+    respect_robots=True,
+    robots_fetcher=fake_robots,
+)
 ```
 
 ---
