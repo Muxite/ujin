@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Test coverage for social sources and jobs client** — fixture-driven offline unit tests for `mastodon.py` (47%→100%), `twitter.py` (44%→100%), `jobs/client.py` (67%→97%), and `sitemap.py` (79%→100%); total suite coverage rises to 87.4% (floor 85%).
+
 ## 0.5.0 — 2026-06-17
 
 Feature + performance + developer-experience cycle. Every change is **additive** —
