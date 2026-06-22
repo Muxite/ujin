@@ -17,6 +17,15 @@ features list, quickstart, or `docs/` pages have drifted, include a dedicated
 actually shipped — accurate feature list, runnable examples, current CLI/config. Plan
 one whenever docs are stale; don't let it slide more than a cycle or two.
 
+ACCEPTANCE CRITERIA MUST BE SATISFIABLE — this is critical. Write outcome-based
+criteria a reasonable implementation can meet, NOT brittle exact-match traps. In
+particular, for docs (and generally): do NOT require specific literal strings/keywords
+to appear in a specific file, do NOT require an exact set of changed files ("diff
+shows only X"), and do NOT invent keyword lists. Instead say WHAT must be true, e.g.
+"README's feature list mentions the adaptive-learning and robots capabilities", "the
+quickstart example runs as written", "docs/ pages for changed subsystems are updated".
+Over-specified criteria cause the verifier to reject good work and the focus to die.
+
 Output ONLY a JSON array, nothing else. Each element:
 
 {
