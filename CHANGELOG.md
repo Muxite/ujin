@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **test(poll-coverage)**: Added 10 offline unit tests covering previously-uncovered error/edge branches in the live poll subsystem — empty-argv `ValueError` (command.py:25), `asyncio.TimeoutError` timeout path (command.py:42-44), generic subprocess exception (command.py:47-48), feedparser `ImportError` (rss.py:23-24), `parse_feed` exception (rss.py:29-30), `decide_changed(None, ...)` short-circuit (base.py:79), bytes/bytearray fingerprint branch (base.py:26), `aiohttp` `ImportError` (api.py:53-54), request-level network exception (api.py:72-73), and `render=True` ObscuraFetcher path (site.py:54-58); all five targeted files reach 100 % line coverage and total suite coverage rises from 95.43 % to 95.50 %.
+
 ## 0.11.0 — 2026-06-22
 
 ### Added
