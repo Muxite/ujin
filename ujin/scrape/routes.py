@@ -85,6 +85,7 @@ def _result_to_response(result) -> ScrapeResponse:
         ],
         article=article,
         structured=getattr(result, "structured", None),
+        html=getattr(result, "html", None),
         final_url=result.final_url,
         note=result.note,
         next_poll_hint_secs=getattr(result, "next_poll_hint_secs", None),
@@ -134,12 +135,47 @@ def _paginate(resp: ScrapeResponse, page_size: int, cursor: str | None) -> Scrap
     return resp
 
 
+async def _scrape_multi(service, req: ScrapeRequest) -> ScrapeResponse:
+    """Run several extract modes over one fetch and pack them into `extracts`.
+
+    The top-level response mirrors the first requested mode (so a naive client
+    still gets a coherent single-mode-shaped body); `extracts` carries a full
+    `ScrapeResponse` per requested mode, keyed by mode name. Pagination is not
+    applied in multi-extract mode.
+    """
+    try:
+        per_mode = await service.scrape_multi(
+            req.url,
+            modes=req.modes,
+            force_refresh=req.force_refresh,
+            render=req.render,
+            actions=req.actions,
+        )
+    except HostCooldown as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    extracts = {mode: _result_to_response(res) for mode, res in per_mode.items()}
+    # First listed mode is the primary; fall back to any entry if the service
+    # dropped it (it never does, but keep the handler total).
+    primary = extracts.get(req.modes[0]) or next(iter(extracts.values()))
+    # Copy so attaching `extracts` doesn't make the primary point at itself.
+    top = primary.model_copy()
+    top.extracts = extracts
+    return top
+
+
 @router.post("/scrape", response_model=ScrapeResponse)
 async def scrape(req: ScrapeRequest, request: Request) -> ScrapeResponse:
     """Render and extract a single page (headlines or article body)."""
     if not req.url:
         raise HTTPException(status_code=400, detail="url required")
     service = request.app.state.service
+    if req.modes:
+        return await _scrape_multi(service, req)
     try:
         result = await service.scrape(
             req.url,

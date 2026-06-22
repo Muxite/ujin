@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.0 — 2026-06-22
+
+### Added
+- **Learned rate governor** (`ujin/adapt/rate.py`, pure stdlib) —
+  `LearnedRateLimiter(store, robots=None, *, base_interval=0.0, clock=..., sleep=...,
+  max_concurrency=8)` composes `derive_signals(record)` output
+  (`recommended_interval`, `concurrency_factor`, `rate_limited`, `cooldown_secs`) via
+  the `SignalAdvisor` bridge with an optional robots `Crawl-delay`, backed by the
+  existing `AdaptiveInterval` / `AIMDLimiter` / `TokenBucket` primitives.
+  `interval_for(host)` / `concurrency_for(host)` report the effective cadence and
+  concurrency (the interval never below `max(observed Crawl-delay,
+  robots.crawl_delay(host))`); the async `acquire(host)` gate (also `async with`)
+  paces a per-host token bucket and caps in-flight requests; `observe(host,
+  status=..., latency=..., error=...)` feeds each response back into the store and
+  the in-process controllers so a 429 raises the interval and throttles concurrency
+  while clean responses relax both toward baseline. Persisted state warm-starts the
+  controllers on restart. Exported additively from `ujin.adapt`; opt-in and wired
+  into nothing by default — the scrape/poll path is unchanged unless the limiter is
+  explicitly used. `crawl_delay` and the host-policy signals now drive this governor.
+- **scrape multi-extract**: `POST /scrape` now accepts an optional `modes` list (`links`/`article`/`auto`/`structured`/`html`) so one request fetches the page once and returns a result per mode under a new additive `extracts` map (keyed by mode); the top-level fields mirror the first listed mode. Backed by `ScrapeService.scrape_multi()`, which runs each mode over the already-fetched body and isolates per-mode failures as `kind='error'` entries so one failing mode never sinks the others. The `html` mode returns the raw fetched HTML in the new `html` response field. Omitting `modes` keeps the classic single-`mode` behaviour byte-for-byte unchanged.
+
 ## 0.7.0 — 2026-06-22
 
 - **tests**: Added `tests/test_cov_trends_mcp.py` (35 offline tests) raising per-file coverage of `ujin/trends/corroboration.py`, `ujin/trends/scorer.py`, `ujin/mcp/server.py`, `ujin/service.py`, and `ujin/sources/social/x.py` to ≥99% each, lifting TOTAL coverage from ~89% to 90.7%.
