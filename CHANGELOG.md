@@ -4,6 +4,7 @@
 
 ### Added
 - **Opt-in strategy-feedback loop in the scrape service** — `ScrapeConfig(learn_strategy=True, strategy_db=...)` constructs a durable `ujin.adapt.StrategyFeedback` (built/closed by `build_scrape_components`; empty `strategy_db` → ephemeral `:memory:`). When on, the `auto` backend path biases the first `(backend, render_mode)` it tries toward the host's proven-best `recommend()`, skips a recommendation flagged by `is_penalized()` (via an optional injected `SiteStore`), and records every fetch outcome with `record(host, backend, render_mode, ok, latency)` so the loop closes. Strictly additive and off by default — a no-config scrape is byte-identical to before.
+- **`PollEngine(respect_robots=True)`** — when `adaptive=True` is also set, automatically builds a `RobotsCache` (injectable `robots_fetcher`, configurable `robots_ttl`, 1 h default) and wires it into the engine's `robots=` hook on `LearnedRateLimiter`: `Crawl-delay` becomes a hard floor on the learned per-host interval, and any URL whose path is disallowed is silently skipped — counted as a poll but not a failure so backoff and penalty logic are unaffected. Off by default; the pre-existing engine/poll path is byte-identical when the flag is unset.
 
 ## 0.10.0 — 2026-06-22
 

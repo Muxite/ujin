@@ -18,6 +18,13 @@ through ``acquire(host)``, floors each target's next interval by
 ``interval_for(host)``, and feeds every response back via ``observe(...)`` so a
 restarted process resumes calibrated. With the flag unset the path is
 byte-identical to before — no store, no limiter, no extra I/O.
+
+Opt-in robots.txt auto-respect: pass ``respect_robots=True`` (requires
+``adaptive=True``) to build a :class:`~ujin.robots.RobotsCache` and wire it into
+the engine's ``robots=`` hook on :class:`~ujin.adapt.rate.LearnedRateLimiter`.
+``Crawl-delay`` becomes a hard floor on the learned per-host interval and any URL
+whose path is disallowed by robots.txt is silently skipped — counted as a poll but
+not a failure so backoff and penalty logic are unaffected.  Off by default.
 """
 from __future__ import annotations
 
@@ -37,10 +44,45 @@ from ujin.adapt.interval import AdaptiveInterval
 from ujin.adapt.rate import LearnedRateLimiter
 from ujin.adapt.site_store import SiteStore
 from ujin.poll.base import Pollable, PollResult
+from ujin.robots import RobotsCache, RobotsPolicy
 
 log = logging.getLogger("ujin.engine")
 
 OnChange = Callable[[str, PollResult], Awaitable[None] | None]
+
+
+class _RobotsAdaptor:
+    """Bridges async :class:`~ujin.robots.RobotsCache` to the sync ``_Robots``
+    protocol expected by :class:`~ujin.adapt.rate.LearnedRateLimiter`, and
+    provides per-path allow checking for the engine's skip logic.
+
+    ``crawl_delay(host)`` is synchronous — it reads from an in-process dict of
+    already-fetched policies.  ``ensure(origin)`` is the async half that fetches
+    (or TTL-returns) the policy and populates that dict; ``poll_once`` calls it
+    before each poll so the policy is always current by the time the sync side
+    is queried.
+    """
+
+    def __init__(self, cache: RobotsCache) -> None:
+        self._cache = cache
+        self._policies: dict[str, RobotsPolicy] = {}
+
+    async def ensure(self, origin: str) -> RobotsPolicy:
+        """Fetch (or TTL-return cached) policy for *origin*; index by hostname."""
+        policy = await self._cache.get(origin)
+        host = urlparse(origin).hostname or origin
+        self._policies[host] = policy
+        return policy
+
+    def crawl_delay(self, host: str) -> float | None:
+        """Sync: Crawl-delay for *host*, or ``None`` if not yet fetched."""
+        policy = self._policies.get(host)
+        return policy.crawl_delay() if policy is not None else None
+
+    def is_allowed(self, host: str, path: str) -> bool:
+        """Sync: whether *path* is allowed for *host* per the fetched policy."""
+        policy = self._policies.get(host)
+        return policy.is_allowed(path) if policy is not None else True
 
 
 @dataclass
@@ -59,6 +101,7 @@ class Target:
     changes: int = 0
     last_delay: float = 0.0
     host: str = ""  # learned-rate-limit identity; only set when adaptive is on
+    robots_origin: str = ""  # full origin for robots.txt; only set when respect_robots is on
 
     @property
     def key(self) -> str:
@@ -79,6 +122,9 @@ class PollEngine:
         site_store_path: str | Path = ":memory:",
         adaptive_base_interval: float = 0.0,
         robots: Any | None = None,
+        respect_robots: bool = False,
+        robots_ttl: float = 3600.0,
+        robots_fetcher: Any | None = None,
     ) -> None:
         self.targets: dict[str, Target] = {}
         self.bucket = token_bucket or TokenBucket(rate=10.0, burst=10.0, clock=clock)
@@ -96,10 +142,17 @@ class PollEngine:
         self.adaptive = bool(adaptive)
         self.site_store: SiteStore | None = None
         self.limiter: LearnedRateLimiter | None = None
+        self._robots_adaptor: _RobotsAdaptor | None = None
         if self.adaptive:
             self.site_store = site_store or SiteStore(
                 path=site_store_path, clock=clock
             )
+            if respect_robots:
+                _cache = RobotsCache(
+                    ttl=robots_ttl, fetcher=robots_fetcher, clock=clock
+                )
+                self._robots_adaptor = _RobotsAdaptor(_cache)
+                robots = self._robots_adaptor  # supply Crawl-delay floor to limiter
             self.limiter = LearnedRateLimiter(
                 self.site_store,
                 robots=robots,
@@ -130,6 +183,8 @@ class PollEngine:
                         on_change=on_change)
         if self.limiter is not None:
             target.host = self._host_for(pollable)
+        if self._robots_adaptor is not None:
+            target.robots_origin = self._origin_for(pollable)
         # phase jitter: start out-of-phase so targets never fire together
         target.next_due = self.clock() + _jitter.phase(base, rng=self.rng)
         self.targets[pollable.key] = target
@@ -148,6 +203,21 @@ class PollEngine:
         parsed = urlparse(raw if "://" in raw else f"//{raw}")
         return parsed.hostname or raw
 
+    @staticmethod
+    def _origin_for(pollable: Pollable) -> str:
+        """Full ``scheme://host`` origin for robots.txt fetch.
+
+        Returns an empty string when no URL-like attribute is present so callers
+        can skip the robots check for non-HTTP pollables.
+        """
+        raw = getattr(pollable, "url", None) or getattr(pollable, "key", "") or ""
+        if "://" in raw:
+            p = urlparse(raw)
+            if p.scheme and p.hostname:
+                return f"{p.scheme}://{p.hostname}"
+        host = PollEngine._host_for(pollable)
+        return f"https://{host}" if host else ""
+
     # -- one poll ---------------------------------------------------------- #
     async def poll_once(self, target: Target) -> PollResult:
         """Run one poll, update adaptive state + schedule next_due. Returns result.
@@ -156,6 +226,19 @@ class PollEngine:
         scheduler to drive ``once``/``cron``/run-now jobs through the same global
         :class:`TokenBucket` + concurrency gate.
         """
+        # Robots disallow check (opt-in): if the target's path is disallowed we
+        # skip the fetch entirely — counted as a poll but not a failure so backoff
+        # and penalty state are unaffected.
+        if self._robots_adaptor is not None and target.robots_origin:
+            policy = await self._robots_adaptor.ensure(target.robots_origin)
+            raw_url = getattr(target.pollable, "url", "") or ""
+            path = urlparse(raw_url).path or "/" if "://" in raw_url else "/"
+            if not policy.is_allowed(path):
+                target.polls += 1
+                target.last_delay = target.interval.current
+                target.next_due = self.clock() + target.interval.current
+                return PollResult(ok=True, changed=False)
+
         gate = None
         async with self.sem:
             await self.bucket.acquire(sleep=self.sleep)

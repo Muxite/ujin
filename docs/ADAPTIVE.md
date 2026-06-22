@@ -441,6 +441,54 @@ class FixedDelays:
 gov = LearnedRateLimiter(store, robots=FixedDelays(), base_interval=1.0)
 ```
 
+### robots auto-respect in `PollEngine`
+
+Pass `respect_robots=True` (requires `adaptive=True`) to have the engine
+automatically build a `RobotsCache` and wire it into the adaptive path.  No
+external configuration is needed; the TTL and fetcher are injectable for tests.
+
+```python
+engine = PollEngine(
+    adaptive=True,
+    respect_robots=True,             # off by default
+    robots_ttl=3600.0,               # re-fetch robots.txt after this many seconds (default 1 h)
+    robots_fetcher=None,             # async (url) -> str; None = default aiohttp fetcher
+)
+```
+
+**`Crawl-delay` floor** — every host's effective poll interval is raised to at
+least the `Crawl-delay` declared in that host's robots.txt.  This is applied
+through the existing `robots=` hook on `LearnedRateLimiter`, so it works the same
+way as passing a `RobotsPolicy` directly.
+
+**Disallow skip** — before each poll the engine checks whether the target URL's
+path is allowed.  If the path is disallowed the engine:
+- records the poll in `target.polls` (so stats are accurate)
+- returns `PollResult(ok=True, changed=False)` without calling `pollable.poll()`
+- does **not** advance backoff, circuit-breaker, or the penalty interval —
+  cooldown/rate-limit state is unaffected
+
+```python
+# Any target whose URL matches a Disallow: rule is silently skipped.
+# Targets whose URLs are allowed are fetched and paced normally.
+engine.add(HttpPollable("https://example.com/public/page"), base=60)
+engine.add(HttpPollable("https://example.com/private/data"), base=60)
+# ^ the second target will be skipped every tick if robots.txt says Disallow: /private
+```
+
+**Injected fetcher for tests** (fully offline):
+
+```python
+async def fake_robots(url: str) -> str:
+    return "User-agent: *\nCrawl-delay: 5\nDisallow: /private\n"
+
+engine = PollEngine(
+    adaptive=True,
+    respect_robots=True,
+    robots_fetcher=fake_robots,
+)
+```
+
 ---
 
 ## End-to-end example
