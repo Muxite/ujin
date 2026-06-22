@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.17.0 — 2026-06-22
 
 ### Added
 - **`filter` transform** — new built-in that keeps or drops items from a list payload by a configurable predicate over a dotted `key`, supporting operators `eq`, `ne`, `gt`, `lt`, `ge`, `le`, `in`, `contains`, `exists`, and `regex`/`matches`, plus a `negate`/`exclude` flag to invert selection; on a dict payload the whole event is kept or dropped; non-list/non-dict payloads and empty inputs pass through unchanged. Registered as `kind: filter`, discoverable at `GET /kinds`, and documented in `docs/LIST_TRANSFORMS.md`.
