@@ -83,8 +83,23 @@ pristine (`health == 1.0`, no cooldown, full concurrency, interval ==
 `base_interval`). `SignalAdvisor(store)` is the only stateful piece — a read-only
 bridge whose `for_host(host)` reads `store.get(host)` and derives signals without
 mutating anything. It is additive and opt-in: nothing wires it into the
-scrape/poll path. It is the input layer the planned strategy-feedback and
+scrape/poll path. It is the input layer the strategy-feedback and
 learned-rate-limit units consume.
+
+**`StrategyFeedback` / `StrategyOutcome`** (`adapt/strategy.py`) is the durable
+per-host, per-strategy outcome store.  A *strategy* is a `(backend, render_mode)`
+pair (e.g. `("http", "html")`, `("obscura", "js")`).
+`record(host, strategy, *, ok, latency)` is an atomic, serialized upsert — counters
+(`attempts`, `successes`, `failures`) accumulate, latency gauges overwrite, and
+`last_seen` is stamped from an injectable clock — mirroring `SiteStore`'s WAL-mode
+/ `synchronous=NORMAL` durability.  `recommend(host)` returns the
+highest-success-rate known strategy deterministically (ties broken by attempt count
+then lexicographic order), or `None` for an unseen host.  `is_penalized(host,
+strategy, record)` is a pure no-I/O helper that returns `True` when
+`derive_signals(record).rate_limited` or `health` is below the low-health
+threshold, letting callers skip a strategy without extra I/O.  Both names are
+exported additively from `ujin.adapt`; opt-in only and wired into nothing by
+default — it is the input layer for future learned strategy-selection.
 
 ## The scrape fallback chain (scrape/service.py)
 
