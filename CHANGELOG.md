@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **docs(api)**: Reconciled `docs/API.md` against the shipped 0.16.0 surface: added `render`, `actions`, `page_size`, and `cursor` to the `POST /scrape` request-field table (all four are accepted by `ScrapeRequest` and referenced in prose, but were absent from the reference table); added `UJIN_LEARN_STRATEGY` and `UJIN_STRATEGY_DB` to the configuration table (both ship via `ScrapeConfig.from_env()` and were mentioned in `README.md` but missing from the API config reference).
+
 ## 0.15.0 — 2026-06-22
 
 ### Added
