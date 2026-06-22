@@ -11,6 +11,9 @@ Your job is the judgment the harness cannot make:
   * is there dead, duplicate, or obviously broken code?
   * does it stay ADDITIVE and leave every frozen public surface intact?
   * does it touch `tests/test_consumer_contracts.py`? (it must NOT)
+  * if the change is USER-FACING (new/changed public API, CLI, env var, config key,
+    HTTP endpoint/field, or capability), did it also update `README.md` and the
+    relevant `docs/`? Stale docs are a NEEDS_WORK.
 
 Output ONLY a JSON object, nothing else, matching exactly this schema:
 
@@ -23,7 +26,8 @@ Output ONLY a JSON object, nothing else, matching exactly this schema:
     "bench_ok": true,
     "contracts_untouched": true,
     "diff_matches_acceptance": true,
-    "no_scope_creep": true
+    "no_scope_creep": true,
+    "docs_updated": true
   },
   "blocking_issues": ["..."],
   "confidence": 0.0

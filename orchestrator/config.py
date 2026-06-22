@@ -63,6 +63,9 @@ class Config:
     max_concurrent: int = 3
     max_build_retries: int = 2
     coverage_floor: float = 85.0
+    # The ratchet never raises the floor above this — keeps feature work from being
+    # forced to maintain a near-impossible total-coverage bar set by hardening units.
+    coverage_floor_cap: float = 90.0
     bench_tolerance: float = 4.0
     # Paths (relative to repo root) whose modification hard-blocks a merge.
     contract_paths: tuple[str, ...] = ("tests/test_consumer_contracts.py",)

@@ -103,7 +103,7 @@ def _do_plan(cfg, backend, store, cycle) -> dict[str, Any]:
         store.log_event(cfg.cycle, "plan_empty")
         return {"action": "plan_empty"}
 
-    floor = store.read_cov_floor(cfg.coverage_floor)
+    floor = min(store.read_cov_floor(cfg.coverage_floor), cfg.coverage_floor_cap)
     for item in items:
         fs = FocusState(
             focus=item["focus"],
@@ -188,7 +188,9 @@ def _build(cfg, backend, store, fs: FocusState) -> str:
 
 def _test(cfg, store, fs: FocusState) -> str:
     wt = worktree.path_for(cfg, fs.focus)
-    floor = store.read_cov_floor(cfg.coverage_floor)
+    # Gate floor is clamped to the cap so the ratchet can't force feature work to hold
+    # a near-impossible total-coverage bar set by earlier hardening units.
+    floor = min(store.read_cov_floor(cfg.coverage_floor), cfg.coverage_floor_cap)
     # No-progress guard: identical diff across a retry means the builder is stuck.
     diff_hash = gitutil.diff_hash(cfg.integration_branch, cwd=wt)
     if fs.attempts > 0 and diff_hash == fs.last_diff_hash:
@@ -199,9 +201,10 @@ def _test(cfg, store, fs: FocusState) -> str:
     test["cov_floor"] = floor
     fs.test = test
     if gate_passed(test):
-        # Ratchet the coverage floor upward when this branch raised it.
+        # Ratchet the coverage floor upward when this branch raised it — but never
+        # above the cap.
         if test.get("cov_pct") and test["cov_pct"] > floor:
-            store.write_cov_floor(min(test["cov_pct"], 100.0))
+            store.write_cov_floor(min(test["cov_pct"], cfg.coverage_floor_cap))
         fs.phase = PHASE_REVIEWING
         store.write_focus(fs)
         store.log_event(cfg.cycle, "gate_green", focus=fs.focus, cov=test.get("cov_pct"))
