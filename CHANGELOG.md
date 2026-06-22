@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.11.0 — 2026-06-22
 
 ### Added
 - **Opt-in strategy-feedback loop in the scrape service** — `ScrapeConfig(learn_strategy=True, strategy_db=...)` constructs a durable `ujin.adapt.StrategyFeedback` (built/closed by `build_scrape_components`; empty `strategy_db` → ephemeral `:memory:`). When on, the `auto` backend path biases the first `(backend, render_mode)` it tries toward the host's proven-best `recommend()`, skips a recommendation flagged by `is_penalized()` (via an optional injected `SiteStore`), and records every fetch outcome with `record(host, backend, render_mode, ok, latency)` so the loop closes. Strictly additive and off by default — a no-config scrape is byte-identical to before.
