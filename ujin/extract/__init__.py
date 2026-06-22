@@ -11,6 +11,7 @@ from .links import (
     fingerprint_links,
     normalize_url,
 )
+from .contacts import extract_contacts
 from .feeds import extract_feeds
 from .images import extract_images
 from .metadata import extract_metadata
@@ -31,4 +32,5 @@ __all__ = [
     "extract_images",
     "extract_metadata",
     "extract_feeds",
+    "extract_contacts",
 ]

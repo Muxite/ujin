@@ -45,7 +45,7 @@ from .scoring import NullScorer, Scorer
 logger = logging.getLogger("ujin.scrape.service")
 
 
-Mode = Literal["links", "article", "auto", "combined", "structured", "tables", "images", "metadata"]
+Mode = Literal["links", "article", "auto", "combined", "structured", "tables", "images", "metadata", "feeds", "contacts"]
 
 # Canonical (backend, render_mode) pairs recorded into StrategyFeedback, one per
 # fetch backend the service can drive. These match the tuples the adapt layer's
@@ -76,6 +76,7 @@ class ScrapeResult:
     images: Optional[list] = None  # img dicts, populated by the "images" mode
     metadata: Optional[dict] = None  # head summary, populated by the "metadata" mode
     feeds: Optional[list] = None  # feed dicts, populated by the "feeds" mode
+    contacts: Optional[dict] = None  # contact dict, populated by the "contacts" mode
     html: Optional[str] = None  # raw body, only populated by the multi-extract "html" mode
     final_url: Optional[str] = None
     note: Optional[str] = None
@@ -394,6 +395,32 @@ class ScrapeService:
                 feeds=feeds, final_url=final_url,
             )
 
+        if mode == "contacts":
+            from ..extract.contacts import extract_contacts
+
+            contacts = extract_contacts(html, base_url=final_url or url)
+            fingerprint = _fingerprint(contacts)
+            entry = CachedEntry(
+                url=url,
+                fingerprint=fingerprint,
+                payload={"contacts": contacts},
+                fetched_at=time.monotonic(),
+                etag=http_meta.get("etag"),
+                last_modified=http_meta.get("last_modified"),
+            )
+            self._cache.put(cache_key, entry)
+            self._metrics.record(
+                url, success=True,
+                latency_ms=(time.monotonic() - loop_start) * 1000,
+                used_renderer=used_renderer, strategy=fetch_strategy,
+            )
+            return ScrapeResult(
+                url=url, kind="contacts", fingerprint=fingerprint,
+                fetched_at=time.time(), cached=False, age_secs=0.0,
+                used_renderer=used_renderer, strategy_used=fetch_strategy,
+                contacts=contacts, final_url=final_url,
+            )
+
         if mode == "article":
             override = self._overrides.lookup(url)
             article = None
@@ -603,6 +630,17 @@ class ScrapeService:
                 used_renderer, fetch_strategy, final_url,
             )
             res.feeds = feeds
+            return res
+
+        if mode == "contacts":
+            from ..extract.contacts import extract_contacts
+
+            contacts = extract_contacts(html, base_url=base_url)
+            res = self._mode_result(
+                url, "contacts", _fingerprint(contacts),
+                used_renderer, fetch_strategy, final_url,
+            )
+            res.contacts = contacts
             return res
 
         if mode == "article":
@@ -1400,6 +1438,18 @@ class ScrapeService:
                 cached=True, age_secs=entry.age_secs,
                 used_renderer=False, strategy_used="cache",
                 feeds=feeds,
+                note=note,
+            )
+        if mode == "contacts":
+            contacts = entry.payload.get("contacts")
+            return ScrapeResult(
+                url=entry.url,
+                kind="contacts",
+                fingerprint=entry.fingerprint,
+                fetched_at=time.time(),
+                cached=True, age_secs=entry.age_secs,
+                used_renderer=False, strategy_used="cache",
+                contacts=contacts,
                 note=note,
             )
         return ScrapeResult(

@@ -9,8 +9,8 @@ The **ultimate scraper-poller**. Two halves that share one toolkit:
 2. **Rich scrape service** — one-shot rendering + extraction with an
    HTTP → obscura → sitemap → RSS fallback chain, per-host cooldown,
    fingerprinted change detection, structured-data + HTML-table + image +
-   head-metadata extraction, and optional social/trends sources — all behind a
-   small HTTP API.
+   head-metadata + feed-URL extraction, and optional social/trends sources —
+   all behind a small HTTP API.
 
 It bundles the [obscura](https://github.com/Muxite/obscura) headless renderer as
 a submodule, and stays a **pure-python pip install** (the renderer is built
@@ -80,9 +80,10 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
 # (`tables` parses every <table> into header-keyed row dicts in `tables`;
 #  `images` parses every <img> into normalized dicts in `images`;
 #  `metadata` returns a flat head-metadata summary in `metadata`;
-#  `feeds` returns declared <link rel="alternate"> feed URLs in `feeds`)
+#  `feeds` returns declared <link rel="alternate"> feed URLs in `feeds`;
+#  `contacts` returns emails, phones, and social/profile links in `contacts`)
 curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
-  -d '{"url":"https://apnews.com","modes":["links","structured","tables","images","metadata","feeds","html"]}'
+  -d '{"url":"https://apnews.com","modes":["links","structured","tables","images","metadata","feeds","contacts","html"]}'
 
 # multi-URL batch: scrape many URLs concurrently, one result per URL under `batch`
 curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
@@ -203,7 +204,7 @@ Three FastAPI apps — run any combination. Full reference in
 - **Poller control** (`:8900`): `GET /health /metrics /targets`,
   `GET /content?key=…` (reuse the body ujin last fetched), `POST /targets`,
   `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.
-- **Scrape** (`:8901`): `POST /scrape` (modes `links|article|auto|combined|structured|tables|images|metadata|feeds`,
+- **Scrape** (`:8901`): `POST /scrape` (modes `links|article|auto|combined|structured|tables|images|metadata|feeds|contacts`,
   or a `modes` list for multi-extract — several modes over one fetch, results in
   `extracts`; or a `urls` list to scrape many URLs concurrently — one result per
   URL in `batch`), `/scrape:batch`, `/feed`, `/sitemap`, `/discover`, `/capabilities`,
@@ -276,7 +277,7 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
   ephemeral `:memory:`). Off by default — a no-config scrape is byte-identical
   to before (see [docs/ADAPTIVE.md](docs/ADAPTIVE.md)).
 - **Toolkit**: `ujin.fetch` (HTTP + obscura + altpath), `ujin.extract`
-  (article/links/profile/**structured** JSON-LD·OG·microdata/**tables**/**images**/**metadata**/**feeds** `<link rel=alternate>`), `ujin.cache`
+  (article/links/profile/**structured** JSON-LD·OG·microdata/**tables**/**images**/**metadata**/**feeds** `<link rel=alternate>`/**contacts** emails·phones·social links), `ujin.cache`
   (LRU+TTL, SQLite, per-host cooldown), `ujin.sources` (RSS/sitemap/discover +
   `social/`), `ujin.diff` (region diff + webhook sinks), `ujin.session`
   (cookies), `ujin.proxy` (rotation).
@@ -315,7 +316,7 @@ Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [ADAPTIVE](docs/ADAPTIVE.md) ·
 [PERFORMANCE](docs/PERFORMANCE.md) · [CONSUMERS](docs/CONSUMERS.md)
 (downstream submodule contracts) · [API](docs/API.md) · [JOBS](docs/JOBS.md) ·
 [WORKFLOWS](docs/WORKFLOWS.md) · [PLUGINS](docs/PLUGINS.md) ·
-[LIST_TRANSFORMS](docs/LIST_TRANSFORMS.md) (flatten/sort/limit/rename/aggregate/unique/fill/csv) ·
+[LIST_TRANSFORMS](docs/LIST_TRANSFORMS.md) (filter/flatten/sort/limit/rename/aggregate/unique/fill/csv) ·
 [BROWSER](docs/BROWSER.md) · [MCP](docs/MCP.md) · [CHANGELOG](CHANGELOG.md)
 
 ## Troubleshooting

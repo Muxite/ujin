@@ -48,8 +48,8 @@ Request (`ScrapeRequest`):
 |---|---|---|---|
 | `url` | string | — | absolute URL (required unless `urls` is set) |
 | `urls` | list of string | `null` | multi-URL batch: scrape several URLs, one result per URL (see below) |
-| `mode` | `links`\|`article`\|`auto`\|`combined`\|`structured`\|`tables`\|`images`\|`metadata`\|`feeds` | `links` | what to extract (single mode) |
-| `modes` | list of `links`\|`article`\|`auto`\|`structured`\|`tables`\|`images`\|`metadata`\|`feeds`\|`html` | `null` | multi-extract: several modes over one fetch (see below) |
+| `mode` | `links`\|`article`\|`auto`\|`combined`\|`structured`\|`tables`\|`images`\|`metadata`\|`feeds`\|`contacts` | `links` | what to extract (single mode) |
+| `modes` | list of `links`\|`article`\|`auto`\|`structured`\|`tables`\|`images`\|`metadata`\|`feeds`\|`contacts`\|`html` | `null` | multi-extract: several modes over one fetch (see below) |
 | `force_refresh` | bool | `false` | bypass cache + revalidation |
 | `enrich_html_top_n` | int 0–20 | `0` | (combined) fan out article fetches for the top-N HTML-only links |
 | `render` | `auto`\|`http`\|`obscura`\|`browser` | `auto` | pin the fetch strategy; `browser` runs the `actions` recipe in a real browser (JS pages, `load_more`) |
@@ -88,11 +88,26 @@ Modes:
   //     {"href": "https://apnews.com/atom.xml",  "type": "application/atom+xml"}
   //   ]
   ```
+- **contacts** — contact information from the page, returned in `contacts`: a dict
+  with `emails` (addresses from `mailto:` hrefs and visible text), `phones` (numbers
+  from `tel:` hrefs and visible text, international `+…` and NANP `(NXX) NXX-XXXX`
+  formats), and `links` (social/profile URLs whose `href` points to a known platform
+  or whose `rel` attribute contains `"me"`). All three lists are de-duplicated in
+  document order; hrefs in `links` are resolved against the page URL; text inside
+  `<script>`/`<style>` is skipped. Example:
+  ```json
+  { "mode": "contacts" }
+  // → "contacts": {
+  //     "emails": ["hello@example.com"],
+  //     "phones": ["+15551234567"],
+  //     "links": ["https://twitter.com/example", "https://github.com/example"]
+  //   }
+  ```
 - **html** — the raw fetched HTML, returned in `html` (multi-extract only).
 
 Response (`ScrapeResponse`, abridged):
 ```json
-{ "url": "...", "kind": "links|article|structured|tables|images|metadata|feeds|html|empty|error",
+{ "url": "...", "kind": "links|article|structured|tables|images|metadata|feeds|contacts|html|empty|error",
   "fingerprint": "sha256…", "fetched_at": 1780000000.0,
   "cached": false, "age_secs": 0.0, "used_renderer": false,
   "strategy_used": "http|http_304|obscura|browser|sitemap_news|rss|combined|cache",
@@ -100,9 +115,10 @@ Response (`ScrapeResponse`, abridged):
                "seen_in": ["rss","html"], "tier": "generic",
                "breaking_score": 0.0, "score_components": {} } ],
   "article": null, "structured": null, "tables": null, "images": null,
-  "metadata": null, "feeds": null, "html": null, "final_url": null, "note": null,
+  "metadata": null, "feeds": null, "contacts": null, "html": null,
+  "final_url": null, "note": null,
   "next_poll_hint_secs": 60.0, "max_breaking_score": 0.0,
-  "extracts": null, "batch": null }
+  "total": null, "next_cursor": null, "extracts": null, "batch": null }
 ```
 - `fingerprint` is a stable SHA-256 over the normalized payload — compare across
   calls to detect real change.
