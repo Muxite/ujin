@@ -268,6 +268,8 @@ def _install_builtins(reg: Registry) -> None:
 
         return MarketplaceSearchPollable(
             profile=cfg.get("profile", "amazon"),
+            profiles=cfg.get("profiles"),
+            profiles_path=cfg.get("profiles_path"),
             categories=cfg.get("categories"),
             terms_per_poll=cfg.get("terms_per_poll", 3),
             max_results=cfg.get("max_results", 8),

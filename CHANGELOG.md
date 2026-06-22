@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed (breaking for marketplace consumers)
+- **Marketplace profiles are now externally supplied, not built in.** `ujin.poll.marketplace`
+  keeps the generic engine (`MarketplaceSearchPollable`) but no longer ships the hardcoded
+  `SITE_PROFILES` (amazon/newegg/ebay/walmart). Profiles are loaded from an inline mapping
+  (`profiles=`), a file (`profiles_path=`), or `$UJIN_MARKETPLACE_PROFILES` (a YAML/JSON path,
+  mountable as a volume) — inline overrides file. An unknown `profile` now raises `ValueError`
+  instead of falling back to amazon. New `marketplace_search` source config keys: `profiles`,
+  `profiles_path`. The four prior profiles ship as a reference at
+  `examples/marketplace_profiles.yaml`; mount or pass it to retain previous behaviour. See
+  `docs/MARKETPLACE.md`. This lets the specific scraping config live in the consuming app
+  (e.g. wordle-max) rather than inside ujin.
+
 ## 0.18.0 — 2026-06-22
 
 ### Added

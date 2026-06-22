@@ -317,6 +317,7 @@ Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [ADAPTIVE](docs/ADAPTIVE.md) ·
 (downstream submodule contracts) · [API](docs/API.md) · [JOBS](docs/JOBS.md) ·
 [WORKFLOWS](docs/WORKFLOWS.md) · [PLUGINS](docs/PLUGINS.md) ·
 [LIST_TRANSFORMS](docs/LIST_TRANSFORMS.md) (filter/flatten/sort/limit/rename/aggregate/unique/fill/csv) ·
+[MARKETPLACE](docs/MARKETPLACE.md) (generic engine; site profiles supplied externally) ·
 [BROWSER](docs/BROWSER.md) · [MCP](docs/MCP.md) · [CHANGELOG](CHANGELOG.md)
 
 ## Troubleshooting

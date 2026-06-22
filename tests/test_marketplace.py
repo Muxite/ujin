@@ -1,38 +1,96 @@
-"""Site-profile marketplace source — registration + profile-driven sampling (no network)."""
+"""Generic marketplace engine + externally-supplied site profiles (no network).
+
+ujin ships no built-in profiles; these tests supply them inline or load the shipped
+reference file (which doubles as validation of examples/marketplace_profiles.yaml).
+"""
 from __future__ import annotations
 
-from ujin.poll.marketplace import SITE_PROFILES, MarketplaceSearchPollable
+from pathlib import Path
+
+import pytest
+
+from ujin.poll.marketplace import (
+    PROFILES_ENV,
+    MarketplaceSearchPollable,
+    load_profiles,
+)
 from ujin.registry import register
+
+EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "marketplace_profiles.yaml"
+
+INLINE = {
+    "shop": {
+        "domain": "shop.example",
+        "search_url": "https://www.{domain}/find?q={query}",
+        "engine": "http",
+        "keyterms": {"Cat": ["alpha", "beta", "gamma"]},
+    }
+}
 
 
 def test_registered_builtin():
     assert register.has("source", "marketplace_search")
 
 
-def test_newegg_profile_has_component_keyterms():
-    kt = SITE_PROFILES["newegg"]["keyterms"]
-    assert set(kt) == {"RAM", "SSD", "HDD"}
-    assert SITE_PROFILES["newegg"]["selectors"]["card"] == ".item-cell"
+# ── profile loading (file / inline / env / precedence) ─────────────────────────
+def test_load_profiles_from_file():
+    profs = load_profiles(path=EXAMPLE)
+    assert {"amazon", "newegg", "ebay", "walmart"} <= set(profs)
+    assert profs["newegg"]["selectors"]["card"] == ".item-cell"
+    assert "{query}" in profs["ebay"]["search_url"]
 
 
-def test_sample_draws_from_profile_keyterms_with_category():
-    src = MarketplaceSearchPollable(profile="newegg", terms_per_poll=3, seed=1)
+def test_load_profiles_inline_overrides_file():
+    merged = load_profiles(inline={"newegg": {"domain": "x", "search_url": "y"}}, path=EXAMPLE)
+    assert merged["newegg"]["domain"] == "x"      # inline wins
+    assert "ebay" in merged                          # file entries still present
+
+
+def test_load_profiles_from_env(monkeypatch):
+    monkeypatch.setenv(PROFILES_ENV, str(EXAMPLE))
+    assert "walmart" in load_profiles()
+
+
+def test_no_source_yields_no_profiles():
+    assert load_profiles() == {}
+
+
+# ── unknown profile is a hard error (no built-in fallback) ─────────────────────
+def test_unknown_profile_raises_with_profiles():
+    with pytest.raises(ValueError, match="unknown marketplace profile"):
+        MarketplaceSearchPollable(profile="nope", profiles=INLINE)
+
+
+def test_missing_profiles_raises():
+    with pytest.raises(ValueError, match="unknown marketplace profile"):
+        MarketplaceSearchPollable(profile="amazon")  # nothing supplied
+
+
+# ── engine behaviour, driven by a supplied profile ────────────────────────────
+def test_sample_draws_from_profile_keyterms():
+    src = MarketplaceSearchPollable(profile="newegg", profiles_path=str(EXAMPLE),
+                                    terms_per_poll=3, seed=1)
     pairs = src._sample()
-    assert len(pairs) == 3
-    valid = {(t, cat) for cat, terms in SITE_PROFILES["newegg"]["keyterms"].items() for t in terms}
-    assert all(p in valid for p in pairs)
+    valid = {(t, cat) for cat, terms in src.profile["keyterms"].items() for t in terms}
+    assert len(pairs) == 3 and all(p in valid for p in pairs)
 
 
-def test_child_pollable_uses_profile_url_and_source():
-    src = MarketplaceSearchPollable(profile="newegg", seed=1)
-    child = src._child("ddr5 ram", "RAM")
-    assert child.source == "newegg"
-    assert "newegg.com" in child.search_url
-    assert child.category == "RAM"
+def test_child_uses_profile_url_and_source_inline():
+    src = MarketplaceSearchPollable(profile="shop", profiles=INLINE, seed=1)
+    child = src._child("alpha", "Cat")
+    assert child.source == "shop"
+    assert "shop.example/find?q=" in child.search_url
+
+
+def test_ebay_child_uses_profile_url(monkeypatch):
+    src = MarketplaceSearchPollable(profile="ebay", profiles_path=str(EXAMPLE), seed=1)
+    child = src._child("wireless earbuds", "Electronics")
+    assert child.source == "ebay"
+    assert "ebay.com/sch/?_nkw=" in child.search_url
+    assert "wireless+earbuds" in child.search_url
 
 
 async def test_poll_combines_and_dedupes(monkeypatch):
-    """poll() orchestration without network: children are scraped, results deduped by id."""
     from ujin.poll import amazon as amz
     from ujin.poll.base import PollResult
 
@@ -46,7 +104,8 @@ async def test_poll_combines_and_dedupes(monkeypatch):
         ])
 
     monkeypatch.setattr(amz.AmazonSearchPollable, "poll", fake_child_poll)
-    src = MarketplaceSearchPollable(profile="newegg", terms_per_poll=3, seed=1)
+    src = MarketplaceSearchPollable(profile="newegg", profiles_path=str(EXAMPLE),
+                                    terms_per_poll=3, seed=1)
     res = await src.poll(None)
     assert res.ok and res.payload
     assert len(calls) == 3
@@ -75,42 +134,10 @@ async def test_amazon_search_poll_stamps_category_without_network(monkeypatch):
     assert res.payload[0]["category"] == "RAM"      # category stamped onto results
 
 
-def test_unknown_profile_falls_back_to_amazon():
-    src = MarketplaceSearchPollable(profile="nope")
-    assert src.profile_name == "amazon"
-
-
-# ── eBay / Walmart profiles ────────────────────────────────────────────────────
-def test_ebay_profile_shape():
-    prof = SITE_PROFILES["ebay"]
-    assert prof["domain"] == "ebay.com"
-    assert "{query}" in prof["search_url"] and "{domain}" in prof["search_url"]
-    assert prof["engine"] == "browser"          # bare HTTP gets bounced to an error page
-    sel = prof["selectors"]
-    assert ".s-item" in sel["card"]
-    assert prof["keyterms"]                       # has category banks
-
-
-def test_walmart_profile_shape():
-    prof = SITE_PROFILES["walmart"]
-    assert prof["domain"] == "walmart.com"
-    assert "/search?q={query}" in prof["search_url"]
-    assert prof["engine"] == "browser"
-    assert prof["selectors"]["id_attr"] == "data-item-id"
-    assert prof["keyterms"]
-
-
-def test_ebay_child_uses_profile_url_and_source():
-    src = MarketplaceSearchPollable(profile="ebay", seed=1)
-    child = src._child("wireless earbuds", "Electronics")
-    assert child.source == "ebay"
-    assert "ebay.com/sch/?_nkw=" in child.search_url     # /sch/i.html is blocked; /sch/ works
-    assert "wireless+earbuds" in child.search_url       # query is quote_plus-encoded
-
-
-def test_walmart_child_uses_profile_url_and_source():
-    src = MarketplaceSearchPollable(profile="walmart", seed=1)
-    child = src._child("olive oil", "Grocery")
-    assert child.source == "walmart"
-    assert "walmart.com/search?q=" in child.search_url
-    assert "olive+oil" in child.search_url
+# ── the shipped reference file is valid + complete ─────────────────────────────
+def test_reference_profiles_shapes():
+    p = load_profiles(path=EXAMPLE)
+    assert p["ebay"]["engine"] == "browser" and ".s-item" in p["ebay"]["selectors"]["card"]
+    assert p["walmart"]["selectors"]["id_attr"] == "data-item-id"
+    for prof in p.values():
+        assert "domain" in prof and "search_url" in prof

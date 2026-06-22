@@ -1,0 +1,82 @@
+# Reference marketplace site profiles for ujin's `marketplace_search` source.
+#
+# ujin ships NO built-in profiles — the engine is generic and reads these. Own this
+# file in your application (e.g. wordle-max) and hand it to ujin one of two ways:
+#
+#   1. Volume mount + env:   UJIN_MARKETPLACE_PROFILES=/config/marketplace_profiles.yaml
+#   2. Inline / by path in the workflow source config:
+#        source:
+#          kind: marketplace_search
+#          profile: ebay
+#          profiles_path: /config/marketplace_profiles.yaml   # or:
+#          profiles: { ebay: { domain: ebay.com, ... } }       # inline mapping
+#
+# Schema per profile: domain, search_url ({domain}/{query} templated), optional
+# selectors (CSS card overrides; omit for JSON-LD/OpenGraph defaults), engine
+# (auto|http|browser), wait_selector, desc_selectors, and a keyterms bank
+# (category -> sample terms). See docs/MARKETPLACE.md.
+
+amazon:
+  domain: amazon.com
+  search_url: "https://{domain}/s?k={query}"
+  selectors: null                 # Amazon defaults live in ujin/extract/product.py
+  engine: auto
+  wait_selector: "div[data-component-type='s-search-result']"
+  keyterms: {}                    # use the amazon_category source for Amazon sweeps
+
+# PC components. Newegg is JS-heavy, so default to the browser engine.
+newegg:
+  domain: newegg.com
+  search_url: "https://www.{domain}/p/pl?d={query}"
+  engine: browser
+  wait_selector: ".item-cell"
+  selectors:
+    card: ".item-cell"
+    id_attr: "data-id"
+    title: [".item-title"]
+    image: [".item-img img", "img"]
+    price: [".price-current", ".price-current strong"]
+    link: "a.item-title"
+  keyterms:
+    RAM: ["ddr4 ram", "ddr5 ram", "16gb ram", "32gb ram", "ddr5 6000"]
+    SSD: ["nvme ssd", "sata ssd", "1tb ssd", "2tb nvme ssd", "m.2 ssd"]
+    HDD: ["internal hard drive", "2tb hard drive", "4tb hard drive", "external hdd"]
+
+# eBay needs the browser engine (stealth context); /sch/?_nkw= serves the grid
+# (/sch/i.html is blocked). Card id is recovered from each /itm/<digits> link.
+ebay:
+  domain: ebay.com
+  search_url: "https://www.{domain}/sch/?_nkw={query}"
+  engine: browser
+  wait_selector: ".s-card, .s-item"
+  selectors:
+    card: ".s-card, .s-item"
+    id_attr: "data-id"
+    title: [".s-card__title", ".s-item__title span", ".s-item__title", "h3"]
+    image: [".s-card__image img", ".s-item__image-wrapper img", "img"]
+    price: [".s-card__price", ".s-item__price"]
+    link: ["a.su-link", "a.s-item__link", "a[href*='/itm/']"]
+  keyterms:
+    Electronics: ["wireless earbuds", "bluetooth speaker", "smart watch", "gaming mouse", "graphics card", "drone"]
+    Collectibles: ["pokemon cards", "vintage camera", "lego set", "action figure", "comic book"]
+    Apparel: ["leather jacket", "running shoes", "designer handbag", "mechanical watch", "sunglasses"]
+    Home: ["espresso machine", "cast iron skillet", "power tool", "vacuum cleaner"]
+
+# Walmart is behind PerimeterX ("Robot or human?") — best effort. Numeric data-item-id.
+walmart:
+  domain: walmart.com
+  search_url: "https://www.{domain}/search?q={query}"
+  engine: browser
+  wait_selector: "[data-item-id]"
+  selectors:
+    card: "[data-item-id]"
+    id_attr: "data-item-id"
+    title: ["[data-automation-id='product-title']", "span.w_iUH7", "a span"]
+    image: ["img[data-testid='productTileImage']", "img[loading]", "img"]
+    price: ["[data-automation-id='product-price'] .w_iUH7", "[data-automation-id='product-price']", "div[data-automation-id='product-price']"]
+    link: ["a[link-identifier]", "a[href*='/ip/']"]
+  keyterms:
+    Grocery: ["coffee", "olive oil", "protein powder", "cereal"]
+    Home: ["bed sheets", "throw pillow", "storage bin", "area rug"]
+    Electronics: ["bluetooth speaker", "tablet", "headphones", "smart bulb"]
+    Toys: ["board game", "building blocks", "remote control car"]
