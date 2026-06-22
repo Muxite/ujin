@@ -385,3 +385,158 @@ def test_watch_with_selectors_and_render(monkeypatch):
         "--render",
     ])
     assert rc == 0
+
+
+# ── learned (read-only SiteStore introspection) ──────────────────────────────
+
+def _seed_site_store(path, **rows):
+    """Write some hosts into a SiteStore db at ``path`` and close it.
+
+    ``rows`` maps host -> dict of record() signals.
+    """
+    from ujin.adapt import SiteStore
+
+    s = SiteStore(str(path))
+    for host, signals in rows.items():
+        s.record(host, **signals)
+    s.close()
+
+
+def test_main_help_lists_learned(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--help"])
+    assert exc.value.code == 0
+    assert "learned" in capsys.readouterr().out
+
+
+def test_learned_help_exits_zero(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["learned", "--help"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "learned" in out and "--strategy-db" in out
+
+
+def test_learned_json_includes_recorded_host_and_fields(tmp_path, capsys):
+    """Acceptance: record a host, close, then `ujin learned <db> --json` shows it."""
+    import json
+
+    db = tmp_path / "site.db"
+    _seed_site_store(db, **{
+        "example.com": dict(status=200, latency=0.4, interval=10.0, crawl_delay=2.0),
+    })
+
+    rc = cli.main(["learned", str(db), "--json"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "example.com" in out
+    data = json.loads(out)
+    hosts = {h["host"]: h for h in data["hosts"]}
+    assert "example.com" in hosts
+    h = hosts["example.com"]
+    assert h["last_status"] == 200
+    assert h["last_latency"] == 0.4
+    assert h["crawl_delay"] == 2.0
+    assert h["interval"] == 10.0
+    # derived fields are present
+    for field in ("recommended_interval", "concurrency_factor", "health",
+                  "rate_limited", "should_cooldown", "cooldown_secs"):
+        assert field in h
+
+
+def test_learned_table_is_default(tmp_path, capsys):
+    db = tmp_path / "site.db"
+    _seed_site_store(db, **{"example.com": dict(status=200, latency=0.4)})
+    rc = cli.main(["learned", str(db)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "example.com" in out
+    assert "host" in out and "rec.int" in out  # header row present
+
+
+def test_learned_host_filters_to_one(tmp_path, capsys):
+    import json
+
+    db = tmp_path / "site.db"
+    _seed_site_store(db, **{
+        "a.com": dict(status=200),
+        "b.com": dict(status=500),
+    })
+    rc = cli.main(["learned", str(db), "--host", "a.com", "--json"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    data = json.loads(out)
+    assert [h["host"] for h in data["hosts"]] == ["a.com"]
+    assert "b.com" not in out
+
+
+def test_learned_with_strategy_db_shows_recommendation(tmp_path, capsys):
+    import json
+
+    from ujin.adapt import StrategyFeedback
+
+    db = tmp_path / "site.db"
+    _seed_site_store(db, **{"a.com": dict(status=200)})
+    sdb = tmp_path / "strategy.db"
+    fb = StrategyFeedback(str(sdb))
+    fb.record("a.com", ("obscura", "js"), ok=True, latency=0.3)
+    fb.close()
+
+    rc = cli.main(["learned", str(db), "--strategy-db", str(sdb), "--json"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    h = json.loads(out)["hosts"][0]
+    assert h["recommended_strategy"] == ["obscura", "js"]
+    # the table form surfaces it as a column too
+    rc = cli.main(["learned", str(db), "--strategy-db", str(sdb)])
+    assert rc == 0
+    assert "obscura/js" in capsys.readouterr().out
+
+
+def test_learned_empty_store_is_clean(tmp_path, capsys):
+    from ujin.adapt import SiteStore
+
+    db = tmp_path / "site.db"
+    SiteStore(str(db)).close()  # exists but no hosts
+    rc = cli.main(["learned", str(db)])
+    assert rc == 0
+    assert "no learned hosts" in capsys.readouterr().out
+
+
+def test_learned_host_not_found_is_clean(tmp_path, capsys):
+    db = tmp_path / "site.db"
+    _seed_site_store(db, **{"a.com": dict(status=200)})
+    rc = cli.main(["learned", str(db), "--host", "ghost.com"])
+    assert rc == 0
+    assert "not found" in capsys.readouterr().out
+
+
+def test_learned_no_db_arg_is_actionable():
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["learned"])
+    msg = str(exc.value)
+    assert msg.startswith("ujin:") and "required" in msg
+
+
+def test_learned_missing_db_is_actionable(tmp_path):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["learned", str(tmp_path / "nope.db")])
+    msg = str(exc.value)
+    assert msg.startswith("ujin:") and "not found" in msg
+
+
+def test_learned_missing_strategy_db_is_actionable(tmp_path):
+    db = tmp_path / "site.db"
+    _seed_site_store(db, **{"a.com": dict(status=200)})
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["learned", str(db), "--strategy-db", str(tmp_path / "nope.db")])
+    msg = str(exc.value)
+    assert msg.startswith("ujin:") and "not found" in msg
+
+
+def test_learned_corrupt_db_is_actionable(tmp_path):
+    db = tmp_path / "site.db"
+    db.write_text("this is not a sqlite database")
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["learned", str(db)])
+    assert "not a valid ujin site-store" in str(exc.value)
