@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **`graphql` source kind** — new `GraphQLPollable` POSTs a configured `query` (plus optional `variables`, `headers`) to a `url` and fingerprints events narrowed from a dotted `data_path` in the JSON response, reusing the same aiohttp client/timeout path as `ApiPollable`. A GraphQL `errors` array, non-200 status codes, and network exceptions are all surfaced as poll failures without crashing the poll loop. Registered as `kind: graphql` in YAML targets and the jobs control plane.
+
 ## 0.14.0 — 2026-06-22
 
 ### Added
