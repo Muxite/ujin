@@ -39,7 +39,7 @@ class ScrapeRequest(BaseModel):
         ),
         examples=[["https://apnews.com", "https://www.reuters.com/world/"]],
     )
-    mode: Literal["links", "article", "auto", "combined", "structured", "tables"] = Field(
+    mode: Literal["links", "article", "auto", "combined", "structured", "tables", "images"] = Field(
         "links",
         description=(
             "What to extract. `links` returns the headline link-set "
@@ -51,11 +51,13 @@ class ScrapeRequest(BaseModel):
             "the feed. `structured` returns JSON-LD / OpenGraph / microdata "
             "from the page in the `structured` field. `tables` returns every "
             "HTML `<table>` parsed into header-keyed row dicts in the `tables` "
-            "field."
+            "field. `images` returns every `<img>` as a dict with an absolute "
+            "`src` (lazy-load/`srcset` aware), `alt`, and optional "
+            "`width`/`height`/`title` in the `images` field."
         ),
-        examples=["links", "article", "auto", "combined", "structured", "tables"],
+        examples=["links", "article", "auto", "combined", "structured", "tables", "images"],
     )
-    modes: Optional[list[Literal["links", "article", "auto", "structured", "tables", "html"]]] = Field(
+    modes: Optional[list[Literal["links", "article", "auto", "structured", "tables", "images", "html"]]] = Field(
         None,
         description=(
             "Opt-in multi-extract: request several extract modes over a single "
@@ -68,9 +70,11 @@ class ScrapeRequest(BaseModel):
             "single-`mode` behaviour, which is byte-for-byte unchanged. The "
             "`combined` strategy is single-`mode` only and not accepted here; "
             "`html` returns the raw fetched HTML in `html`; `tables` returns "
-            "every HTML `<table>` as header-keyed row dicts in `tables`."
+            "every HTML `<table>` as header-keyed row dicts in `tables`; "
+            "`images` returns every `<img>` as a normalized dict in `images`."
         ),
-        examples=[["links", "structured"], ["article", "html"], ["tables", "structured"]],
+        examples=[["links", "structured"], ["article", "html"],
+                  ["tables", "structured"], ["images", "structured"]],
     )
     force_refresh: bool = Field(
         False,
@@ -327,13 +331,14 @@ class ScrapeResponse(BaseModel):
             "What this response contains. One of: `links` (headline link-set "
             "in `links`), `article` (parsed body in `article`), `structured` "
             "(JSON-LD/OpenGraph/microdata in `structured`), `tables` (HTML "
-            "`<table>` rows in `tables`), `html` (raw fetched "
+            "`<table>` rows in `tables`), `images` (every `<img>` as a "
+            "normalized dict in `images`), `html` (raw fetched "
             "HTML in `html`, multi-extract only), `empty` "
             "(fetch succeeded but extractor found nothing usable), `error` "
             "(batch-only, or a per-mode failure inside `extracts` — wrapping a "
             "single failure)."
         ),
-        examples=["links", "article", "structured", "tables", "html", "empty", "error"],
+        examples=["links", "article", "structured", "tables", "images", "html", "empty", "error"],
     )
     fingerprint: str = Field(
         ...,
@@ -409,6 +414,22 @@ class ScrapeResponse(BaseModel):
             "tables). None for every other mode."
         ),
         examples=[None, [{"Name": "Alice", "Age": "30"}]],
+    )
+    images: Optional[list[dict]] = Field(
+        None,
+        description=(
+            "Images parsed from the page when `kind == 'images'` — one dict per "
+            "`<img>` with an absolute `src` (resolved against the page URL; "
+            "lazy-load `data-src`/`data-original` and the first `srcset` "
+            "candidate honored), an `alt` string, and an optional integer "
+            "`width`/`height` and `title` when present. Identical srcs are "
+            "de-duplicated in document order. None for every other mode."
+        ),
+        examples=[
+            None,
+            [{"src": "https://apnews.com/img/lead.jpg", "alt": "Senate floor",
+              "width": 1024, "height": 576}],
+        ],
     )
     html: Optional[str] = Field(
         None,
