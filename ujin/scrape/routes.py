@@ -87,6 +87,7 @@ def _result_to_response(result) -> ScrapeResponse:
         structured=getattr(result, "structured", None),
         tables=getattr(result, "tables", None),
         images=getattr(result, "images", None),
+        metadata=getattr(result, "metadata", None),
         html=getattr(result, "html", None),
         final_url=result.final_url,
         note=result.note,
