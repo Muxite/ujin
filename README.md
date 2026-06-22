@@ -7,8 +7,8 @@ The **ultimate scraper-poller**. Two halves that share one toolkit:
    **adapts** to change, with **jitter** so aggregate load stays smooth.
 2. **Rich scrape service** — one-shot rendering + extraction with an
    HTTP → obscura → sitemap → RSS fallback chain, per-host cooldown,
-   fingerprinted change detection, structured-data extraction, and optional
-   social/trends sources — all behind a small HTTP API.
+   fingerprinted change detection, structured-data + HTML-table extraction, and
+   optional social/trends sources — all behind a small HTTP API.
 
 It bundles the [obscura](https://github.com/Muxite/obscura) headless renderer as
 a submodule, and stays a **pure-python pip install** (the renderer is built
@@ -75,8 +75,9 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
   -d '{"url":"https://apnews.com","mode":"links"}'
 
 # multi-extract: fetch once, get several modes back under `extracts`
+# (`tables` parses every <table> into header-keyed row dicts in `tables`)
 curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
-  -d '{"url":"https://apnews.com","modes":["links","structured","html"]}'
+  -d '{"url":"https://apnews.com","modes":["links","structured","tables","html"]}'
 
 # multi-URL batch: scrape many URLs concurrently, one result per URL under `batch`
 curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
@@ -189,7 +190,7 @@ Three FastAPI apps — run any combination. Full reference in
 - **Poller control** (`:8900`): `GET /health /metrics /targets`,
   `GET /content?key=…` (reuse the body ujin last fetched), `POST /targets`,
   `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.
-- **Scrape** (`:8901`): `POST /scrape` (modes `links|article|auto|combined|structured`,
+- **Scrape** (`:8901`): `POST /scrape` (modes `links|article|auto|combined|structured|tables`,
   or a `modes` list for multi-extract — several modes over one fetch, results in
   `extracts`; or a `urls` list to scrape many URLs concurrently — one result per
   URL in `batch`), `/scrape:batch`, `/feed`, `/sitemap`, `/discover`, `/capabilities`,
@@ -258,7 +259,7 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
   ephemeral `:memory:`). Off by default — a no-config scrape is byte-identical
   to before (see [docs/ADAPTIVE.md](docs/ADAPTIVE.md)).
 - **Toolkit**: `ujin.fetch` (HTTP + obscura + altpath), `ujin.extract`
-  (article/links/profile/**structured** JSON-LD·OG·microdata), `ujin.cache`
+  (article/links/profile/**structured** JSON-LD·OG·microdata/**tables**), `ujin.cache`
   (LRU+TTL, SQLite, per-host cooldown), `ujin.sources` (RSS/sitemap/discover +
   `social/`), `ujin.diff` (region diff + webhook sinks), `ujin.session`
   (cookies), `ujin.proxy` (rotation).
@@ -297,6 +298,7 @@ Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [ADAPTIVE](docs/ADAPTIVE.md) ·
 [PERFORMANCE](docs/PERFORMANCE.md) · [CONSUMERS](docs/CONSUMERS.md)
 (downstream submodule contracts) · [API](docs/API.md) · [JOBS](docs/JOBS.md) ·
 [WORKFLOWS](docs/WORKFLOWS.md) · [PLUGINS](docs/PLUGINS.md) ·
+[LIST_TRANSFORMS](docs/LIST_TRANSFORMS.md) (flatten/sort/limit/rename/aggregate/csv) ·
 [BROWSER](docs/BROWSER.md) · [MCP](docs/MCP.md) · [CHANGELOG](CHANGELOG.md)
 
 ## Troubleshooting

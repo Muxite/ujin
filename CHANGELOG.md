@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.0 — 2026-06-22
+
+### Added
+- **HTML table extraction** — new `ujin.extract.extract_tables(html) -> list[dict]` parses every `<table>` on a page into one dict per data row, keyed by the table's header cells (a first row carrying `<th>`) or positionally (`col0`/`col1`…) for header-less tables. `colspan`/`rowspan` are expanded so each logical cell lands in its grid slot, nested tables are parsed as their own rows (their text never leaks into the enclosing cell), and empty/malformed input returns `[]` rather than raising. A new additive `tables` scrape mode surfaces it: `POST /scrape {"mode":"tables"}` (or `tables` inside a `modes` multi-extract list) returns the rows in the new `ScrapeResponse.tables` field — under the `extracts` map for multi-extract requests. Strictly additive — every existing mode, field, and default is byte-for-byte unchanged.
+- **`aggregate` transform** — new built-in kind that groups a list payload by a dotted `by` key and emits one dict per group with `count` plus optional `sum`/`min`/`max`/`collect` aggregates over configurable dotted `fields`; supports a separate `out` path; non-list and empty payloads pass through unchanged. Discoverable at `GET /kinds`.
+- **test(poll-coverage)**: Added 10 offline unit tests covering previously-uncovered error/edge branches in the live poll subsystem — empty-argv `ValueError` (command.py:25), `asyncio.TimeoutError` timeout path (command.py:42-44), generic subprocess exception (command.py:47-48), feedparser `ImportError` (rss.py:23-24), `parse_feed` exception (rss.py:29-30), `decide_changed(None, ...)` short-circuit (base.py:79), bytes/bytearray fingerprint branch (base.py:26), `aiohttp` `ImportError` (api.py:53-54), request-level network exception (api.py:72-73), and `render=True` ObscuraFetcher path (site.py:54-58); all five targeted files reach 100 % line coverage and total suite coverage rises from 95.43 % to 95.50 %.
+
 ## 0.11.0 — 2026-06-22
 
 ### Added

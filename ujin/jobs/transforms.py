@@ -1,5 +1,5 @@
 """Built-in transforms: select, regex, template, dedupe, chunk, flatten, sort,
-limit, rename.
+limit, rename, aggregate.
 
 Each is a small class exposing ``async apply(event) -> dict | list[dict] | None``
 (the :class:`ujin.jobs.pipeline.Transform` protocol — a list return fans out into
@@ -387,6 +387,76 @@ class RenameTransform:
         return event
 
 
+class AggregateTransform:
+    """Group a list payload by a dotted key and compute per-group stats.
+
+    config:
+      by:     dotted path within each item to group on (required)
+      fields: list of {field: dotted-path, op: sum|min|max|collect}
+              per-group ``count`` is always emitted; these add named aggregates
+              keyed as ``<field-label>_<op>`` (last segment of the field path)
+      path:   dotted path to the list (default "payload")
+      out:    dotted path to write the grouped result (default: same as ``path``)
+    Non-list or empty payloads pass through unchanged.
+    """
+
+    def __init__(self, cfg: dict):
+        self.path = cfg.get("path", "payload")
+        self.out = cfg.get("out", self.path)
+        if "by" not in cfg:
+            raise ValueError("aggregate transform requires 'by'")
+        self.by = cfg["by"]
+        self.by_label = self.by.split(".")[-1]
+        self.fields = list(cfg.get("fields") or [])
+
+    async def apply(self, event: dict) -> dict | None:
+        target = dotted_get(event, self.path)
+        if not isinstance(target, list) or not target:
+            return event
+
+        # Collect items per group, preserving first-seen insertion order.
+        groups: dict = {}  # hashable key -> [group_value, items]
+        order: list = []
+        for item in target:
+            gval = dotted_get(item, self.by) if isinstance(item, dict) else None
+            try:
+                hkey = gval
+                hash(hkey)
+            except TypeError:
+                hkey = str(gval)
+            if hkey not in groups:
+                groups[hkey] = [gval, []]
+                order.append(hkey)
+            groups[hkey][1].append(item)
+
+        result = []
+        for hkey in order:
+            gval, items = groups[hkey]
+            row: dict = {self.by_label: gval, "count": len(items)}
+            for fspec in self.fields:
+                field = fspec["field"]
+                op = fspec["op"]
+                col = f"{field.split('.')[-1]}_{op}"
+                vals = []
+                for it in items:
+                    if isinstance(it, dict):
+                        v = dotted_get(it, field)
+                        if v is not None:
+                            vals.append(v)
+                if op == "sum":
+                    row[col] = sum(vals) if vals else 0
+                elif op == "min":
+                    row[col] = min(vals) if vals else None
+                elif op == "max":
+                    row[col] = max(vals) if vals else None
+                elif op == "collect":
+                    row[col] = vals
+            result.append(row)
+
+        dotted_set(event, self.out, result)
+        return event
+
+
 BUILTIN_TRANSFORMS = {
     "select": SelectTransform,
     "regex": RegexTransform,
@@ -397,6 +467,7 @@ BUILTIN_TRANSFORMS = {
     "sort": SortTransform,
     "limit": LimitTransform,
     "rename": RenameTransform,
+    "aggregate": AggregateTransform,
 }
 
 
