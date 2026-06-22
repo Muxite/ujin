@@ -12,7 +12,14 @@ HARD RULES (violating any of these gets your branch rejected and discarded):
    the stated floor — ship tests in the same change as new code.
 4. Add ONE bullet under the `## [Unreleased]` heading in `CHANGELOG.md` describing
    your change. Do not edit released version sections.
-5. Commit your work to the current branch with a conventional-commit message
+5. UPDATE THE DOCS. If your change adds or alters anything user-facing — a public
+   API/symbol, CLI command/flag, env var, config key, HTTP endpoint/field, or a new
+   capability — update `README.md` (features list, usage/quickstart, options) AND the
+   relevant file under `docs/` in the SAME change so the docs never drift behind the
+   code. Keep examples runnable and accurate. Purely-internal changes (refactors,
+   added tests) need no README edit, but still update any docs that referenced the
+   touched internals.
+6. Commit your work to the current branch with a conventional-commit message
    (e.g. `feat(cache): ...`). Do not touch `master`, the integration branch, or any
    other `agent/*` branch. Do not push.
 

@@ -119,6 +119,14 @@ def test_serve_runs_continuously_until_release(temp_repo: Path):
     assert "released" in events  # the daemon drove a full cycle without manual ticks
 
 
+def test_coverage_floor_ratchet_is_capped(temp_repo: Path):
+    cfg = make_cfg(temp_repo)  # COV_OK reports 95%, cap defaults to 90
+    store = StateStore(cfg.state_dir)
+    run_until_done(cfg, FakeAgentBackend(backlog=DEMO), store)
+    # The ratchet saw 95% but must not raise the floor above the 90 cap.
+    assert store.read_cov_floor(cfg.coverage_floor) == 90.0
+
+
 def test_serve_respects_kill(temp_repo: Path):
     cfg = make_cfg(temp_repo)
     cfg.state_dir.mkdir(parents=True, exist_ok=True)

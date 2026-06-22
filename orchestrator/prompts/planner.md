@@ -10,6 +10,13 @@ Prefer the next units in the roadmap; fill spare slots with high-leverage cleanu
 (coverage gaps in shipped code, perf regressions, DX). Respect ujin's ADDITIVE-ONLY
 contract — never plan a breaking change.
 
+DOCS MUST KEEP PACE. Each builder updates README.md/docs for its own user-facing
+change, but you are the backstop: if recent cycles shipped features whose `README.md`
+features list, quickstart, or `docs/` pages have drifted, include a dedicated
+`docs-sync` focus (routine) that brings `README.md` and `docs/` in line with what's
+actually shipped — accurate feature list, runnable examples, current CLI/config. Plan
+one whenever docs are stale; don't let it slide more than a cycle or two.
+
 Output ONLY a JSON array, nothing else. Each element:
 
 {

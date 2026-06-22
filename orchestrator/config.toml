@@ -19,6 +19,7 @@ max_build_retries = 2
 
 # Quality gates.
 coverage_floor = 85.0      # ratchets upward at runtime via state/cov_floor.txt
+coverage_floor_cap = 90.0  # ratchet never raises the floor above this
 bench_tolerance = 4.0      # median <= 4x baseline (blocking, unlike CI)
 contract_paths = ["tests/test_consumer_contracts.py"]
 
