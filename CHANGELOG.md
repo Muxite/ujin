@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.14.0 — 2026-06-22
 
 ### Added
 - **`ujin learned` CLI + `SiteStore.hosts()`** — a new additive `SiteStore.hosts() -> list[str]` read method enumerates every host persisted in the store (sorted, never mutating), and a new `ujin learned [DB_PATH] [--host HOST] [--strategy-db PATH] [--json]` subcommand opens an existing `SiteStore` read-only and prints, per host, the learned state: recommended interval (via `ujin.adapt.derive_signals`), concurrency factor, penalty/backoff (health, cooldown, rate-limited), last observed status/latency, and any observed `Crawl-delay`; with `--strategy-db` it also shows `StrategyFeedback.recommend(host)`. Defaults to a human-readable table, `--json` emits machine-readable output, and `--host` filters to one host. A missing/empty DB path (or a missing `--strategy-db`) fails with a clean actionable `ujin: ...` message and non-zero exit (no traceback); an existing-but-empty store prints a friendly note. Strictly additive — every existing public name and CLI subcommand is unchanged. Documented in `README.md` and `docs/ADAPTIVE.md`.
