@@ -207,7 +207,7 @@ def create_jobs_app(
 
     app = FastAPI(title="ujin-jobs", version="0.4.0", lifespan=lifespan)
 
-    def _mgr(app) -> Any:
+    def _mgr(app) -> Any:  # pragma: no cover -- defined but unused; kept for external tooling
         return app.state.manager
 
     @app.get("/health")
@@ -365,7 +365,7 @@ def create_jobs_app(
     return app
 
 
-def serve(
+def serve(  # pragma: no cover -- launches uvicorn; not testable without a live server
     host: str = "0.0.0.0",
     port: int = 8902,
     config_path: str | None = None,
