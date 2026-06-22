@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **HTML table extraction** — new `ujin.extract.extract_tables(html) -> list[dict]` parses every `<table>` on a page into one dict per data row, keyed by the table's header cells (a first row carrying `<th>`) or positionally (`col0`/`col1`…) for header-less tables. `colspan`/`rowspan` are expanded so each logical cell lands in its grid slot, nested tables are parsed as their own rows (their text never leaks into the enclosing cell), and empty/malformed input returns `[]` rather than raising. A new additive `tables` scrape mode surfaces it: `POST /scrape {"mode":"tables"}` (or `tables` inside a `modes` multi-extract list) returns the rows in the new `ScrapeResponse.tables` field — under the `extracts` map for multi-extract requests. Strictly additive — every existing mode, field, and default is byte-for-byte unchanged.
+
 ## 0.11.0 — 2026-06-22
 
 ### Added
