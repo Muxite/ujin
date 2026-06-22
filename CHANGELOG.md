@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **scrape multi-URL batch**: `POST /scrape` now accepts an optional `urls` list so one request scrapes several URLs and returns one result per URL under a new additive `batch` list (in request order); the top-level fields mirror the first URL's result. The URLs are fetched concurrently with a bounded concurrency cap — `ScrapeService.scrape_urls()` fans out the per-URL `scrape()` calls under an `asyncio.Semaphore` (`batch_max_concurrency`, env `BATCH_MAX_CONCURRENCY`, default 8) and isolates per-URL failures as `kind='error'` entries so one failing URL never sinks the batch. The batch form is single-`mode` (the `modes` multi-extract map and `page_size`/`cursor` pagination are not applied per URL) and is bounded by `batch_max_items` (default 64). Omitting `urls` keeps the classic single-`url` behaviour byte-for-byte unchanged.
+
 ## 0.9.0 — 2026-06-22
 
 ### Added

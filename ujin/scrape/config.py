@@ -51,6 +51,11 @@ class ScrapeConfig:
 
     # Batch.
     batch_max_items: int = 64
+    # Max scrapes run concurrently inside a single batch (the `/scrape:batch`
+    # fan-out and the multi-URL `urls` form of `POST /scrape`). Bounds the
+    # asyncio fan-out so a large batch can't open an unbounded number of
+    # in-flight fetches at once.
+    batch_max_concurrency: int = 8
 
     # Social chain.
     nitter_pool_path: str = ""
@@ -96,6 +101,7 @@ class ScrapeConfig:
         "fast_path_min_links": "FAST_PATH_MIN_LINKS",
         "per_host_config_path": "PER_HOST_CONFIG_PATH",
         "batch_max_items": "BATCH_MAX_ITEMS",
+        "batch_max_concurrency": "BATCH_MAX_CONCURRENCY",
         "nitter_pool_path": "NITTER_POOL_PATH",
         "x_allow_brave": "X_ALLOW_BRAVE",
         "enable_breaking_scorer": "UJIN_BREAKING_SCORER",

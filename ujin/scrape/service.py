@@ -678,6 +678,47 @@ class ScrapeService:
 
         return await asyncio.gather(*(_one(r) for r in requests))
 
+    async def scrape_urls(
+        self,
+        urls: list[str],
+        *,
+        mode: Mode = "links",
+        force_refresh: bool = False,
+        enrich_html_top_n: int = 0,
+        render: str = "auto",
+        actions: Optional[list[dict]] = None,
+        max_concurrency: int = 8,
+    ) -> list[ScrapeResult]:
+        """Scrape several URLs concurrently and return one result per URL.
+
+        Every URL is scraped the same way (same ``mode``/``force_refresh``/
+        ``render``/``actions``/``enrich_html_top_n``). Results preserve the input
+        order. Concurrency is bounded by ``max_concurrency`` (an asyncio
+        semaphore over the per-URL :meth:`scrape` calls), so a large batch never
+        opens more than that many in-flight fetches at once. A per-URL failure is
+        isolated as a ``kind='error'`` :class:`ScrapeResult` (the exception in
+        ``note``) rather than aborting the batch.
+        """
+        import asyncio
+
+        sem = asyncio.Semaphore(max(1, max_concurrency))
+
+        async def _one(u: str) -> ScrapeResult:
+            async with sem:
+                try:
+                    return await self.scrape(
+                        u,
+                        mode=mode,
+                        force_refresh=force_refresh,
+                        enrich_html_top_n=enrich_html_top_n,
+                        render=render,
+                        actions=actions,
+                    )
+                except Exception as exc:  # noqa: BLE001 — isolate per-URL failure
+                    return self._error_result(u, exc)
+
+        return await asyncio.gather(*(_one(u) for u in urls))
+
     # ── helpers ────────────────────────────────────────────────────────────
 
     def _extract_with_profile(

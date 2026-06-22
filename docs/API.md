@@ -46,7 +46,8 @@ Render and extract a single page.
 Request (`ScrapeRequest`):
 | field | type | default | notes |
 |---|---|---|---|
-| `url` | string | — | absolute URL (required) |
+| `url` | string | — | absolute URL (required unless `urls` is set) |
+| `urls` | list of string | `null` | multi-URL batch: scrape several URLs, one result per URL (see below) |
 | `mode` | `links`\|`article`\|`auto`\|`combined`\|`structured` | `links` | what to extract (single mode) |
 | `modes` | list of `links`\|`article`\|`auto`\|`structured`\|`html` | `null` | multi-extract: several modes over one fetch (see below) |
 | `force_refresh` | bool | `false` | bypass cache + revalidation |
@@ -70,7 +71,8 @@ Response (`ScrapeResponse`, abridged):
                "seen_in": ["rss","html"], "tier": "generic",
                "breaking_score": 0.0, "score_components": {} } ],
   "article": null, "structured": null, "html": null, "final_url": null, "note": null,
-  "next_poll_hint_secs": 60.0, "max_breaking_score": 0.0, "extracts": null }
+  "next_poll_hint_secs": 60.0, "max_breaking_score": 0.0,
+  "extracts": null, "batch": null }
 ```
 - `fingerprint` is a stable SHA-256 over the normalized payload — compare across
   calls to detect real change.
@@ -103,8 +105,35 @@ per-mode `ScrapeResponse`s come back under a new `extracts` map keyed by mode:
   multi-extract requests. Omitting `modes` leaves the single-`mode` path and its
   response byte-for-byte unchanged.
 
-Errors: `400` empty url · `429` host on cooldown with no cache (`HostCooldown`) ·
-`502` fetch/render/parse failure.
+#### Multi-URL batch (`urls`)
+Set `urls` (instead of `url`) to scrape several URLs in **one request** and get
+one result per URL:
+```json
+{ "urls": ["https://apnews.com", "https://www.reuters.com/world/"], "mode": "links" }
+```
+The URLs are fetched concurrently under a bounded concurrency cap
+(`BATCH_MAX_CONCURRENCY`, default 8). The per-URL `ScrapeResponse`s come back in
+request order under a new `batch` list, and the top-level fields mirror the
+**first** URL's result so a naive client still sees a coherent single-page body:
+```json
+{ "url": "https://apnews.com", "kind": "links", "links": [ … ],  // mirrors the FIRST URL
+  "batch": [
+    { "url": "https://apnews.com",            "kind": "links", "links": [ … ], "batch": null },
+    { "url": "https://www.reuters.com/world/", "kind": "links", "links": [ … ], "batch": null } ] }
+```
+- Each URL is isolated: a URL whose fetch/parse fails appears with `kind:"error"`
+  (its message in `note`) and never fails the others. Order is always preserved.
+- Every URL is scraped with the request's `mode`, `force_refresh`, `render`,
+  `actions`, and `enrich_html_top_n`. The batch form is single-`mode` — the
+  `modes` multi-extract map and `page_size`/`cursor` pagination are not applied
+  per URL — and nested `batch` is always `null` (one level only).
+- `400` if the list exceeds `batch_max_items` (default 64). Omitting `urls`
+  leaves the single-`url` path and its response byte-for-byte unchanged.
+- Use `POST /scrape:batch` instead when you need *different* `mode`/`force_refresh`
+  per item; use `urls` here when scraping many URLs the same way.
+
+Errors: `400` empty url (no `url` and no `urls`) · `429` host on cooldown with no
+cache (`HostCooldown`) · `502` fetch/render/parse failure.
 
 ### `POST /scrape:batch`
 Fan out many scrapes concurrently. Per-item failures come back inline as
@@ -195,7 +224,8 @@ curl -X POST localhost:8900/targets -H 'content-type: application/json' \
 | `CACHE_MAX_ENTRIES` / `CACHE_TTL_SECS` | 2048 / 120 | in-memory cache |
 | `DISK_CACHE_PATH` | — | SQLite durable cache (empty = off) |
 | `PER_HOST_CONFIG_PATH` | — | `per_host.yaml` extractor/strategy overrides |
-| `BATCH_MAX_ITEMS` | 64 | `/scrape:batch` cap |
+| `BATCH_MAX_ITEMS` | 64 | batch size cap (`/scrape:batch` and `POST /scrape` `urls`) |
+| `BATCH_MAX_CONCURRENCY` | 8 | max scrapes run concurrently inside one batch fan-out |
 | `OBSCURA_URL` / `OBSCURA_BIN` | — | headless renderer (URL service or binary path) |
 | `SEARCH_API_KEY` | — | Brave token for the social legs |
 | `NITTER_POOL_PATH` | — | YAML list of nitter mirrors |
