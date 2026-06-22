@@ -64,6 +64,7 @@ in-memory `POST /targets` left open.
 | `aggregate` | `by` (required, dotted), `path?`, `out?`, `fields?[{field,op}]` | group a list by a key; emit one row per group with `count` and optional `sum`/`min`/`max`/`collect` aggregates — see [LIST_TRANSFORMS.md](LIST_TRANSFORMS.md) |
 | `unique` | `path?`, `key?` (dotted) | drop duplicate items from a list by a dotted key (or whole-item identity when key omitted); first occurrence wins — see [LIST_TRANSFORMS.md](LIST_TRANSFORMS.md) |
 | `fill` | `path?`, `fields?{dotted:val}`, `paths?[]`, `value?` | add default values for missing (None) dotted fields on dicts in a list, without overwriting existing values — see [LIST_TRANSFORMS.md](LIST_TRANSFORMS.md) |
+| `filter` | `path?`, `key` (required, dotted), `op?` (`eq`\|`ne`\|`gt`\|`lt`\|`ge`\|`le`\|`in`\|`contains`\|`exists`\|`regex`\|`matches`), `value?`, `negate?` | keep or drop list items (or whole dict events) by a predicate over a dotted key; `negate: true` inverts — see [LIST_TRANSFORMS.md](LIST_TRANSFORMS.md) |
 
 ### Sinks (`kind`) — fan out concurrently; one failing sink never blocks the others
 | kind | config | effect |

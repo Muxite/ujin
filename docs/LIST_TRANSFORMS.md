@@ -1,6 +1,6 @@
 # List reshaping transforms + the CSV sink
 
-Eight additive job kinds for the common "narrow a list, reorder it, fan it out,
+Nine additive job kinds for the common "narrow a list, reorder it, fan it out,
 and write it somewhere tabular" shape — all pure stdlib, all wired through the
 same registry as the existing kinds. They slot anywhere in a job's
 `transforms` / `sinks` arrays (see [JOBS.md](JOBS.md)).

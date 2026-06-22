@@ -118,7 +118,7 @@ Response (`ScrapeResponse`, abridged):
   "metadata": null, "feeds": null, "contacts": null, "html": null,
   "final_url": null, "note": null,
   "next_poll_hint_secs": 60.0, "max_breaking_score": 0.0,
-  "extracts": null, "batch": null }
+  "total": null, "next_cursor": null, "extracts": null, "batch": null }
 ```
 - `fingerprint` is a stable SHA-256 over the normalized payload — compare across
   calls to detect real change.

@@ -4,6 +4,7 @@
 
 ### Added
 - **Coverage hardening (extract + browser)** — 116 new offline, deterministic unit tests close coverage gaps in `ujin/extract/links.py` (80% → 95%), `ujin/extract/article.py` (78% → 100%), `ujin/extract/structured.py` (82% → 99%), and `ujin/poll/browser.py` (80% → 100%); total suite coverage moves from ~90% to 97%. Tests target error/edge/fallback branches: `_is_boilerplate_text` variants, slop URL/text filters, photo-credit patterns, excluded-element detection (role/aria-label/class), `normalize_url` edge cases, `extract_article_lenient`, `_run_trafilatura` ImportError and generic-exception paths, JSON-LD/OpenGraph/microdata edge inputs, and all four `BrowserPollable` extract modes plus lazy-fetcher init.
+- **docs(sync/0.17)**: Audited README and all `docs/` pages against the shipped 0.17 surface — corrected four omissions: (1) `docs/JOBS.md` transforms table was missing the `filter` kind added in 0.17; (2) `docs/LIST_TRANSFORMS.md` intro said "Eight" job kinds but nine are now documented (`filter` added); (3) `README.md` docs-index reference for LIST_TRANSFORMS omitted `filter`; (4) `docs/API.md` abridged `ScrapeResponse` JSON example omitted the `total`/`next_cursor` pagination fields. Also added "feed-URL extraction" to the README intro feature description to reflect the 0.17 `feeds` mode. No production code changed.
 
 ## 0.17.0 — 2026-06-22
 
