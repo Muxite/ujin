@@ -43,6 +43,7 @@ in-memory `POST /targets` left open.
 | `site` | `url`, `selectors[]`, `render?` | fingerprints only selector-scoped regions |
 | `rss` | `url` | fingerprints the set of entry URLs |
 | `api` | `url`, `method?`, `json_path?`, `headers?`, `json_body?` | narrows JSON to a dotted path, then fingerprints that slice |
+| `graphql` | `url`, `query`, `variables?`, `headers?`, `data_path?` | POSTs a GraphQL query; narrows the response to a dotted `data_path` and fingerprints that slice; GraphQL `errors`, non-200, and network failures are surfaced without crashing the poll loop |
 | `command` | `argv[]` | fingerprints stdout |
 | `scrape` | `url`, `mode?`, `force_refresh?` | full HTTP→obscura→sitemap→RSS chain + extraction |
 | `browser` | `url`, `engine?`, `actions[]`, `extract?`, `results_selector?` | drive a real browser through an interaction recipe (`load_more`, scroll, click), then extract — see [BROWSER.md](BROWSER.md) |

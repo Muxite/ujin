@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.15.0 — 2026-06-22
+
+### Added
+- **HTML image extraction** — new `ujin.extract.extract_images(html, base_url=None) -> list[dict]` parses every `<img>` on a page into one normalized dict with an absolute `src`, an `alt` string, and an optional integer `width`/`height` and `title` when present. Relative srcs are resolved against `base_url`; lazy-load `data-src`/`data-original` and the first `srcset` candidate are honored (a `data:` placeholder is skipped whenever a real src exists for the same image); identical srcs are de-duplicated in document order; and empty/malformed input returns `[]` rather than raising. A new additive `images` scrape mode surfaces it: `POST /scrape {"mode":"images"}` (or `images` inside a `modes` multi-extract list) returns the dicts in the new `ScrapeResponse.images` field — under the `extracts` map for multi-extract requests. Strictly additive — every existing mode, field, and default is byte-for-byte unchanged. Documented in `README.md` and `docs/API.md`.
+## 0.15.0 — 2026-06-22
+
+### Added
+- **`unique` and `fill` transforms** — `unique` drops duplicate items from a list payload by a dotted `key` (or whole-item identity when key omitted), preserving first-occurrence order and passing non-list payloads through unchanged; `fill` ensures named dotted fields exist on a dict payload or each dict in a list-of-dicts, setting a per-path or shared default without overwriting existing non-None values and passing non-dict items through unchanged. Both are discoverable at `GET /kinds` and documented in `docs/LIST_TRANSFORMS.md`.
+## [Unreleased]
+
+## 0.15.0 — 2026-06-22
+
+- **`graphql` source kind** — new `GraphQLPollable` POSTs a configured `query` (plus optional `variables`, `headers`) to a `url` and fingerprints events narrowed from a dotted `data_path` in the JSON response, reusing the same aiohttp client/timeout path as `ApiPollable`. A GraphQL `errors` array, non-200 status codes, and network exceptions are all surfaced as poll failures without crashing the poll loop. Registered as `kind: graphql` in YAML targets and the jobs control plane.
+
 ## 0.14.0 — 2026-06-22
 
 ### Added
