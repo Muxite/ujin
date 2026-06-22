@@ -46,7 +46,7 @@ in-memory `POST /targets` left open.
 | `graphql` | `url`, `query`, `variables?`, `headers?`, `data_path?` | POSTs a GraphQL query; narrows the response to a dotted `data_path` and fingerprints that slice; GraphQL `errors`, non-200, and network failures are surfaced without crashing the poll loop |
 | `command` | `argv[]` | fingerprints stdout |
 | `scrape` | `url`, `mode?`, `force_refresh?` | full HTTP→obscura→sitemap→RSS chain + extraction |
-| `browser` | `url`, `engine?`, `actions[]`, `extract?`, `results_selector?` | drive a real browser through an interaction recipe (`load_more`, scroll, click), then extract — see [BROWSER.md](BROWSER.md) |
+| `browser` | `url`, `engine?`, `actions[]`, `extract?` (`links`\|`article`\|`structured`\|`raw`), `results_selector?`, `headless?` | drive a real browser through an interaction recipe (`load_more`, scroll, click), then extract — see [BROWSER.md](BROWSER.md) |
 | `plugin:<name>` | (plugin-defined) | a custom source — see PLUGINS.md |
 
 ### Transforms (`kind`) — run in order; one returning nothing drops the event
