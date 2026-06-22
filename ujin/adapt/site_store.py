@@ -121,6 +121,17 @@ class SiteStore:
         except sqlite3.DatabaseError:  # pragma: no cover - exotic FS/driver
             logger.debug("site store: WAL pragmas unavailable; using defaults")
 
+    def hosts(self) -> list[str]:
+        """Return every host persisted in the store, sorted for stable output.
+
+        A read-only enumeration so callers can iterate learned state (e.g. the
+        ``ujin learned`` CLI) without knowing host names in advance. Returns an
+        empty list for a never-written store.
+        """
+        with self._lock:
+            cur = self._conn.execute("SELECT host FROM site_state ORDER BY host")
+            return [row[0] for row in cur.fetchall()]
+
     def get(self, host: str) -> HostRecord:
         """Return the stored record for ``host``, or a zero-valued default."""
         with self._lock:

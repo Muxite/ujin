@@ -380,6 +380,94 @@ and the auto order is untouched.
 
 ---
 
+## Inspecting learned state (ujin learned)
+
+Once a poller or scraper has been persisting to a `SiteStore`, you can read back
+what it has learned without writing any code:
+
+```bash
+ujin learned site_state.db
+```
+
+This opens the database **read-only** and prints, per host, the learned state:
+the recommended interval (via `ujin.adapt.derive_signals`), concurrency factor,
+penalty/backoff (health, cooldown, whether it is rate-limited), the last observed
+status and latency, and any observed `Crawl-delay`:
+
+```
+host         status  latency  p50   interval  rec.int  conc  health  cooldown  crawl  err  429
+-----------  ------  -------  ----  --------  -------  ----  ------  --------  -----  ---  ---
+b.com        200     0.31s    0.3s  60s       60s      1.00  1.00    -         -      0    0
+example.com  429     0.4s     0.4s  10s       20s      0.33  0.29    30s       2s     1    2
+```
+
+The `rec.int` column is `derive_signals(rec, base_interval=rec.interval)` — i.e.
+the stored adaptive interval grown by any rate-limit slowdown and floored by the
+observed `Crawl-delay`. Hosts are listed in sorted order (the enumeration comes
+from the new `SiteStore.hosts()` read method).
+
+### Options
+
+| Flag | Meaning |
+|------|---------|
+| `DB_PATH` (positional) | Path to the `SiteStore` database to inspect |
+| `--host HOST` | Show only this host (default: every learned host) |
+| `--strategy-db PATH` | Also show `StrategyFeedback.recommend(host)` as a `best-strategy` column / field |
+| `--json` | Emit machine-readable JSON instead of the table |
+
+```bash
+# Focus one host, machine-readable, with its proven-best strategy
+ujin learned site_state.db --host example.com --strategy-db strategy.db --json
+```
+
+```json
+{
+  "db": "site_state.db",
+  "hosts": [
+    {
+      "host": "example.com",
+      "last_status": 429,
+      "last_latency": 0.4,
+      "p50_latency": 0.4,
+      "error_count": 1,
+      "rate_limit_count": 2,
+      "crawl_delay": 2.0,
+      "interval": 10.0,
+      "last_seen": 1782116060.86,
+      "recommended_interval": 20.0,
+      "concurrency_factor": 0.333333,
+      "health": 0.285714,
+      "rate_limited": true,
+      "should_cooldown": true,
+      "cooldown_secs": 30.0,
+      "recommended_strategy": ["obscura", "js"]
+    }
+  ]
+}
+```
+
+A missing or empty `DB_PATH` (or a `--strategy-db` that does not exist) fails with
+a clean, actionable `ujin: ...` message and a non-zero exit — no traceback. An
+existing database with no hosts prints a friendly note rather than an error.
+
+### `SiteStore.hosts()`
+
+The command is built on a new additive read method:
+
+```python
+from ujin.adapt import SiteStore
+
+store = SiteStore("site_state.db")
+for host in store.hosts():          # sorted list of every persisted host
+    print(host, store.get(host).last_status)
+```
+
+`hosts()` enumerates the hosts persisted in the store so callers can iterate the
+learned state without knowing host names in advance. It returns an empty list for
+a never-written store and never mutates anything.
+
+---
+
 ## ujin.robots — robots.txt policy
 
 `ujin.robots` provides a pure parser and an optional async fetch + TTL cache.

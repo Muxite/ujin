@@ -169,9 +169,17 @@ ujin scrape-serve            # rich scrape HTTP service on :8901
 ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
+ujin learned site_state.db   # inspect the durable per-host learned state (--json)
 ujin obscura-build           # build the bundled headless renderer (needs cargo)
 ujin --version               # print the installed version
 ```
+
+`ujin learned <db>` opens an existing `SiteStore` database read-only and prints,
+per host, the learned adaptive state — recommended interval, concurrency factor,
+health/cooldown/rate-limited, last observed status/latency, and any observed
+`Crawl-delay`. Add `--host HOST` to focus one host, `--strategy-db PATH` to also
+show the recommended `(backend, render_mode)`, and `--json` for machine-readable
+output. See [docs/ADAPTIVE.md](docs/ADAPTIVE.md#inspecting-learned-state-ujin-learned).
 
 Every command has examples in its `--help`. Config errors are actionable: a
 missing/invalid `targets.yaml` names the file (and line), an unknown source kind
