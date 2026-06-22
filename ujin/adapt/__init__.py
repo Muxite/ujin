@@ -2,6 +2,7 @@
 from ujin.adapt.backoff import Backoff, CircuitBreaker
 from ujin.adapt.concurrency import AIMDLimiter, TokenBucket
 from ujin.adapt.interval import AdaptiveInterval
+from ujin.adapt.site_store import HostRecord, SiteStore
 from ujin.adapt import jitter
 
 __all__ = [
@@ -11,4 +12,6 @@ __all__ = [
     "TokenBucket",
     "AIMDLimiter",
     "jitter",
+    "SiteStore",
+    "HostRecord",
 ]
