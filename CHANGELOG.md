@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **test(social-source-coverage)**: Added 10 fully-offline unit tests closing the remaining branch gaps in `ujin/sources/social/_syndication.py` — text/html response where `json.loads` succeeds but returns a non-dict (list/number) falls through to `_from_html` (branch 82→86); `_from_json` with empty results and a non-string `body` value returns `[]` directly (branch 114→116); `_from_html` skips tweet nodes with valid permalinks but whitespace-only text (line 134 `continue`); and `_from_html` stops collecting once the `count` ceiling is hit (line 137 `break`). All four target modules (`mastodon.py`, `twitter.py`, `_nitter.py`, `_syndication.py`) now report 100 % line coverage; total suite coverage rises from 95.48 % to 95.56 %.
+
 ## 0.12.0 — 2026-06-22
 
 ### Added
