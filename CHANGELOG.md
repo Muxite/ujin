@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **Declared feed discovery** — new `ujin.extract.extract_feeds(html, base_url=None) -> list[dict]` parses every `<link rel="alternate">` in the document head whose `type` is a recognized feed MIME type (`application/rss+xml`, `application/atom+xml`, `application/feed+json`) into a normalized dict with an absolute `href` (resolved against `base_url`), a lowercase `type`, and an optional `title` when present; identical hrefs are de-duplicated in document order; empty/malformed input returns `[]` rather than raising. Pure stdlib (`html.parser`). A new additive `feeds` scrape mode surfaces it: `POST /scrape {"mode":"feeds"}` (or `feeds` inside a `modes` multi-extract list) returns the dicts in the new `ScrapeResponse.feeds` field. Strictly additive — every existing mode, field, and default is byte-for-byte unchanged. Documented in `README.md` and `docs/API.md`.
+
 ## 0.15.0 — 2026-06-22
 
 ### Added
