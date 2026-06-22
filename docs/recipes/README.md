@@ -10,6 +10,7 @@ Task-oriented walkthroughs. Each is a complete, copy-pasteable job or scrape cal
 | [change-watching-browser.md](change-watching-browser.md) | Watch a JS-rendered region for change and only emit what's new. |
 | [login-session-scraping.md](login-session-scraping.md) | Log in with `fill`/`press`/`click`, then scrape gated pages. |
 | [custom-actions-plugin.md](custom-actions-plugin.md) | Add a custom recipe step with `@register.action`. |
+| [amazon-product-prices.md](amazon-product-prices.md) | Harvest normalized products (title/image/price) with the `amazon_search` source + webhook ingest. |
 
 Background: [../BROWSER.md](../BROWSER.md) (browser layer), [../JOBS.md](../JOBS.md)
 (jobs/transforms/sinks), [../PLUGINS.md](../PLUGINS.md) (plugin authoring).

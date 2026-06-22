@@ -61,12 +61,16 @@ RUN apt-get update \
        libnss3 libatk-bridge2.0-0 libatk1.0-0 libcups2 libdrm2 libxkbcommon0 \
        libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
     && rm -rf /var/lib/apt/lists/*
+# Set the browser path BEFORE installing so Playwright downloads into
+# /ms-playwright (baked into the image / copied into a fresh cache volume).
+# Setting it afterwards would install to ~/.cache and the runtime lookup at
+# /ms-playwright would miss the binary.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN pip install --no-cache-dir ".[browser]" \
     && python -m playwright install --with-deps chromium
 ENV UJIN_BROWSER_ENABLED=1 \
     UJIN_BROWSER_ENGINE=playwright \
     UJIN_BROWSER_HEADLESS=1 \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     UJIN_CHROMEDRIVER=/usr/bin/chromedriver
 
 # ---- ujin + bundled obscura binary (slow build) ----

@@ -15,6 +15,7 @@ from .contacts import extract_contacts
 from .feeds import extract_feeds
 from .images import extract_images
 from .metadata import extract_metadata
+from .product import Product, extract_products, price_to_cents
 from .profile import apply_article_profile, apply_link_profile
 from .tables import extract_tables
 
@@ -33,4 +34,7 @@ __all__ = [
     "extract_metadata",
     "extract_feeds",
     "extract_contacts",
+    "Product",
+    "extract_products",
+    "price_to_cents",
 ]

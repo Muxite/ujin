@@ -207,6 +207,54 @@ def _install_builtins(reg: Registry) -> None:
             data_path=cfg.get("data_path"),
         )
 
+    def _src_amazon_search(cfg):
+        from ujin.poll.amazon import AmazonSearchPollable
+
+        # Accept a single `term` or a list of `terms`. A list builds a
+        # MultiPollable so one workflow file can sweep several queries.
+        common = dict(
+            domain=cfg.get("domain", "amazon.com"),
+            max_results=cfg.get("max_results", 1),
+            category=cfg.get("category"),
+            engine=cfg.get("engine", "auto"),
+            headless=cfg.get("headless", True),
+            proxy=cfg.get("proxy"),
+            timeout_secs=cfg.get("timeout_secs", 30),
+            with_description=cfg.get("with_description", False),
+        )
+        terms = cfg.get("terms")
+        if terms:
+            from ujin.poll.multi import MultiPollable
+
+            return MultiPollable(
+                [AmazonSearchPollable(t, **common) for t in terms],
+                key=cfg.get("key", "amazon_search"),
+            )
+        return AmazonSearchPollable(cfg["term"], **common)
+
+    def _src_amazon_category(cfg):
+        from ujin.poll.amazon import AmazonCategoryPollable
+
+        return AmazonCategoryPollable(
+            categories=cfg.get("categories"),
+            terms_per_poll=cfg.get("terms_per_poll", 3),
+            max_results=cfg.get("max_results", 4),
+            mutate_prob=cfg.get("mutate_prob", 0.25),
+            domain=cfg.get("domain", "amazon.com"),
+            engine=cfg.get("engine", "auto"),
+            headless=cfg.get("headless", True),
+            proxy=cfg.get("proxy"),
+            timeout_secs=cfg.get("timeout_secs", 30),
+            seed=cfg.get("seed"),
+            key=cfg.get("key", "amazon_category"),
+            harvest=cfg.get("harvest", False),
+            harvest_path=cfg.get("harvest_path", "/data/amazon_harvest.json"),
+            harvest_ratio=cfg.get("harvest_ratio", 0.5),
+            harvest_min_len=cfg.get("harvest_min_len", 4),
+            max_pool=cfg.get("max_pool", 5000),
+            with_description=cfg.get("with_description", False),
+        )
+
     reg.register_builtin("source", "http", _src_http)
     reg.register_builtin("source", "rss", _src_rss)
     reg.register_builtin("source", "api", _src_api)
@@ -215,6 +263,26 @@ def _install_builtins(reg: Registry) -> None:
     reg.register_builtin("source", "site", _src_site)
     reg.register_builtin("source", "scrape", _src_scrape)
     reg.register_builtin("source", "browser", _src_browser)
+    def _src_marketplace_search(cfg):
+        from ujin.poll.marketplace import MarketplaceSearchPollable
+
+        return MarketplaceSearchPollable(
+            profile=cfg.get("profile", "amazon"),
+            categories=cfg.get("categories"),
+            terms_per_poll=cfg.get("terms_per_poll", 3),
+            max_results=cfg.get("max_results", 8),
+            engine=cfg.get("engine"),
+            proxy=cfg.get("proxy"),
+            timeout_secs=cfg.get("timeout_secs", 40),
+            headless=cfg.get("headless", True),
+            seed=cfg.get("seed"),
+            with_description=cfg.get("with_description", False),
+            key=cfg.get("key", "marketplace_search"),
+        )
+
+    reg.register_builtin("source", "amazon_search", _src_amazon_search)
+    reg.register_builtin("source", "amazon_category", _src_amazon_category)
+    reg.register_builtin("source", "marketplace_search", _src_marketplace_search)
 
     # --- transforms ------------------------------------------------------- #
     from ujin.jobs.transforms import BUILTIN_TRANSFORMS

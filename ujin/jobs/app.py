@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -43,6 +44,27 @@ except ModuleNotFoundError:  # pragma: no cover - jobs extra missing
 
 log = logging.getLogger("ujin.jobs.app")
 
+# ``${VAR}`` / ``${VAR:-default}`` references in a workflow/job file, expanded
+# against the environment at load time. Lets a mounted file reference secrets
+# (an ingest token, a backend URL) without committing them. An unset variable
+# with no default expands to "" (and logs once), mirroring shell semantics.
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+
+def _expand_env(text: str) -> str:
+    """Expand ``${VAR}`` / ``${VAR:-default}`` in *text* from os.environ."""
+    def _sub(m: "re.Match[str]") -> str:
+        name, default = m.group(1), m.group(2)
+        val = os.environ.get(name)
+        if val is None:
+            if default is None:
+                log.warning("workflow env var %s unset; expanding to empty", name)
+                return ""
+            return default
+        return val
+
+    return _ENV_REF.sub(_sub, text)
+
 
 def _preload_specs(path: str) -> list:
     """Parse a jobs.yaml (top-level list, or {jobs: [...]}) into JobSpecs."""
@@ -50,7 +72,8 @@ def _preload_specs(path: str) -> list:
 
     from .model import JobSpec
 
-    data = yaml.safe_load(open(path, encoding="utf-8")) or {}
+    text = _expand_env(open(path, encoding="utf-8").read())
+    data = yaml.safe_load(text) or {}
     raw = data.get("jobs", data) if isinstance(data, dict) else data
     return [JobSpec.from_dict(d) for d in (raw or [])]
 
@@ -72,7 +95,7 @@ def _specs_from_workflow_file(path) -> list:
 
     path = Path(path)
     stem = path.stem
-    data = yaml.safe_load(open(path, encoding="utf-8")) or {}
+    data = yaml.safe_load(_expand_env(open(path, encoding="utf-8").read())) or {}
 
     # Single-job mapping (no top-level `jobs:` list) -> the whole file is one job.
     if isinstance(data, dict) and "jobs" not in data:

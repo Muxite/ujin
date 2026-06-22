@@ -56,6 +56,44 @@ def browser_available(engine: str = "playwright") -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# Stealth hardening. A bare headless Chromium is trivially fingerprinted by
+# bot-walls (PerimeterX, baxia, Cloudflare): no User-Agent, navigator.webdriver
+# == true, no locale/plugins/window.chrome. These constants make a headless
+# session look like a normal desktop Chrome so light/medium walls let it through
+# (Amazon/Newegg/eBay benefit too). Heavy walls (AliExpress baxia, Walmart PX)
+# still block — those need a residential proxy, not more stealth.
+# --------------------------------------------------------------------------- #
+_DEFAULT_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+_DEFAULT_LOCALE = "en-US"
+_DEFAULT_VIEWPORT = {"width": 1366, "height": 768}
+_DEFAULT_HEADERS = {"Accept-Language": "en-US,en;q=0.9"}
+# Chromium launch flags that drop the most obvious automation tells.
+_STEALTH_LAUNCH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+]
+# Runs before any page script; masks the headless/webdriver fingerprint surface.
+_STEALTH_INIT_JS = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+window.chrome = window.chrome || {runtime: {}};
+const _origQuery = window.navigator.permissions && window.navigator.permissions.query;
+if (_origQuery) {
+  window.navigator.permissions.query = (p) => (
+    p && p.name === 'notifications'
+      ? Promise.resolve({state: Notification.permission})
+      : _origQuery(p)
+  );
+}
+"""
+
+
+# --------------------------------------------------------------------------- #
 # The page surface every backend exposes to recipe actions. A fake implementing
 # these (sync or async) is enough to drive the pagination logic in tests.
 # --------------------------------------------------------------------------- #
@@ -331,15 +369,26 @@ class _PlaywrightBackend:  # pragma: no cover
         from playwright.async_api import async_playwright
 
         self._pw = await async_playwright().start()
-        self._browser = await self._pw.chromium.launch(headless=self._f.headless)
+        # Stealth launch flags drop the headless automation tells (Amazon/Newegg/
+        # eBay all benefit; PerimeterX/baxia walls need a residential proxy on top).
+        self._browser = await self._pw.chromium.launch(
+            headless=self._f.headless, args=list(_STEALTH_LAUNCH_ARGS),
+        )
 
     async def new_page(self) -> "_PlaywrightPage":
-        kwargs: dict[str, Any] = {}
-        if self._f.user_agent:
-            kwargs["user_agent"] = self._f.user_agent
+        # Default a realistic desktop Chrome fingerprint when the caller set none, so
+        # a bare headless context doesn't out itself (no UA / webdriver=true / no locale).
+        kwargs: dict[str, Any] = {
+            "user_agent": self._f.user_agent or _DEFAULT_UA,
+            "locale": _DEFAULT_LOCALE,
+            "viewport": dict(_DEFAULT_VIEWPORT),
+            "extra_http_headers": dict(_DEFAULT_HEADERS),
+        }
         if self._f.proxy:
             kwargs["proxy"] = {"server": self._f.proxy}
         context = await self._browser.new_context(**kwargs)
+        # Mask the remaining JS fingerprint surface before any page script runs.
+        await context.add_init_script(_STEALTH_INIT_JS)
         page = await context.new_page()
         return _PlaywrightPage(context, page, self._f.timeout_secs * 1000)
 
@@ -444,11 +493,20 @@ class _SeleniumBackend:  # pragma: no cover
             opts.add_argument("--headless=new")
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-dev-shm-usage")
-        if self._f.user_agent:
-            opts.add_argument(f"--user-agent={self._f.user_agent}")
+        # Same stealth flag/UA as the Playwright backend so both engines look alike.
+        opts.add_argument("--disable-blink-features=AutomationControlled")
+        opts.add_argument(f"--user-agent={self._f.user_agent or _DEFAULT_UA}")
         if self._f.proxy:
             opts.add_argument(f"--proxy-server={self._f.proxy}")
         self._driver = webdriver.Chrome(options=opts)
+        try:
+            # Mask navigator.webdriver before any page loads (Selenium has no
+            # context.add_init_script; CDP is the equivalent hook).
+            self._driver.execute_cdp_cmd(
+                "Page.addScriptToEvaluateOnNewDocument", {"source": _STEALTH_INIT_JS}
+            )
+        except Exception:  # noqa: BLE001 - non-Chrome driver / CDP unavailable
+            pass
         self._driver.set_page_load_timeout(self._f.timeout_secs)
 
     async def _run(self, fn, *a):
