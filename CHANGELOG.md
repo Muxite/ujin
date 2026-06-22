@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.10.0 — 2026-06-22
 
 ### Added
 - **Opt-in adaptive poll engine** — `PollEngine(adaptive=True)` wires the
