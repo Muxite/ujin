@@ -11,9 +11,33 @@ from pydantic import BaseModel, Field
 
 class ScrapeRequest(BaseModel):
     url: str = Field(
-        ...,
-        description="Absolute URL to scrape. Must include scheme (http/https).",
+        "",
+        description=(
+            "Absolute URL to scrape. Must include scheme (http/https). "
+            "Required for a single-URL request; omit it (and instead set "
+            "`urls`) to scrape several URLs in one request."
+        ),
         examples=["https://apnews.com", "https://www.reuters.com/world/"],
+    )
+    urls: Optional[list[str]] = Field(
+        None,
+        description=(
+            "Opt-in multi-URL batch: scrape every listed URL in one request and "
+            "receive one result per URL. When set (non-empty), the URLs are "
+            "fetched concurrently under a bounded concurrency cap "
+            "(`batch_max_concurrency`, default 8) and the per-URL "
+            "`ScrapeResponse`s come back in request order under the new `batch` "
+            "list; the top-level fields mirror the FIRST URL's result. A failure "
+            "on one URL is isolated as a `kind='error'` entry and never fails the "
+            "others. Every URL is scraped with the request's `mode`, "
+            "`force_refresh`, `render`, `actions`, and `enrich_html_top_n`; the "
+            "batch form is single-`mode` (the `modes` multi-extract map and "
+            "`page_size`/`cursor` pagination are not applied per URL). Bounded by "
+            "the service `batch_max_items` setting (default 64). Omit (the "
+            "default) for the classic single-`url` behaviour, which is "
+            "byte-for-byte unchanged."
+        ),
+        examples=[["https://apnews.com", "https://www.reuters.com/world/"]],
     )
     mode: Literal["links", "article", "auto", "combined", "structured"] = Field(
         "links",
@@ -435,6 +459,17 @@ class ScrapeResponse(BaseModel):
             "by mode name, each value is a full `ScrapeResponse` for that mode "
             "(its own `extracts` is always null — no nesting). A mode that failed "
             "appears here with `kind='error'`. None for classic single-`mode` "
+            "requests."
+        ),
+    )
+    batch: Optional[list["ScrapeResponse"]] = Field(
+        None,
+        description=(
+            "Multi-URL batch results (only when the request set `urls`). One full "
+            "`ScrapeResponse` per requested URL, in request order; each entry's "
+            "own `batch` is always null (no nesting). A URL that failed appears "
+            "here with `kind='error'` and its exception in `note`. The top-level "
+            "fields mirror the first URL's result. None for classic single-`url` "
             "requests."
         ),
     )

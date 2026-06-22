@@ -70,6 +70,10 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
 # multi-extract: fetch once, get several modes back under `extracts`
 curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
   -d '{"url":"https://apnews.com","modes":["links","structured","html"]}'
+
+# multi-URL batch: scrape many URLs concurrently, one result per URL under `batch`
+curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
+  -d '{"urls":["https://apnews.com","https://www.reuters.com/world/"],"mode":"links"}'
 ```
 
 ## Watch a page for change
@@ -180,7 +184,8 @@ Three FastAPI apps — run any combination. Full reference in
   `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.
 - **Scrape** (`:8901`): `POST /scrape` (modes `links|article|auto|combined|structured`,
   or a `modes` list for multi-extract — several modes over one fetch, results in
-  `extracts`), `/scrape:batch`, `/feed`, `/sitemap`, `/discover`, `/capabilities`,
+  `extracts`; or a `urls` list to scrape many URLs concurrently — one result per
+  URL in `batch`), `/scrape:batch`, `/feed`, `/sitemap`, `/discover`, `/capabilities`,
   `/metrics`, plus optional `/social/*` and `/trends/*`.
 
 Set `UJIN_API_KEY` to require `X-API-Key`/Bearer auth on every service

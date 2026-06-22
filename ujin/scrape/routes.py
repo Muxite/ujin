@@ -168,12 +168,47 @@ async def _scrape_multi(service, req: ScrapeRequest) -> ScrapeResponse:
     return top
 
 
+async def _scrape_urls(service, req: ScrapeRequest, config: ScrapeConfig) -> ScrapeResponse:
+    """Scrape several URLs in one request and pack them into `batch`.
+
+    The URLs are fanned out concurrently (bounded by `batch_max_concurrency`),
+    each scraped with the request's `mode`/`force_refresh`/`render`/`actions`/
+    `enrich_html_top_n`. The per-URL responses come back in request order under
+    `batch`; the top-level fields mirror the first URL's result so a naive client
+    still gets a coherent single-page-shaped body. Per-URL failures are isolated
+    as `kind='error'` entries. Pagination and multi-extract (`modes`) are not
+    applied per URL.
+    """
+    urls = req.urls or []
+    if len(urls) > config.batch_max_items:
+        raise HTTPException(
+            status_code=400,
+            detail=f"batch size {len(urls)} exceeds max {config.batch_max_items}",
+        )
+    results = await service.scrape_urls(
+        urls,
+        mode=req.mode,
+        force_refresh=req.force_refresh,
+        enrich_html_top_n=req.enrich_html_top_n,
+        render=req.render,
+        actions=req.actions,
+        max_concurrency=config.batch_max_concurrency,
+    )
+    responses = [_result_to_response(r) for r in results]
+    # Copy the first response so attaching `batch` doesn't make it self-nest.
+    top = responses[0].model_copy()
+    top.batch = responses
+    return top
+
+
 @router.post("/scrape", response_model=ScrapeResponse)
 async def scrape(req: ScrapeRequest, request: Request) -> ScrapeResponse:
     """Render and extract a single page (headlines or article body)."""
+    service = request.app.state.service
+    if req.urls:
+        return await _scrape_urls(service, req, request.app.state.config)
     if not req.url:
         raise HTTPException(status_code=400, detail="url required")
-    service = request.app.state.service
     if req.modes:
         return await _scrape_multi(service, req)
     try:
