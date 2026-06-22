@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.0 — 2026-06-22
+
+- **perf(bench)**: Added `benchmarks/test_extract_throughput.py` measuring single-process CPU-bound extraction throughput for `extract_headline_links`, `extract_article`, `extract_structured`, and `extract_tables` (events/sec and ms/page); per-poll cost (all four extractors, fetch excluded) recorded in `baseline.json` at ~7.1 ms/page (~140 pages/sec ceiling). New **Multiprocessing (Track 3) gate** section in `docs/PERFORMANCE.md` reports the measured ceiling and explicit go/no-go recommendation: Track 3 is not justified for polling workloads (≈17 pages/sec, 14× below the ceiling) and is only warranted above ~140 pages/sec sustained fetch rate (full extraction) or ~815 pages/sec (links-only mode).
+### Added
+- **test(social-source-coverage)**: Added 10 fully-offline unit tests closing the remaining branch gaps in `ujin/sources/social/_syndication.py` — text/html response where `json.loads` succeeds but returns a non-dict (list/number) falls through to `_from_html` (branch 82→86); `_from_json` with empty results and a non-string `body` value returns `[]` directly (branch 114→116); `_from_html` skips tweet nodes with valid permalinks but whitespace-only text (line 134 `continue`); and `_from_html` stops collecting once the `count` ceiling is hit (line 137 `break`). All four target modules (`mastodon.py`, `twitter.py`, `_nitter.py`, `_syndication.py`) now report 100 % line coverage; total suite coverage rises from 95.48 % to 95.56 %.
+
 ## 0.12.0 — 2026-06-22
 
 ### Added
