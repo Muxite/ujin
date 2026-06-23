@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.20.0 — 2026-06-23
 
 ### Added
 - **INGEST-PLAN — many jobs from one mounted file.** `jobs-serve` can now load a
