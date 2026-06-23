@@ -198,6 +198,109 @@ def _resolve_includes(node: Any, root: Path, seen: "tuple[Path, ...]" = ()) -> A
     return node
 
 
+# ── matrix / for_each fan-out ──────────────────────────────────────────────── #
+#
+# A self-contained, additive step that runs *after* defaults/include resolution
+# (Track 1) and *before* id derivation: a job mapping carrying ``matrix:`` (alias
+# ``for_each:``) — a list of variable maps — is fanned into one job per map, with
+# each map's variables substituted into every ``{{ var }}`` placeholder across the
+# template (source/transforms/sinks/schedule/name/id/...). Kept in its own code
+# path so it neither entangles with, nor conflicts much with, the includes work.
+# A file carrying neither key passes through structurally unchanged.
+
+_MATRIX_KEYS = ("matrix", "for_each")
+
+# ``{{ var }}`` placeholder (whitespace-tolerant). Distinct from the ``${VAR}``
+# env syntax (already expanded at file-read time), so the two never collide.
+_VAR_REF = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+
+
+def _has_matrix(node: Any) -> bool:
+    return isinstance(node, dict) and any(k in node for k in _MATRIX_KEYS)
+
+
+def _subst_vars(node: Any, vars: dict[str, Any]) -> Any:
+    """Deep-copy *node*, substituting ``{{ var }}`` placeholders from *vars*.
+
+    A string that is *exactly* one placeholder is replaced by the variable's raw
+    value (type-preserving — an int stays an int, a map stays a map). A
+    placeholder embedded in a larger string interpolates ``str(value)``. Unknown
+    variables are left verbatim (permissive: a stray ``{{ x }}`` is not fatal).
+    Only values are substituted; mapping keys are left as written.
+    """
+    if isinstance(node, dict):
+        return {k: _subst_vars(v, vars) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_subst_vars(v, vars) for v in node]
+    if isinstance(node, str):
+        whole = _VAR_REF.fullmatch(node.strip())
+        if whole and whole.group(1) in vars:
+            return vars[whole.group(1)]
+        return _VAR_REF.sub(
+            lambda m: str(vars[m.group(1)]) if m.group(1) in vars else m.group(0),
+            node,
+        )
+    return node
+
+
+def _expand_matrix(entry: dict, base_id: str) -> list:
+    """Fan one job mapping out over its ``matrix:``/``for_each:`` list.
+
+    Returns one dict per variable map, each a copy of *entry* (minus the matrix
+    key) with the map's variables substituted in. A stable, distinct id/name is
+    derived per generated job: an explicit ``id`` template (e.g.
+    ``id: feed-{{ slug }}``) is honored after substitution, otherwise
+    ``<base_id>-<index>``. Raises ``ValueError`` (so the file lands in the
+    ``failed`` list, not aborting startup) on a malformed matrix or colliding ids.
+    """
+    present = [k for k in _MATRIX_KEYS if k in entry]
+    if len(present) > 1:
+        raise ValueError(f"use only one of {present}, not both")
+    key = present[0]
+    rows = entry[key]
+    if not isinstance(rows, list) or not rows:
+        raise ValueError(f"`{key}:` must be a non-empty list of variable maps")
+    template = {k: v for k, v in entry.items() if k not in _MATRIX_KEYS}
+
+    out: list = []
+    seen: set = set()
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(
+                f"`{key}:` entry {i} must be a variable map, got "
+                f"{type(row).__name__}"
+            )
+        d = _subst_vars(template, row)
+        d.setdefault("id", f"{base_id}-{i}")
+        d.setdefault("name", d["id"])
+        if d["id"] in seen:
+            raise ValueError(
+                f"`{key}:` produced duplicate id {d['id']!r}; give the `id:` "
+                "template a variable that differs per entry"
+            )
+        seen.add(d["id"])
+        out.append(d)
+    return out
+
+
+def _expand_matrix_entries(entries: list, stem: str) -> list:
+    """Replace each matrix-bearing entry with its fan-out; pass others through.
+
+    A list with no matrix anywhere is returned unchanged, so matrix-free files
+    parse to exactly the same entries (and thus the same JobSpecs) as before.
+    """
+    if not any(_has_matrix(e) for e in entries):
+        return entries
+    out: list = []
+    for i, entry in enumerate(entries):
+        if not _has_matrix(entry):
+            out.append(entry)
+            continue
+        base = entry.get("id") or (stem if len(entries) == 1 else f"{stem}-{i}")
+        out.extend(_expand_matrix(entry, base))
+    return out
+
+
 def _preload_specs(path: str) -> list:
     """Parse a jobs.yaml (top-level list, or {jobs: [...]}) into JobSpecs."""
     import yaml
@@ -219,10 +322,13 @@ def _specs_from_workflow_file(path) -> list:
     A file may also hold a list / ``{jobs: [...]}``; entries without an ``id``
     fall back to ``<stem>-<index>`` to stay deterministic.
 
-    Two additive conveniences run before id derivation: ``include:``/``use:``
-    fragments are inlined (relative to the file's dir, then ``$UJIN_WORKFLOWS_DIR``)
-    and a top-level ``defaults:`` mapping is deep-merged *under* every job (per-job
-    keys win). A file using neither resolves byte-for-byte as it did before.
+    Three additive conveniences run before id derivation: ``include:``/``use:``
+    fragments are inlined (relative to the file's dir, then ``$UJIN_WORKFLOWS_DIR``),
+    a top-level ``defaults:`` mapping is deep-merged *under* every job (per-job keys
+    win), and a ``matrix:``/``for_each:`` key fans a job out into one per variable
+    map with each map substituted into the merged result (see ``_expand_matrix``).
+    The three layers compose in that order; a file using none resolves byte-for-byte
+    as it did before.
     """
     import yaml
 
@@ -238,17 +344,30 @@ def _specs_from_workflow_file(path) -> list:
     defaults = data.pop("defaults", None) or {} if isinstance(data, dict) else {}
 
     # Single-job mapping (no top-level `jobs:` list) -> the whole file is one job.
+    # A `matrix:`/`for_each:` key turns that mapping into a *template* fanned into
+    # several jobs; without one it stays a single job exactly as before.
     if isinstance(data, dict) and "jobs" not in data:
-        d = _deep_merge(defaults, data) if defaults else dict(data)
-        d.setdefault("id", stem)
-        d.setdefault("name", stem)
-        return [JobSpec.from_dict(d)]
+        merged = _deep_merge(defaults, data) if defaults else dict(data)
+        if not _has_matrix(merged):
+            merged.setdefault("id", stem)
+            merged.setdefault("name", stem)
+            return [JobSpec.from_dict(merged)]
+        raw = [merged]
+    else:
+        raw = data.get("jobs", data) if isinstance(data, dict) else data
+        raw = [
+            (_deep_merge(defaults, entry) if defaults else dict(entry))
+            for entry in (raw or [])
+        ]
 
-    raw = data.get("jobs", data) if isinstance(data, dict) else data
-    raw = raw or []
+    # Matrix expansion is a distinct, additive step that runs *after* the
+    # defaults/include merge above, so each entry's variables substitute into the
+    # already-merged result: matrix-free entries pass through untouched (same ids),
+    # matrix entries fan out with stable, per-entry ids.
+    raw = _expand_matrix_entries(raw, stem)
     specs = []
     for i, entry in enumerate(raw):
-        d = _deep_merge(defaults, entry) if defaults else dict(entry)
+        d = dict(entry)
         d.setdefault("id", stem if len(raw) == 1 else f"{stem}-{i}")
         d.setdefault("name", d["id"])
         specs.append(JobSpec.from_dict(d))
