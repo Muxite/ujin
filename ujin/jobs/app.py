@@ -28,6 +28,7 @@ import logging
 import os
 import re
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 # Imported at module level so FastAPI can resolve the handler's `req: JobCreate`
@@ -66,6 +67,137 @@ def _expand_env(text: str) -> str:
     return _ENV_REF.sub(_sub, text)
 
 
+# ── deep-merge + reusable fragments (``defaults:`` / ``include:``) ─────────── #
+#
+# Both features are strictly additive: a workflow file that uses neither resolves
+# to exactly the structure it parsed to, so deterministic ids and ${VAR} handling
+# are byte-for-byte unchanged. ``defaults:`` is deep-merged *under* each job (job
+# keys win); ``include:``/``use:`` splices a fragment file in as if it were inlined.
+
+# Keys (in any mapping, or a list item) that pull in a reusable fragment file.
+_INCLUDE_KEYS = ("include", "use")
+
+
+class WorkflowIncludeError(ValueError):
+    """A workflow ``include:``/``use:`` fragment is missing, unreadable, or cyclic.
+
+    Raised during workflow parsing so the offending file lands in the ``failed``
+    list (see ``GET /health``) with an actionable message, rather than aborting
+    startup for every other workflow.
+    """
+
+
+def _deep_merge(base: Any, over: Any) -> Any:
+    """Recursively merge *over* onto *base*; *over* wins on conflict.
+
+    Nested mappings merge key-by-key; lists and scalars in *over* replace the
+    corresponding value in *base* (no concatenation). A key present only in
+    *base* is kept; a key present only in *over* is added.
+    """
+    if isinstance(base, dict) and isinstance(over, dict):
+        out = dict(base)
+        for k, v in over.items():
+            out[k] = _deep_merge(out[k], v) if k in out else v
+        return out
+    return over
+
+
+def _has_include(node: Any) -> bool:
+    return isinstance(node, dict) and any(k in node for k in _INCLUDE_KEYS)
+
+
+def _split_include(node: dict) -> "tuple[list[str], dict]":
+    """Pull out fragment refs from ``include:``/``use:`` keys; keep the rest."""
+    refs: list[str] = []
+    rest: dict[str, Any] = {}
+    for k, v in node.items():
+        if k in _INCLUDE_KEYS:
+            if isinstance(v, str):
+                refs.append(v)
+            elif isinstance(v, (list, tuple)):
+                refs.extend(v)
+            else:
+                raise WorkflowIncludeError(
+                    f"`{k}:` must be a fragment path or list of paths, "
+                    f"got {type(v).__name__}"
+                )
+        else:
+            rest[k] = v
+    return refs, rest
+
+
+def _resolve_fragment_path(ref: str, root: Path) -> Path:
+    """Locate a fragment file, relative to *root* then ``$UJIN_WORKFLOWS_DIR``."""
+    p = Path(ref)
+    if p.is_absolute():
+        if p.is_file():
+            return p.resolve()
+        raise WorkflowIncludeError(f"include fragment not found: {ref}")
+    bases = [root]
+    env_dir = os.environ.get("UJIN_WORKFLOWS_DIR")
+    if env_dir:
+        bases.append(Path(env_dir))
+    tried = []
+    for base in bases:
+        cand = base / p
+        tried.append(str(cand))
+        if cand.is_file():
+            return cand.resolve()
+    raise WorkflowIncludeError(
+        f"include fragment not found: {ref!r} (looked in: {', '.join(tried)})"
+    )
+
+
+def _load_fragment(ref: str, root: Path, seen: "tuple[Path, ...]") -> Any:
+    """Parse a fragment file and recursively resolve its own includes."""
+    import yaml
+
+    fp = _resolve_fragment_path(ref, root)
+    if fp in seen:
+        chain = " -> ".join(p.name for p in (*seen, fp))
+        raise WorkflowIncludeError(f"cyclic include detected: {chain}")
+    text = _expand_env(fp.read_text(encoding="utf-8"))
+    return _resolve_includes(yaml.safe_load(text), fp.parent, seen + (fp,))
+
+
+def _resolve_includes(node: Any, root: Path, seen: "tuple[Path, ...]" = ()) -> Any:
+    """Inline every ``include:``/``use:`` fragment found anywhere in *node*.
+
+    A mapping with an ``include:`` is deep-merged *over* the referenced
+    fragment(s) (the mapping's own keys win; multiple refs apply left-to-right). A
+    list item whose include expands to a list is spliced into the list (so a
+    transform-pipeline fragment drops straight into ``transforms:``). With no
+    include keys present, *node* is returned structurally unchanged.
+    """
+    if isinstance(node, dict):
+        refs, rest = _split_include(node)
+        resolved = {k: _resolve_includes(v, root, seen) for k, v in rest.items()}
+        if not refs:
+            return resolved
+        merged: Any = None
+        for ref in refs:
+            frag = _load_fragment(ref, root, seen)
+            merged = frag if merged is None else _deep_merge(merged, frag)
+        if isinstance(merged, list):
+            if resolved:
+                raise WorkflowIncludeError(
+                    f"cannot merge keys {sorted(resolved)} onto a list fragment "
+                    f"(include {refs}); put the overrides inside the fragment"
+                )
+            return merged
+        return _deep_merge(merged, resolved)
+    if isinstance(node, list):
+        out: list = []
+        for item in node:
+            resolved = _resolve_includes(item, root, seen)
+            if _has_include(item) and isinstance(resolved, list):
+                out.extend(resolved)
+            else:
+                out.append(resolved)
+        return out
+    return node
+
+
 def _preload_specs(path: str) -> list:
     """Parse a jobs.yaml (top-level list, or {jobs: [...]}) into JobSpecs."""
     import yaml
@@ -86,38 +218,51 @@ def _specs_from_workflow_file(path) -> list:
     workflow across restarts/redeploys — unless the file sets an explicit ``id``.
     A file may also hold a list / ``{jobs: [...]}``; entries without an ``id``
     fall back to ``<stem>-<index>`` to stay deterministic.
+
+    Two additive conveniences run before id derivation: ``include:``/``use:``
+    fragments are inlined (relative to the file's dir, then ``$UJIN_WORKFLOWS_DIR``)
+    and a top-level ``defaults:`` mapping is deep-merged *under* every job (per-job
+    keys win). A file using neither resolves byte-for-byte as it did before.
     """
     import yaml
 
     from .model import JobSpec
 
-    from pathlib import Path
-
     path = Path(path)
     stem = path.stem
-    data = yaml.safe_load(_expand_env(open(path, encoding="utf-8").read())) or {}
+    data = yaml.safe_load(_expand_env(path.read_text(encoding="utf-8"))) or {}
+
+    # Inline reusable fragments, then peel off a top-level `defaults:` block. Both
+    # are no-ops when absent, so the paths below stay identical to the old loader.
+    data = _resolve_includes(data, path.parent)
+    defaults = data.pop("defaults", None) or {} if isinstance(data, dict) else {}
 
     # Single-job mapping (no top-level `jobs:` list) -> the whole file is one job.
     if isinstance(data, dict) and "jobs" not in data:
-        d = dict(data)
+        d = _deep_merge(defaults, data) if defaults else dict(data)
         d.setdefault("id", stem)
         d.setdefault("name", stem)
         return [JobSpec.from_dict(d)]
 
     raw = data.get("jobs", data) if isinstance(data, dict) else data
+    raw = raw or []
     specs = []
-    for i, entry in enumerate(raw or []):
-        d = dict(entry)
+    for i, entry in enumerate(raw):
+        d = _deep_merge(defaults, entry) if defaults else dict(entry)
         d.setdefault("id", stem if len(raw) == 1 else f"{stem}-{i}")
         d.setdefault("name", d["id"])
         specs.append(JobSpec.from_dict(d))
     return specs
 
 
-def _load_workflows_dir(path: str) -> list:
-    """Load every ``*.yaml``/``*.yml`` workflow file in *path* (sorted)."""
-    from pathlib import Path
+def _load_workflows_dir(path: str, failed: list | None = None) -> list:
+    """Load every ``*.yaml``/``*.yml`` workflow file in *path* (sorted).
 
+    A file that fails to parse or resolve (bad YAML, missing/cyclic ``include:``)
+    is logged and skipped so other workflows still load; when *failed* is given,
+    a ``{"id", "error"}`` record is appended to it for ``GET /health``. Fragment
+    files are expected to live in a subdirectory (the scan is non-recursive).
+    """
     root = Path(path)
     if not root.is_dir():
         return []
@@ -127,6 +272,8 @@ def _load_workflows_dir(path: str) -> list:
             specs.extend(_specs_from_workflow_file(fp))
         except Exception as exc:  # noqa: BLE001
             log.warning("skipping workflow file %s: %s", fp, exc)
+            if failed is not None:
+                failed.append({"id": fp.stem, "error": str(exc)})
     return specs
 
 
@@ -192,7 +339,7 @@ def create_jobs_app(
         # Ids are filename-derived, so re-loading upserts the same workflow rather
         # than duplicating it. A bad file is reported, not fatal.
         wf_status: dict[str, list] = {"dir": wf_dir, "loaded": [], "failed": []}
-        for spec in _load_workflows_dir(wf_dir):
+        for spec in _load_workflows_dir(wf_dir, failed=wf_status["failed"]):
             try:
                 manager.create(spec)
                 wf_status["loaded"].append(spec.id)

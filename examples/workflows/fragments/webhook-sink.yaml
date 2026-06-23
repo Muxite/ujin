@@ -1,0 +1,7 @@
+# Reusable sink fragment — reference it from any workflow's `sinks:` list with
+#   - include: fragments/webhook-sink.yaml
+# `${INGEST_URL}` is expanded from the environment at load time, so the endpoint
+# stays out of the committed workflow files.
+kind: webhook
+config:
+  url: "${INGEST_URL:-http://localhost:8000/ingest}"
