@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **Tests: full offline coverage for `MultiPollable`, `AmazonSearchPollable`, and `MarketplaceSearchPollable`.** Added `tests/test_poll_multi.py` covering all `MultiPollable` branches (list/non-list/None payloads, concurrent polling, failing children, `changed` detection) and new coverage tests in `tests/test_amazon_coverage.py` and `tests/test_marketplace.py` closing every remaining uncovered branch in `ujin/poll/amazon.py` and `ujin/poll/marketplace.py`; all three modules now reach 100% line and branch coverage (total project coverage 95.51%, up from 94.82%).
+
 ## 0.19.0 — 2026-06-23
 
 ### Added
