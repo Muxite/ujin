@@ -436,6 +436,21 @@ def test_id_from_href_walmart():
     assert _id_from_href("https://www.walmart.com/ip/987654321", "walmart") == "987654321"
 
 
+def test_id_from_href_jsonld_first_sources():
+    # JSON-LD-first profiles recover a stable id from the canonical product link.
+    assert _id_from_href("https://www.aliexpress.com/item/1005006789012345.html?x=1",
+                         "aliexpress") == "1005006789012345"
+    assert _id_from_href("https://www.target.com/p/cool-thing/-/A-87654321", "target") == "87654321"
+    assert _id_from_href("https://www.bestbuy.com/site/cool-laptop/6500123.p?skuId=6500123",
+                         "bestbuy") == "6500123"
+    assert _id_from_href("https://www.etsy.com/listing/123456789/handmade-mug", "etsy") == "123456789"
+    assert _id_from_href("https://www.homedepot.com/p/Some-Drill/312345678", "homedepot") == "312345678"
+    assert _id_from_href("https://www.lowes.com/pd/Some-Saw/1000123456", "lowes") == "1000123456"
+    assert _id_from_href("https://www.bhphotovideo.com/c/product/1234567-REG/cam.html",
+                         "bhphoto") == "1234567"
+    assert _id_from_href("https://www.chewy.com/brand-dog-food/dp/654321", "chewy") == "654321"
+
+
 _EBAY_SELECTORS = {
     "card": ".s-card, .s-item",
     "id_attr": "data-id",

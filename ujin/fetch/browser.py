@@ -70,6 +70,74 @@ _DEFAULT_UA = (
 _DEFAULT_LOCALE = "en-US"
 _DEFAULT_VIEWPORT = {"width": 1366, "height": 768}
 _DEFAULT_HEADERS = {"Accept-Language": "en-US,en;q=0.9"}
+
+# --------------------------------------------------------------------------- #
+# Fingerprint rotation pool. A *single* fixed UA across every request is itself a
+# tell — a bot-wall can pin "all traffic is Chrome/124 on Win10 at 1366×768". So
+# when the caller hasn't pinned a UA, each new page draws a random, *internally
+# consistent* desktop fingerprint: the UA's OS, the locale, the Accept-Language
+# header, and the viewport all agree (a Win UA never pairs with a Mac viewport).
+# Cheap, offline-testable variety that raises the bar against UA-only walls. This
+# is not a substitute for a residential proxy on PerimeterX/baxia walls.
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class _Fingerprint:
+    user_agent: str
+    locale: str
+    accept_language: str
+    viewport: dict
+
+
+_FINGERPRINTS: tuple[_Fingerprint, ...] = (
+    # Chrome / Windows 10
+    _Fingerprint(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        locale="en-US", accept_language="en-US,en;q=0.9",
+        viewport={"width": 1366, "height": 768},
+    ),
+    # Chrome / Windows 11 (larger display)
+    _Fingerprint(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        locale="en-US", accept_language="en-US,en;q=0.9",
+        viewport={"width": 1920, "height": 1080},
+    ),
+    # Chrome / macOS
+    _Fingerprint(
+        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        locale="en-US", accept_language="en-US,en;q=0.9",
+        viewport={"width": 1440, "height": 900},
+    ),
+    # Safari / macOS
+    _Fingerprint(
+        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+                   "(KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+        locale="en-US", accept_language="en-US,en;q=0.9",
+        viewport={"width": 1512, "height": 982},
+    ),
+    # Firefox / Windows
+    _Fingerprint(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) "
+                   "Gecko/20100101 Firefox/125.0",
+        locale="en-US", accept_language="en-US,en;q=0.5",
+        viewport={"width": 1600, "height": 900},
+    ),
+    # Edge / Windows
+    _Fingerprint(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+        locale="en-GB", accept_language="en-GB,en;q=0.9",
+        viewport={"width": 1280, "height": 720},
+    ),
+)
+
+
+def _pick_fingerprint(rng=None) -> _Fingerprint:
+    """Random internally-consistent desktop fingerprint from the rotation pool."""
+    import random as _random
+    return (rng or _random).choice(_FINGERPRINTS)
 # Chromium launch flags that drop the most obvious automation tells.
 _STEALTH_LAUNCH_ARGS = [
     "--disable-blink-features=AutomationControlled",
@@ -376,14 +444,25 @@ class _PlaywrightBackend:  # pragma: no cover
         )
 
     async def new_page(self) -> "_PlaywrightPage":
-        # Default a realistic desktop Chrome fingerprint when the caller set none, so
-        # a bare headless context doesn't out itself (no UA / webdriver=true / no locale).
-        kwargs: dict[str, Any] = {
-            "user_agent": self._f.user_agent or _DEFAULT_UA,
-            "locale": _DEFAULT_LOCALE,
-            "viewport": dict(_DEFAULT_VIEWPORT),
-            "extra_http_headers": dict(_DEFAULT_HEADERS),
-        }
+        # Default a realistic desktop fingerprint when the caller set none, so a bare
+        # headless context doesn't out itself (no UA / webdriver=true / no locale). When
+        # unpinned, rotate through the fingerprint pool — UA, locale, Accept-Language and
+        # viewport all drawn from one consistent profile (no Win-UA/Mac-viewport mismatch).
+        if self._f.user_agent:
+            kwargs: dict[str, Any] = {
+                "user_agent": self._f.user_agent,
+                "locale": _DEFAULT_LOCALE,
+                "viewport": dict(_DEFAULT_VIEWPORT),
+                "extra_http_headers": dict(_DEFAULT_HEADERS),
+            }
+        else:
+            fp = _pick_fingerprint()
+            kwargs = {
+                "user_agent": fp.user_agent,
+                "locale": fp.locale,
+                "viewport": dict(fp.viewport),
+                "extra_http_headers": {"Accept-Language": fp.accept_language},
+            }
         if self._f.proxy:
             kwargs["proxy"] = {"server": self._f.proxy}
         context = await self._browser.new_context(**kwargs)
@@ -493,9 +572,17 @@ class _SeleniumBackend:  # pragma: no cover
             opts.add_argument("--headless=new")
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-dev-shm-usage")
-        # Same stealth flag/UA as the Playwright backend so both engines look alike.
+        # Same stealth flag/UA as the Playwright backend so both engines look alike. When
+        # the caller pinned no UA, rotate through the fingerprint pool (UA + viewport from
+        # one consistent profile) so the Selenium path also varies its identity per driver.
         opts.add_argument("--disable-blink-features=AutomationControlled")
-        opts.add_argument(f"--user-agent={self._f.user_agent or _DEFAULT_UA}")
+        if self._f.user_agent:
+            opts.add_argument(f"--user-agent={self._f.user_agent}")
+        else:
+            fp = _pick_fingerprint()
+            opts.add_argument(f"--user-agent={fp.user_agent}")
+            opts.add_argument(f"--window-size={fp.viewport['width']},{fp.viewport['height']}")
+            opts.add_argument(f"--lang={fp.locale}")
         if self._f.proxy:
             opts.add_argument(f"--proxy-server={self._f.proxy}")
         self._driver = webdriver.Chrome(options=opts)
