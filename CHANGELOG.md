@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+- **Workflow `defaults:` + reusable fragments.** Workflow files now accept an optional
+  top-level `defaults:` mapping that is deep-merged under every job (per-job keys win;
+  nested `source`/`schedule`/etc. maps merge recursively, lists replace), and an
+  `include:`/`use:` mechanism that inlines a fragment file for a whole job or a
+  sub-section (a sink, a transform pipeline, or a schedule). Fragment paths resolve
+  relative to the including file's directory then `$UJIN_WORKFLOWS_DIR`; a missing or
+  cyclic include fails just that workflow into the `failed` list (see `GET /health`)
+  with an actionable error instead of aborting startup. Strictly additive — files using
+  neither load byte-for-byte as before, including filename-stem ids and
+  `${VAR}`/`${VAR:-default}` substitution. The workflows-dir scan is non-recursive,
+  so fragments kept in a subdirectory (e.g. `fragments/`) are never loaded as
+  standalone workflows. New example `examples/workflows/site-feeds.yaml`
+  (+ `examples/workflows/fragments/`); see `docs/WORKFLOWS.md`.
+
 ### Added (generic marketplace engine)
 - Absorbed the generic engine improvements from the marketplace development line, keeping
   them site-agnostic: browser fingerprint rotation / stealth-context hardening

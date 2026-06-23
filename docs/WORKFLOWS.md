@@ -71,6 +71,71 @@ ujin jobs-serve --workflows ./examples/workflows      # or set UJIN_WORKFLOWS_DI
   "workflows": { "dir": "/workflows", "loaded": ["crossref-papers", "example-page"], "failed": [] } }
 ```
 
+## Defaults and reusable fragments
+
+When you run **many similar workflows**, two optional, purely-additive conveniences
+keep the files DRY. A workflow that uses neither loads byte-for-byte as before, so
+existing single-file workflows, `{jobs: [...]}`/list forms, filename-stem ids, and
+`${VAR}`/`${VAR:-default}` substitution are unchanged.
+
+### `defaults:` — shared keys, deep-merged into each job
+
+A top-level `defaults:` mapping is **deep-merged under every job** in the file,
+with per-job keys winning. Nested maps (`source`, `schedule`, …) merge recursively;
+**lists replace** (no concatenation) when a job sets them, and are inherited whole
+when a job omits them.
+
+```yaml
+# /workflows/site-feeds.yaml  ->  ids "site-feeds-0", "site-feeds-1"
+defaults:
+  source: { kind: api, config: { method: GET, json_path: items } }
+  transforms: [ { kind: dedupe, config: { key: id } } ]
+  schedule:  { mode: adaptive, base: 3600 }
+jobs:
+  - name: news
+    source: { config: { url: "https://feeds.example.com/news" } }   # kind/method inherited
+  - name: jobs
+    source: { config: { url: "https://feeds.example.com/jobs" } }
+    schedule: { base: 600 }          # overrides only `base`; `mode` inherited
+```
+
+Both jobs inherit the `api` source kind, the `dedupe` transform, and the adaptive
+schedule; `news` polls hourly while `jobs` overrides `base` to 600s.
+
+### `include:` / `use:` — reference a fragment file
+
+`include:` (alias `use:`) pulls in a **fragment file** so a whole job, or a
+sub-section — a sink, a schedule, or a transform pipeline — can be shared. The
+result is identical to inlining the fragment. Fragment paths resolve relative to
+the **including file's directory**, then `$UJIN_WORKFLOWS_DIR`.
+
+```yaml
+sinks:
+  - include: fragments/webhook-sink.yaml   # a mapping fragment -> one sink
+  - kind: sqlite
+transforms:
+  - include: fragments/clean.yaml          # a list fragment -> spliced into the pipeline
+  - kind: limit
+    config: { n: 5 }
+schedule:
+  include: fragments/adaptive-hourly.yaml
+  base: 600                                 # keys alongside an include override the fragment
+```
+
+- A mapping with `include:` is deep-merged **over** the fragment (local keys win;
+  several paths apply left-to-right).
+- In a list, an item whose `include:` expands to a **list** is spliced in (so a
+  transform-pipeline fragment drops straight into `transforms:`); one that expands
+  to a mapping is inserted as a single item.
+- Keep fragments in a **subdirectory** (e.g. `fragments/`): the startup scan is
+  **non-recursive** and only reads top-level `*.yaml`/`*.yml`, so a fragment in a
+  subdirectory is never loaded as a standalone workflow.
+- A **missing or cyclic** include fails just that workflow with an actionable
+  error in the `failed` list (see `GET /health`); other workflows still load.
+
+See `examples/workflows/site-feeds.yaml` (+ `examples/workflows/fragments/`) for a
+runnable end-to-end example.
+
 ## Collect — the container does the job
 
 Each workflow is driven by the same [adaptive engine](../README.md#how-it-works)
@@ -114,5 +179,7 @@ the registry. Two ways to extend the menu:
 ## Examples
 
 `examples/workflows/` ships runnable workflow files:
-`crossref-papers.yaml` (adaptive API poll) and `example-page.yaml` (a minimal HTTP
-poll). Copy them into your mounted `./workflows` directory to try them.
+`crossref-papers.yaml` (adaptive API poll), `example-page.yaml` (a minimal HTTP
+poll), and `site-feeds.yaml` (multiple jobs sharing a `defaults:` block and
+reusable `fragments/`). Copy them into your mounted `./workflows` directory to try
+them.
