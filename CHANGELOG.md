@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+- **docs(jobs): sync JOBS.md REST surface with shipped ingest-plan loader.** Added
+  the optional `plan` field to the `/health` response description and expanded the
+  file-driven-jobs cross-reference to name the four external-config capabilities
+  (`defaults:` deep-merge, `include:`/`use:` fragments, `matrix:`/`for_each:`
+  fan-out, and `--plan`/`$UJIN_INGEST_PLAN` single-file ingest-plan) with links to
+  WORKFLOWS.md and the new INGEST_PLAN.md.
+
 ## 0.20.0 — 2026-06-23
 
 ### Added
