@@ -256,17 +256,24 @@ def _specs_from_workflow_file(path) -> list:
 
 
 def _load_workflows_dir(path: str, failed: list | None = None) -> list:
-    """Load every ``*.yaml``/``*.yml`` workflow file in *path* (sorted).
+    """Load every top-level ``*.yaml``/``*.yml`` workflow file in *path* (sorted).
+
+    The scan is **non-recursive** (``*.y*ml``, not ``**/*.y*ml``): only files
+    directly in *path* are treated as workflows. This is deliberate — it keeps
+    ``include:``/``use:`` fragments kept in a subdirectory (e.g. ``fragments/``)
+    out of the workflow set, so a fragment is never loaded as a standalone
+    workflow (matching ``docs/WORKFLOWS.md``).
 
     A file that fails to parse or resolve (bad YAML, missing/cyclic ``include:``)
     is logged and skipped so other workflows still load; when *failed* is given,
-    a ``{"id", "error"}`` record is appended to it for ``GET /health``. Fragment
-    files are expected to live in a subdirectory (the scan is non-recursive).
+    a ``{"id", "error"}`` record is appended to it for ``GET /health``.
     """
     root = Path(path)
     if not root.is_dir():
         return []
     specs = []
+    # Non-recursive on purpose (no ``**``): subdirectory fragments stay out of
+    # the workflow set — see the docstring. The dir-scan tests guard this.
     for fp in sorted(root.glob("*.y*ml")):
         try:
             specs.extend(_specs_from_workflow_file(fp))

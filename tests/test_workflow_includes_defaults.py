@@ -320,6 +320,36 @@ transforms:
     assert "list fragment" in str(exc.value)
 
 
+def test_subdirectory_fragments_not_scanned_as_workflows(tmp_path):
+    # The dir scan is non-recursive: a fragment living in a subdirectory is
+    # includable but never loaded as a standalone workflow (docs/WORKFLOWS.md).
+    # A `**` glob would regress this — the fragment would be scanned, fail to
+    # parse as a JobSpec (no source), and land in `failed`.
+    _write(
+        tmp_path / "fragments" / "webhook-sink.yaml",
+        "kind: webhook\nconfig: {url: \"http://backend.test/ingest\"}\n",
+    )
+    _write(
+        tmp_path / "feed.yaml",
+        """
+source:
+  kind: http
+  config: {url: "https://z.test"}
+sinks:
+  - include: fragments/webhook-sink.yaml
+""",
+    )
+    failed: list = []
+    specs = _load_workflows_dir(str(tmp_path), failed=failed)
+
+    # only the top-level file becomes a workflow; the subdir fragment is skipped
+    assert [s.id for s in specs] == ["feed"]
+    assert failed == []
+    # ...and that fragment was still inlined into the workflow that included it
+    (feed,) = specs
+    assert [s.kind for s in feed.sinks] == ["webhook"]
+
+
 def test_env_workflows_dir_resolves_fragments(tmp_path, monkeypatch):
     # A fragment referenced by a bare name resolves via $UJIN_WORKFLOWS_DIR even
     # when the workflow file lives elsewhere.

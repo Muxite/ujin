@@ -127,8 +127,9 @@ schedule:
 - In a list, an item whose `include:` expands to a **list** is spliced in (so a
   transform-pipeline fragment drops straight into `transforms:`); one that expands
   to a mapping is inserted as a single item.
-- Keep fragments in a **subdirectory** (e.g. `fragments/`): the startup scan only
-  reads top-level `*.yaml`, so a fragment is never loaded as a standalone workflow.
+- Keep fragments in a **subdirectory** (e.g. `fragments/`): the startup scan is
+  **non-recursive** and only reads top-level `*.yaml`/`*.yml`, so a fragment in a
+  subdirectory is never loaded as a standalone workflow.
 - A **missing or cyclic** include fails just that workflow with an actionable
   error in the `failed` list (see `GET /health`); other workflows still load.
 

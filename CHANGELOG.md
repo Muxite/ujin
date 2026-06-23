@@ -12,7 +12,9 @@
   cyclic include fails just that workflow into the `failed` list (see `GET /health`)
   with an actionable error instead of aborting startup. Strictly additive — files using
   neither load byte-for-byte as before, including filename-stem ids and
-  `${VAR}`/`${VAR:-default}` substitution. New example `examples/workflows/site-feeds.yaml`
+  `${VAR}`/`${VAR:-default}` substitution. The workflows-dir scan is non-recursive,
+  so fragments kept in a subdirectory (e.g. `fragments/`) are never loaded as
+  standalone workflows. New example `examples/workflows/site-feeds.yaml`
   (+ `examples/workflows/fragments/`); see `docs/WORKFLOWS.md`.
 
 ### Added (generic marketplace engine)
