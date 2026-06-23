@@ -6,7 +6,7 @@
 # Git topology
 base_branch = "master"
 integration_prefix = "integration/cycle-"
-cycle = "0.6"
+cycle = "0.19"
 
 # Autonomy posture: "full_auto" (merge to master) or "supervised" (stop before master).
 autonomy = "full_auto"
@@ -14,7 +14,7 @@ autonomy = "full_auto"
 push_on_release = false
 # Drain: finish + merge the current cycle's in-flight foci, then halt with no new
 # tasks. Set back to false to resume planning new cycles.
-drain = true
+drain = false
 
 # Concurrency + retry caps (runaway prevention).
 max_concurrent = 3

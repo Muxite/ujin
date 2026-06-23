@@ -354,10 +354,28 @@ def _plan_context(cfg: Config, store: StateStore) -> str:
         f"Current cycle: {cfg.cycle}. Integration branch: {cfg.integration_branch}.",
         f"Max concurrent foci: {cfg.max_concurrent}. Coverage floor: "
         f"{store.read_cov_floor(cfg.coverage_floor)}%.",
-        "Roadmap (see the approved plan): Track 1 Adaptive learning FIRST "
-        "(site-store -> host-policy-signals -> strategy-feedback -> learned-rate-limit "
-        "-> robots), then Track 2 multifunctional, Track 3 multiprocessing (measure-gated), "
-        "Track 4 polish.",
+        "Roadmap — EXTERNAL CONFIG / WORKFLOW SCRIPTING. Goal: make ujin's job/workflow "
+        "system highly configurable from an EXTERNAL source so a consuming app (e.g. "
+        "wordle-max) can drive many sweeps from one place instead of N near-identical YAML "
+        "files. Everything is STRICTLY ADDITIVE: existing single-file workflows, the "
+        "source/transforms/sinks/schedule schema (JobSpec.from_dict), and ${VAR}/${VAR:-default} "
+        "substitution must keep working byte-for-byte. Tracks, in dependency order:\n"
+        "  Track 1 — Workflow INCLUDES & shared DEFAULTS: a workflow/job file can reference "
+        "reusable fragments (a shared sink, a shared transform pipeline, a shared schedule via "
+        "e.g. `include:`/`use:`/anchors) and a top-level `defaults:` block deep-merged into each "
+        "job (per-job keys win). Paths resolve relative to the workflows dir / $UJIN_WORKFLOWS_DIR.\n"
+        "  Track 2 — MATRIX / parameterized workflows: one template fans out over a list of "
+        "parameter sets (`matrix:`/`for_each:` of var maps) -> one job per entry, with the vars "
+        "substituted into source/transforms/sinks/schedule. Collapses N files that differ only "
+        "in a couple of values (e.g. a profile name + a cron offset) to one template + a data list.\n"
+        "  Track 3 — Single external INGEST-PLAN file: a top-level mountable config (path via an "
+        "env var, mirroring UJIN_MARKETPLACE_PROFILES) declaring many jobs at once with "
+        "defaults+matrix, loaded by jobs-serve. The consuming app OWNS this file; ujin ships only "
+        "the generic loader, a documented schema, and an example.\n"
+        "  Track 4 — Polish: README + a new docs/ page, an examples/ sample plan, schema "
+        "validation with clear actionable errors, and test coverage for the new loader paths.\n"
+        "DESIGN RULE: ujin stays GENERAL-PURPOSE — NO wordle-max- or site-specific logic in this "
+        "repo; wordle-max is only the motivating consumer. Keep the consumer-contract surface frozen.",
     ]
     if prev:
         diff = gitutil.git("diff", "--stat", f"{cfg.base_branch}...{cfg.integration_branch}",
