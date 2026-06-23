@@ -1,6 +1,35 @@
 # Changelog
 
-## [Unreleased]
+## 0.19.0 — 2026-06-23
+
+### Added
+- **Workflow `defaults:` + reusable fragments.** Workflow files now accept an optional
+  top-level `defaults:` mapping that is deep-merged under every job (per-job keys win;
+  nested `source`/`schedule`/etc. maps merge recursively, lists replace), and an
+  `include:`/`use:` mechanism that inlines a fragment file for a whole job or a
+  sub-section (a sink, a transform pipeline, or a schedule). Fragment paths resolve
+  relative to the including file's directory then `$UJIN_WORKFLOWS_DIR`; a missing or
+  cyclic include fails just that workflow into the `failed` list (see `GET /health`)
+  with an actionable error instead of aborting startup. Strictly additive — files using
+  neither load byte-for-byte as before, including filename-stem ids and
+  `${VAR}`/`${VAR:-default}` substitution. The workflows-dir scan is non-recursive,
+  so fragments kept in a subdirectory (e.g. `fragments/`) are never loaded as
+  standalone workflows. New example `examples/workflows/site-feeds.yaml`
+  (+ `examples/workflows/fragments/`); see `docs/WORKFLOWS.md`.
+- **`matrix:`/`for_each:` workflow templates** — a workflow file (or a `jobs:` list
+  entry) may carry a `matrix:` key (alias `for_each:`), a list of variable maps, and
+  ujin loads it as **one JobSpec per entry**, substituting each entry's variables into
+  every `{{ var }}` placeholder across the source, transforms, sinks, and schedule. A
+  whole-value placeholder keeps the variable's native type (`min_price: "{{ floor }}"` →
+  the integer `500`); an embedded one interpolates `str(value)`; an unknown variable is
+  left verbatim. Each generated job gets a **stable, distinct id/name** — an explicit
+  `id:` template (e.g. `id: feed-{{ slug }}`) is honored after substitution, otherwise
+  `<stem>-<index>` — so reloading the same template upserts the same N jobs instead of
+  duplicating them (colliding ids are rejected). Expansion is a clearly-separated step
+  that runs after defaults/include resolution and composes with it (vars substitute into
+  the merged result). Strictly additive: a file with no matrix key loads to exactly the
+  same JobSpec set as before. Example at `examples/workflows/marketplace-search.yaml`;
+  documented in `docs/WORKFLOWS.md` and `README.md`.
 
 ### Added (generic marketplace engine)
 - Absorbed the generic engine improvements from the marketplace development line, keeping
@@ -10,6 +39,9 @@
   per-host **detail-page cache** (`_SeenStore`; `marketplace_search` config `detail_cache`,
   `detail_cache_path`, `detail_cache_ttl_secs`) that skips re-fetching detail for source_ids
   seen within a TTL. No site profiles are baked in — see below.
+
+### docs(sync/marketplace)
+- **docs(sync/marketplace)**: Audited README and all `docs/` pages against the shipped marketplace externalization surface. `docs/JOBS.md` was missing the `marketplace_search` source kind entirely — added row with full config key reference and a "no profiles built in" callout. `docs/MARKETPLACE.md` was missing a config reference for job-source parameters (`terms_per_poll`, `max_results`, `engine`, `with_description`, `detail_cache`, `detail_cache_path`, `detail_cache_ttl_secs`) documented only in CHANGELOG — added "Full config reference" table. README and `docs/MARKETPLACE.md` already correctly described profile externalization; no other docs surfaces had drift. No production code changed; test suite unaffected (94.63% coverage, floor 90%).
 
 ### Changed (breaking for marketplace consumers)
 - **Marketplace profiles are now externally supplied, not built in.** `ujin.poll.marketplace`

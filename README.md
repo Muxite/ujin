@@ -127,7 +127,12 @@ curl -X POST localhost:8902/jobs -H 'content-type: application/json' -d '{
 Prefer files over API calls? Drop workflow definitions into the mounted
 `./workflows` directory — each file is one workflow, the **filename stem is its
 id**, and ujin sets it up on startup, runs it, and hands back what it obtained at
-`GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). See
+`GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). Keep
+many similar workflows DRY with an optional top-level `defaults:` block (deep-merged
+into each job) and `include:`/`use:` fragment files for shared sinks, schedules, or
+transform pipelines; or fan one template into many with a `matrix:`/`for_each:` key
+— a list of variable maps, each substituted into the `source`/`transforms`/`sinks`/
+`schedule`, with a stable per-entry id so reloads upsert rather than duplicate. See
 [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
 Need something the built-ins don't cover? Drop a Python file into the mounted
@@ -200,7 +205,8 @@ Three FastAPI apps — run any combination. Full reference in
   `GET/DELETE /jobs/{id}`, `/jobs/{id}/run|pause|resume|runs|events`,
   `/jobs/{id}/content` + `/jobs/{id}/results` (hand out obtained data), `WS /jobs/events`,
   `/kinds`, `/metrics`, `POST /plugins/reload`. Durable + plugin-extensible.
-  File-driven workflows load from `./workflows` — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
+  File-driven workflows load from `./workflows` (with `matrix:`/`for_each:` template
+  fan-out) — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 - **Poller control** (`:8900`): `GET /health /metrics /targets`,
   `GET /content?key=…` (reuse the body ujin last fetched), `POST /targets`,
   `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.

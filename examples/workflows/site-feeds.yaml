@@ -1,0 +1,42 @@
+# Several near-identical polling jobs over similar feeds, factored with a shared
+# `defaults:` block plus reusable fragments. Each job overrides only what differs
+# (its URL, or a faster cadence); everything else is deep-merged in from defaults.
+#
+# This loads to the SAME JobSpecs as writing every key out on each job — the
+# `defaults:` block and `include:` fragments are purely a convenience. The two
+# jobs become workflow ids `site-feeds-0` and `site-feeds-1`. See
+# docs/WORKFLOWS.md ("Defaults and reusable fragments").
+#
+# Fragments live in ./fragments (a subdirectory) so the startup scan — which only
+# looks at top-level *.yaml files — does not try to load them as standalone
+# workflows.
+
+defaults:
+  source:
+    kind: api
+    config:
+      method: GET
+      json_path: items
+      headers:
+        User-Agent: "ujin-example"
+  transforms:
+    - kind: dedupe
+      config: { key: id }
+  sinks:
+    - include: fragments/webhook-sink.yaml   # shared output, defined once
+    - kind: sqlite                            # also record change events durably
+  schedule:
+    include: fragments/adaptive-hourly.yaml
+
+jobs:
+  - name: news
+    source:
+      config:
+        url: "https://feeds.example.com/news?rows=50"
+  - name: jobs
+    source:
+      config:
+        url: "https://feeds.example.com/jobs?rows=50"
+    schedule:                # per-job override: poll this feed more often
+      include: fragments/adaptive-hourly.yaml
+      base: 600
