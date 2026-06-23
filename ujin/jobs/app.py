@@ -45,6 +45,11 @@ except ModuleNotFoundError:  # pragma: no cover - jobs extra missing
 
 log = logging.getLogger("ujin.jobs.app")
 
+#: Env var holding a path to a single INGEST-PLAN file (YAML/JSON) declaring many
+#: jobs at once (mountable as a volume). Mirrors ``UJIN_MARKETPLACE_PROFILES``; the
+#: ``jobs-serve --plan PATH`` flag overrides it. Unset -> no plan is loaded.
+INGEST_PLAN_ENV = "UJIN_INGEST_PLAN"
+
 # ``${VAR}`` / ``${VAR:-default}`` references in a workflow/job file, expanded
 # against the environment at load time. Lets a mounted file reference secrets
 # (an ingest token, a backend URL) without committing them. An unset variable
@@ -403,10 +408,128 @@ def _load_workflows_dir(path: str, failed: list | None = None) -> list:
     return specs
 
 
+# ── INGEST-PLAN: many jobs from one mountable file ─────────────────────────── #
+#
+# A plan is a single YAML/JSON file declaring MANY jobs at once — the file-driven
+# counterpart to the workflows directory when you'd rather mount one file than a
+# folder. It reuses the very same additive layers as a workflow file (``include:``/
+# ``use:`` fragments, a top-level ``defaults:`` deep-merged under each job, and
+# per-job ``matrix:``/``for_each:`` fan-out), so a plan using none of them resolves
+# to exactly the jobs of the equivalent plain list. Resolved from ``--plan`` /
+# ``$UJIN_INGEST_PLAN`` and loaded on startup alongside the positional jobs.yaml
+# preload and the workflows-dir scan. Strictly generic: no site-specific logic.
+
+
+def _plan_entries(data: Any, name: str) -> "tuple[dict, list]":
+    """Split a parsed plan into ``(defaults, entries)``; validate the top shape.
+
+    A plan is either a top-level **list** of job mappings, or a **mapping** with a
+    ``jobs:`` list plus an optional ``defaults:`` mapping. An empty file is treated
+    as zero jobs. Anything else (a bare scalar, a mapping without ``jobs:``, a
+    non-list ``jobs:``/``defaults:``) raises ``ValueError`` naming *name* so the
+    caller can report it instead of crashing startup.
+    """
+    if data is None:
+        return {}, []
+    if isinstance(data, list):
+        return {}, data
+    if isinstance(data, dict):
+        defaults = data.get("defaults") or {}
+        if defaults and not isinstance(defaults, dict):
+            raise ValueError(
+                f"plan {name}: `defaults:` must be a mapping, got "
+                f"{type(defaults).__name__}"
+            )
+        if "jobs" not in data:
+            raise ValueError(
+                f"plan {name}: a mapping plan must have a `jobs:` list "
+                "(or make the file a top-level list of jobs)"
+            )
+        jobs = data["jobs"]
+        if not isinstance(jobs, list):
+            raise ValueError(
+                f"plan {name}: `jobs:` must be a list, got {type(jobs).__name__}"
+            )
+        return defaults, jobs
+    raise ValueError(
+        f"plan {name}: must be a list of jobs or a mapping with a `jobs:` list, "
+        f"got {type(data).__name__}"
+    )
+
+
+def _load_ingest_plan(path, failed: list | None = None) -> list:
+    """Load an INGEST-PLAN file into JobSpecs, deriving stable per-job ids.
+
+    Each resulting job gets a stable id (explicit ``id`` wins; otherwise
+    ``<plan-stem>-<index>``, with a per-entry ``matrix:`` suffix) so re-loading the
+    plan upserts the same jobs rather than duplicating them. The three additive
+    layers run in the same order as a workflow file: ``include:``/``use:`` fragments
+    are inlined first (relative to the plan's directory then ``$UJIN_WORKFLOWS_DIR``),
+    a top-level ``defaults:`` mapping is deep-merged *under* every job (per-job keys
+    win), then ``matrix:``/``for_each:`` fans an entry into one job per variable map.
+
+    Errors never abort startup. A **file-level** problem (missing/unreadable file,
+    invalid YAML, a shape that is neither a mapping nor a list, an unresolvable or
+    cyclic top-level include) fails the whole plan as one ``{"id", "error"}`` record.
+    A **per-job** problem (a bad ``matrix:``, a colliding id, a spec that won't
+    build) fails just that job; the remaining valid jobs still load. When *failed*
+    is given the ``ujin: ...``-style message (naming the offending file/job) is
+    appended to it for ``GET /health``.
+    """
+    import yaml
+
+    from .model import JobSpec
+
+    path = Path(path)
+    stem = path.stem
+    specs: list = []
+
+    # ── file-level parse: one failure record covers the whole plan ──
+    try:
+        data = yaml.safe_load(_expand_env(path.read_text(encoding="utf-8")))
+        data = _resolve_includes(data, path.parent)
+        defaults, entries = _plan_entries(data, path.name)
+    except (OSError, yaml.YAMLError, WorkflowIncludeError, ValueError) as exc:
+        log.warning("skipping ingest plan %s: %s", path, exc)
+        if failed is not None:
+            failed.append({"id": stem, "error": f"ujin: {exc}"})
+        return specs
+
+    # ── per-job resolution: isolate matrix/build errors so one bad job is
+    # reported while the rest still load. Ids stay stable across reloads. ──
+    seen: set = set()
+    for i, entry in enumerate(entries):
+        base = (entry.get("id") if isinstance(entry, dict) else None) or (
+            stem if len(entries) == 1 else f"{stem}-{i}"
+        )
+        try:
+            merged = _deep_merge(defaults, entry) if defaults else dict(entry)
+            # Reuse the workflow matrix helper on this single entry so `matrix:`/
+            # `for_each:` behaves byte-for-byte as it does for workflow files.
+            fanned = _expand_matrix_entries([merged], base)
+            for j, raw in enumerate(fanned):
+                d = dict(raw)
+                d.setdefault("id", base if len(fanned) == 1 else f"{base}-{j}")
+                d.setdefault("name", d["id"])
+                if d["id"] in seen:
+                    raise ValueError(
+                        f"duplicate job id {d['id']!r} (give the entry an explicit "
+                        "unique `id:`)"
+                    )
+                seen.add(d["id"])
+                specs.append(JobSpec.from_dict(d))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("skipping plan job %s in %s: %s", base, path, exc)
+            if failed is not None:
+                failed.append({"id": base, "error": f"ujin: plan job {base}: {exc}"})
+    return specs
+
+
 def create_jobs_app(
     config_path: str | None = None,
     *,
     workflows_dir: str | None = None,
+    plan_path: str | None = None,
     scrape_config: Any = None,
     run_engine: bool = True,
 ) -> Any:
@@ -425,6 +548,9 @@ def create_jobs_app(
 
     db_path = os.environ.get("UJIN_JOBS_DB", "./ujin-jobs.db")
     wf_dir = workflows_dir or os.environ.get("UJIN_WORKFLOWS_DIR", "/workflows")
+    # The `--plan` flag (passed as plan_path) overrides $UJIN_INGEST_PLAN; unset ->
+    # no plan is loaded and /health stays byte-identical to a no-plan deploy.
+    plan_src = plan_path or os.environ.get(INGEST_PLAN_ENV)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -474,6 +600,25 @@ def create_jobs_app(
                 wf_status["failed"].append({"id": spec.id, "error": str(exc)})
         app.state.workflows = wf_status
 
+        # INGEST-PLAN: a single mounted file declaring many jobs. Loaded after the
+        # workflows-dir scan; ids are stable so re-loading upserts. A bad plan (or
+        # a bad job within it) is reported, not fatal. Only attached to app.state
+        # when a plan is configured, so /health is unchanged without one.
+        if plan_src:
+            plan_status: dict[str, list] = {
+                "path": str(plan_src), "loaded": [], "failed": [],
+            }
+            for spec in _load_ingest_plan(plan_src, failed=plan_status["failed"]):
+                try:
+                    manager.create(spec)
+                    plan_status["loaded"].append(spec.id)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("plan job %s failed: %s", spec.id, exc)
+                    plan_status["failed"].append(
+                        {"id": spec.id, "error": f"ujin: {exc}"}
+                    )
+            app.state.plan = plan_status
+
         app.state.engine = engine
         app.state.store = store
         app.state.hub = hub
@@ -509,11 +654,16 @@ def create_jobs_app(
     @app.get("/health")
     def health() -> dict[str, Any]:
         m = app.state.manager
-        return {"ok": True, "status": "ok", "service": "ujin-jobs",
-                "jobs": len(m.jobs),
-                "plugins": getattr(app.state, "plugins", {"loaded": [], "failed": []}),
-                "workflows": getattr(app.state, "workflows",
-                                     {"dir": wf_dir, "loaded": [], "failed": []})}
+        out = {"ok": True, "status": "ok", "service": "ujin-jobs",
+               "jobs": len(m.jobs),
+               "plugins": getattr(app.state, "plugins", {"loaded": [], "failed": []}),
+               "workflows": getattr(app.state, "workflows",
+                                    {"dir": wf_dir, "loaded": [], "failed": []})}
+        # Only present when an INGEST-PLAN is configured -> no-plan deploys unchanged.
+        plan = getattr(app.state, "plan", None)
+        if plan is not None:
+            out["plan"] = plan
+        return out
 
     @app.get("/kinds")
     def kinds() -> dict[str, Any]:
@@ -666,9 +816,11 @@ def serve(  # pragma: no cover -- launches uvicorn; not testable without a live 
     port: int = 8902,
     config_path: str | None = None,
     workflows_dir: str | None = None,
+    plan_path: str | None = None,
 ) -> None:
     import uvicorn
 
     uvicorn.run(
-        create_jobs_app(config_path, workflows_dir=workflows_dir), host=host, port=port
+        create_jobs_app(config_path, workflows_dir=workflows_dir, plan_path=plan_path),
+        host=host, port=port,
     )

@@ -93,13 +93,14 @@ def test_main_scrape_serve_dispatch(monkeypatch):
 def test_main_jobs_serve_dispatch(monkeypatch):
     called = {}
 
-    def fake_serve(host, port, config_path, workflows_dir):
-        called.update(port=port, workflows_dir=workflows_dir)
+    def fake_serve(host, port, config_path, workflows_dir, plan_path):
+        called.update(port=port, workflows_dir=workflows_dir, plan_path=plan_path)
 
     monkeypatch.setattr("ujin.jobs.app.serve", fake_serve)
-    rc = cli.main(["jobs-serve", "--workflows", "/wf"])
+    rc = cli.main(["jobs-serve", "--workflows", "/wf", "--plan", "/p.yaml"])
     assert rc == 0
     assert called["workflows_dir"] == "/wf"
+    assert called["plan_path"] == "/p.yaml"
 
 
 def test_main_serve_dispatch(monkeypatch, tmp_path):
