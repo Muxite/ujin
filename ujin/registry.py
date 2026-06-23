@@ -279,6 +279,9 @@ def _install_builtins(reg: Registry) -> None:
             headless=cfg.get("headless", True),
             seed=cfg.get("seed"),
             with_description=cfg.get("with_description", False),
+            detail_cache=cfg.get("detail_cache", False),
+            detail_cache_path=cfg.get("detail_cache_path"),
+            detail_cache_ttl_secs=cfg.get("detail_cache_ttl_secs", 7 * 24 * 3600),
             key=cfg.get("key", "marketplace_search"),
         )
 

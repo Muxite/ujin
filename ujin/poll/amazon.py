@@ -69,6 +69,7 @@ class AmazonSearchPollable:
         wait_selector: str | None = None,
         with_description: bool = False,
         desc_selectors: dict | None = None,
+        skip_detail_ids: set | None = None,
     ) -> None:
         self.term = term
         self.domain = domain
@@ -85,6 +86,10 @@ class AmazonSearchPollable:
         self.wait_selector = wait_selector or "div[data-component-type='s-search-result']"
         self.with_description = with_description
         self.desc_selectors = desc_selectors or None
+        # source_ids whose detail page we've fetched recently — skip re-fetching (cache hit).
+        # The card-level fields (title/image/price) are still emitted so last_seen_at stays
+        # fresh; only the expensive per-item detail fetch is short-circuited.
+        self.skip_detail_ids = skip_detail_ids or set()
         self.key = key or f"{source}:{term}"
 
     async def _fetch_page(self, url: str) -> str:  # pragma: no cover (network I/O)
@@ -111,6 +116,10 @@ class AmazonSearchPollable:
 
         async def one(p):
             if not getattr(p, "url", None):
+                return
+            # Detail-page cache hit: this source_id was enriched recently, so skip the
+            # (slow, block-prone) per-item fetch and keep the card-level fields.
+            if getattr(p, "source_id", None) and p.source_id in self.skip_detail_ids:
                 return
             html = await self._fetch_page(p.url)
             if not html:

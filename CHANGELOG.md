@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added (generic marketplace engine)
+- Absorbed the generic engine improvements from the marketplace development line, keeping
+  them site-agnostic: browser fingerprint rotation / stealth-context hardening
+  (`fetch/browser.py`), JSON-LD/schema.org `Product` detail extraction (`extract/product.py`),
+  href-pattern `source_id` recovery + detail scraping (`poll/amazon.py`), and an opt-in
+  per-host **detail-page cache** (`_SeenStore`; `marketplace_search` config `detail_cache`,
+  `detail_cache_path`, `detail_cache_ttl_secs`) that skips re-fetching detail for source_ids
+  seen within a TTL. No site profiles are baked in — see below.
+
 ### Changed (breaking for marketplace consumers)
 - **Marketplace profiles are now externally supplied, not built in.** `ujin.poll.marketplace`
   keeps the generic engine (`MarketplaceSearchPollable`) but no longer ships the hardcoded

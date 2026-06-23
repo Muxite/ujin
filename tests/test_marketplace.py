@@ -120,7 +120,7 @@ async def test_amazon_search_poll_stamps_category_without_network(monkeypatch):
     async def fake_render(self, url):
         return ("<html>ok</html>", "http")
 
-    def fake_extract(html, url, source="amazon", selectors=None):
+    def fake_extract(html, url, source="amazon", selectors=None, **kwargs):
         return [prod.Product(source=source, source_id="A1", title="Thing",
                              image_url="http://x/i.jpg", price_cents=999, currency="USD",
                              category=None, url=None)]
@@ -141,3 +141,61 @@ def test_reference_profiles_shapes():
     assert p["walmart"]["selectors"]["id_attr"] == "data-item-id"
     for prof in p.values():
         assert "domain" in prof and "search_url" in prof
+
+
+# ── Detail-page cache (_SeenStore) — generic engine, profile-agnostic ──────────
+def test_seen_store_roundtrip_and_ttl(tmp_path):
+    from ujin.poll.marketplace import _SeenStore
+
+    clock = [1000.0]
+    path = str(tmp_path / "seen.json")
+    store = _SeenStore(path, ttl_secs=100, clock=lambda: clock[0])
+    store.mark(["a", "b", None])                            # None is ignored
+    store.save()
+
+    clock[0] = 1050.0
+    again = _SeenStore(path, ttl_secs=100, clock=lambda: clock[0])
+    assert again.fresh_ids() == {"a", "b"}
+
+    clock[0] = 1200.0
+    expired = _SeenStore(path, ttl_secs=100, clock=lambda: clock[0])
+    assert expired.fresh_ids() == set()
+    assert expired.seen == {}                               # expired entries pruned
+
+
+def test_detail_cache_off_by_default():
+    src = MarketplaceSearchPollable(profile="newegg", profiles_path=str(EXAMPLE))
+    assert src._seen is None
+
+
+async def test_poll_passes_fresh_ids_to_children_and_marks_seen(monkeypatch, tmp_path):
+    """poll() feeds cached ids into the child's skip set, and records new ids after the sweep."""
+    from ujin.poll import amazon as amz
+    from ujin.poll.base import PollResult
+
+    captured_skip: list = []
+
+    async def fake_child_poll(self, prev):
+        captured_skip.append(set(self.skip_detail_ids))
+        return PollResult(ok=True, changed=True, payload=[
+            {"source": self.source, "source_id": "new-1", "title": "x", "price_cents": 100},
+        ])
+
+    monkeypatch.setattr(amz.AmazonSearchPollable, "poll", fake_child_poll)
+    path = str(tmp_path / "seen.json")
+    src = MarketplaceSearchPollable(
+        profile="newegg", profiles_path=str(EXAMPLE), terms_per_poll=1, seed=1,
+        detail_cache=True, detail_cache_path=path,
+    )
+    src._seen.mark(["already-seen"])                        # pre-seed the cache
+    res = await src.poll(None)
+    assert res.ok
+    assert captured_skip and "already-seen" in captured_skip[0]
+    reloaded = type(src._seen)(path, ttl_secs=src._seen.ttl_secs)
+    assert "new-1" in reloaded.fresh_ids()
+
+
+def test_child_skip_detail_ids_defaults_to_empty_set():
+    src = MarketplaceSearchPollable(profile="newegg", profiles_path=str(EXAMPLE), seed=1)
+    child = src._child("ddr5 ram", "RAM")                   # no skip set passed
+    assert child.skip_detail_ids == set()

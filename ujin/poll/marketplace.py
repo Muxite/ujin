@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import random as _random_mod
+import time
 from pathlib import Path
 
 from ujin.poll.amazon import AmazonSearchPollable
@@ -78,6 +79,59 @@ def load_profiles(
     return profiles
 
 
+class _SeenStore:
+    """Persistent ``source_id -> last-seen epoch`` map for detail-page caching.
+
+    Mirrors the harvest-store pattern (one atomic JSON file on the durable /data volume).
+    A ``source_id`` "seen" within ``ttl_secs`` is a cache hit: its detail page was enriched
+    recently, so the next sweep keeps the card-level fields and skips the slow, block-prone
+    per-item detail fetch. Entries older than the TTL are pruned on load so the file can't
+    grow without bound, and stale prices/details still get re-fetched eventually.
+    """
+
+    def __init__(self, path: str, *, ttl_secs: float = 7 * 24 * 3600, clock=None) -> None:
+        self.path = path
+        self.ttl_secs = float(ttl_secs)
+        self._clock = clock or time.time
+        self.seen: dict[str, float] = {}
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                data = json.load(f)
+            now = self._clock()
+            self.seen = {
+                str(k): float(v) for k, v in dict(data.get("seen", {})).items()
+                if now - float(v) < self.ttl_secs        # prune expired on load
+            }
+        except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError, ValueError):
+            pass  # first run / unreadable -> start empty
+
+    def fresh_ids(self) -> set[str]:
+        """source_ids still within the TTL — their detail page need not be re-fetched."""
+        now = self._clock()
+        return {sid for sid, ts in self.seen.items() if now - ts < self.ttl_secs}
+
+    def mark(self, source_ids) -> None:
+        now = self._clock()
+        for sid in source_ids:
+            if sid:
+                self.seen[str(sid)] = now
+
+    def save(self) -> None:
+        try:
+            parent = os.path.dirname(self.path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            tmp = f"{self.path}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"seen": self.seen}, f)
+            os.replace(tmp, self.path)  # atomic
+        except OSError as exc:  # noqa: BLE001
+            log.warning("seen store save failed (%s): %s", self.path, exc)
+
+
 class MarketplaceSearchPollable:
     """Scrape a sample of a site profile's keyterms per poll -> combined product list.
 
@@ -101,6 +155,9 @@ class MarketplaceSearchPollable:
         headless: bool = True,
         seed: int | None = None,
         with_description: bool = False,
+        detail_cache: bool = False,
+        detail_cache_path: str | None = None,
+        detail_cache_ttl_secs: float = 7 * 24 * 3600,
         key: str | None = None,
     ) -> None:
         available = load_profiles(inline=profiles, path=profiles_path)
@@ -122,8 +179,19 @@ class MarketplaceSearchPollable:
         self.with_description = with_description
         self.key = key or f"marketplace:{self.profile_name}"
         self._rng = _random_mod.Random(seed)
+        # Detail-page cache: skip re-fetching detail for source_ids seen within the TTL.
+        # Only meaningful when with_description is on (that's what triggers the per-item fetch).
+        self.detail_cache = bool(detail_cache)
+        self._seen = (
+            _SeenStore(
+                detail_cache_path or f"/data/{self.profile_name}_seen.json",
+                ttl_secs=detail_cache_ttl_secs,
+            )
+            if self.detail_cache else None
+        )
 
-    def _child(self, term: str, category: str | None) -> AmazonSearchPollable:
+    def _child(self, term: str, category: str | None,
+               skip_detail_ids: set | None = None) -> AmazonSearchPollable:
         return AmazonSearchPollable(
             term,
             domain=self.profile["domain"],
@@ -139,6 +207,7 @@ class MarketplaceSearchPollable:
             wait_selector=self.profile.get("wait_selector"),
             with_description=self.with_description,
             desc_selectors=self.profile.get("desc_selectors"),
+            skip_detail_ids=skip_detail_ids,
         )
 
     def _sample(self) -> list[tuple[str, str]]:
@@ -150,8 +219,15 @@ class MarketplaceSearchPollable:
 
     async def poll(self, prev: PollResult | None) -> PollResult:
         pairs = self._sample()
+        # Detail-page cache: ids enriched within the TTL skip the per-item detail fetch.
+        skip_ids = self._seen.fresh_ids() if self._seen is not None else None
+        if skip_ids:
+            log.info("marketplace[%s] detail-cache: %d ids fresh (skip detail fetch)",
+                     self.profile_name, len(skip_ids))
         log.info("marketplace[%s] sweep: %s", self.profile_name, [t for t, _ in pairs])
-        children = [self._child(term, cat) for term, cat in pairs]
+        # Term/site fan-out runs concurrently (asyncio.gather) — one slow/blocked site
+        # never serializes the rest of the sweep.
+        children = [self._child(term, cat, skip_detail_ids=skip_ids) for term, cat in pairs]
         results = await asyncio.gather(*(c.poll(None) for c in children), return_exceptions=True)
         combined: list[dict] = []
         seen: set[str] = set()
@@ -165,6 +241,11 @@ class MarketplaceSearchPollable:
                 if sid:
                     seen.add(sid)
                 combined.append(item)
+        # Record the ids we surfaced so the next sweep can skip their detail fetch, then
+        # persist (atomic JSON on the durable volume, mirroring the harvest store).
+        if self._seen is not None:
+            self._seen.mark(seen)
+            self._seen.save()
         return PollResult(
             ok=True,
             changed=decide_changed(fingerprint(combined), prev),
