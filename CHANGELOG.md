@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.20.0 — 2026-06-23
+
+### Added
+- **INGEST-PLAN — many jobs from one mounted file.** `jobs-serve` can now load a
+  single YAML/JSON **plan** file that declares many jobs at once: a top-level list
+  of jobs, or a mapping with a `jobs:` list plus an optional top-level `defaults:`
+  block deep-merged under every job (per-job keys win). It reuses the same additive
+  layers as workflow files — `include:`/`use:` fragments (resolved relative to the
+  plan's directory then `$UJIN_WORKFLOWS_DIR`) and per-job `matrix:`/`for_each:`
+  fan-out — and derives a **stable id** per job (explicit `id` wins; otherwise
+  `<plan-stem>-<index>` with a per-entry matrix suffix), so re-loading the plan
+  upserts rather than duplicates. Resolve the plan from the new `UJIN_INGEST_PLAN`
+  env var or the new `jobs-serve --plan PATH` flag (the flag wins); it loads on
+  startup alongside the positional `jobs.yaml` preload and the workflows-dir scan.
+  A malformed plan (non-mapping/non-list, bad matrix, colliding ids, unreadable or
+  cyclic include) yields an actionable `ujin: …` message naming the offending
+  file/job and is reported in the `plan` block of `GET /health` (present only when
+  a plan is configured) without aborting startup — valid jobs still load. Strictly
+  additive: a plan using none of `defaults`/`include`/`matrix` loads to exactly the
+  jobs of the equivalent plain list. New example `examples/ingest-plan.yaml`; see
+  `docs/INGEST_PLAN.md`.
+- **Tests: full offline coverage for `MultiPollable`, `AmazonSearchPollable`, and `MarketplaceSearchPollable`.** Added `tests/test_poll_multi.py` covering all `MultiPollable` branches (list/non-list/None payloads, concurrent polling, failing children, `changed` detection) and new coverage tests in `tests/test_amazon_coverage.py` and `tests/test_marketplace.py` closing every remaining uncovered branch in `ujin/poll/amazon.py` and `ujin/poll/marketplace.py`; all three modules now reach 100% line and branch coverage (total project coverage 95.51%, up from 94.82%).
+
 ## 0.19.0 — 2026-06-23
 
 ### Added

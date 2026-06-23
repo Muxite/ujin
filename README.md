@@ -135,6 +135,13 @@ transform pipelines; or fan one template into many with a `matrix:`/`for_each:` 
 `schedule`, with a stable per-entry id so reloads upsert rather than duplicate. See
 [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
+Prefer one file over a directory? Mount a single **INGEST-PLAN** declaring many
+jobs at once — a top-level list of jobs, or a mapping with `jobs:` plus a shared
+`defaults:` block — and point ujin at it with `--plan` or `$UJIN_INGEST_PLAN`. It
+reuses the same `defaults:`/`include:`/`matrix:` layers and stable ids, so
+re-loading upserts; a malformed plan or job is reported in `GET /health` without
+aborting startup. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
+
 Need something the built-ins don't cover? Drop a Python file into the mounted
 `/plugins` volume and it becomes a `plugin:<name>` source/transform/sink — see
 [docs/PLUGINS.md](docs/PLUGINS.md). Sibling projects can also extend ujin in-tree
@@ -321,7 +328,7 @@ Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [ADAPTIVE](docs/ADAPTIVE.md) ·
 [BACKENDS](docs/BACKENDS.md) (aiohttp vs obscura vs playwright vs selenium) ·
 [PERFORMANCE](docs/PERFORMANCE.md) · [CONSUMERS](docs/CONSUMERS.md)
 (downstream submodule contracts) · [API](docs/API.md) · [JOBS](docs/JOBS.md) ·
-[WORKFLOWS](docs/WORKFLOWS.md) · [PLUGINS](docs/PLUGINS.md) ·
+[WORKFLOWS](docs/WORKFLOWS.md) · [INGEST_PLAN](docs/INGEST_PLAN.md) (many jobs from one mounted file) · [PLUGINS](docs/PLUGINS.md) ·
 [LIST_TRANSFORMS](docs/LIST_TRANSFORMS.md) (filter/flatten/sort/limit/rename/aggregate/unique/fill/csv) ·
 [MARKETPLACE](docs/MARKETPLACE.md) (generic engine; site profiles supplied externally) ·
 [BROWSER](docs/BROWSER.md) · [MCP](docs/MCP.md) · [CHANGELOG](CHANGELOG.md)

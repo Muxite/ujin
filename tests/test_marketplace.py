@@ -199,3 +199,109 @@ def test_child_skip_detail_ids_defaults_to_empty_set():
     src = MarketplaceSearchPollable(profile="newegg", profiles_path=str(EXAMPLE), seed=1)
     child = src._child("ddr5 ram", "RAM")                   # no skip set passed
     assert child.skip_detail_ids == set()
+
+
+# ── _load_file() coverage gaps ─────────────────────────────────────────────────
+
+def test_load_file_not_found(tmp_path):
+    """Non-existent path raises FileNotFoundError (line 53)."""
+    from ujin.poll.marketplace import _load_file
+    with pytest.raises(FileNotFoundError, match="not found"):
+        _load_file(tmp_path / "no_such_file.yaml")
+
+
+def test_load_file_json_branch(tmp_path):
+    """JSON file is parsed via json.loads (line 56), then returned (line 62)."""
+    from ujin.poll.marketplace import _load_file
+    p = tmp_path / "profiles.json"
+    p.write_text('{"shop": {"domain": "x.com", "search_url": "http://{domain}?q={query}"}}')
+    data = _load_file(p)
+    assert "shop" in data
+    assert data["shop"]["domain"] == "x.com"
+
+
+def test_load_file_non_dict_raises(tmp_path):
+    """File whose root is not a mapping raises ValueError (line 61)."""
+    from ujin.poll.marketplace import _load_file
+    p = tmp_path / "bad.json"
+    p.write_text("[1, 2, 3]")
+    with pytest.raises(ValueError, match="must be a mapping"):
+        _load_file(p)
+
+
+# ── _SeenStore.save() coverage gaps ───────────────────────────────────────────
+
+def test_seen_store_save_no_parent_dir(monkeypatch, tmp_path):
+    """path with no directory component skips makedirs (125->127)."""
+    from ujin.poll.marketplace import _SeenStore
+    monkeypatch.chdir(tmp_path)
+    store = _SeenStore("bare_seen.json")
+    store.mark(["id-bare"])
+    store.save()
+    assert (tmp_path / "bare_seen.json").exists()
+
+
+def test_seen_store_save_oserror_swallowed(monkeypatch, tmp_path):
+    """os.replace raises OSError -> error is logged, not re-raised (131-132)."""
+    import ujin.poll.marketplace as mkt_mod
+    from ujin.poll.marketplace import _SeenStore
+
+    path = str(tmp_path / "seen.json")
+    store = _SeenStore(path)
+    store.mark(["id1"])
+
+    def _raise(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(mkt_mod.os, "replace", _raise)
+    store.save()   # must not raise
+
+
+# ── _sample() empty categories ────────────────────────────────────────────────
+
+_INLINE_EMPTY = {
+    "empty": {
+        "domain": "empty.example",
+        "search_url": "https://{domain}/s?q={query}",
+        "engine": "http",
+        "keyterms": {},
+    }
+}
+
+
+def test_sample_empty_categories_returns_empty():
+    """_sample() returns [] immediately when no terms exist (line 216)."""
+    src = MarketplaceSearchPollable(profile="empty", profiles=_INLINE_EMPTY, seed=1)
+    assert src._sample() == []
+
+
+# ── poll() skips exceptions and items without source_id ───────────────────────
+
+async def test_poll_skips_exception_child(monkeypatch):
+    """Child raising an exception is skipped; poll still returns ok (line 236)."""
+    from ujin.poll import amazon as amz
+
+    async def raises(self, prev):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(amz.AmazonSearchPollable, "poll", raises)
+    src = MarketplaceSearchPollable(profile="shop", profiles=INLINE, seed=1, terms_per_poll=1)
+    r = await src.poll(None)
+    assert r.ok is True
+    assert r.payload == []
+
+
+async def test_poll_item_without_source_id_included(monkeypatch):
+    """Items with no source_id skip seen.add but are still appended (241->243)."""
+    from ujin.poll import amazon as amz
+    from ujin.poll.base import PollResult as _PR
+
+    async def fake_poll(self, prev):
+        return _PR(ok=True, changed=True, payload=[
+            {"source_id": None, "title": "anonymous-item"},
+        ])
+
+    monkeypatch.setattr(amz.AmazonSearchPollable, "poll", fake_poll)
+    src = MarketplaceSearchPollable(profile="shop", profiles=INLINE, seed=1, terms_per_poll=1)
+    r = await src.poll(None)
+    assert any(it["title"] == "anonymous-item" for it in r.payload)

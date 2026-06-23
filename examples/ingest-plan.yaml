@@ -1,0 +1,56 @@
+# Generic INGEST-PLAN — many jobs declared in ONE mountable file.
+#
+# Point ujin at it with either of:
+#   UJIN_INGEST_PLAN=/path/ingest-plan.yaml ujin jobs-serve
+#   ujin jobs-serve --plan /path/ingest-plan.yaml          # --plan wins over the env var
+#
+# It's the single-file counterpart to a /workflows directory: same job shape
+# (source -> transforms -> sinks -> schedule) and the same three additive layers,
+# shown together here:
+#   * a top-level `defaults:` block, deep-merged UNDER every job (per-job keys win)
+#   * `include:` fragments, shared across jobs (resolved relative to THIS file's
+#     dir, then $UJIN_WORKFLOWS_DIR)
+#   * a per-job `matrix:` fan-out — one job per variable map
+#
+# This file loads to four jobs: `crossref`, `feed-tech`, `feed-science`,
+# `feed-business`. Ids are stable, so re-loading the plan upserts rather than
+# duplicates. A plan that used none of the layers below would load to exactly the
+# jobs of the equivalent plain `jobs:` list. See docs/INGEST_PLAN.md.
+
+defaults:
+  source:
+    kind: api
+    config:
+      method: GET
+      json_path: items
+  transforms:
+    - kind: dedupe
+      config: { key: id }
+  sinks:
+    - include: workflows/fragments/webhook-sink.yaml   # shared output, defined once
+    - kind: sqlite                                      # also record events durably
+  schedule:
+    include: workflows/fragments/adaptive-hourly.yaml
+
+jobs:
+  # A plain job — overrides only its source URL; everything else from defaults.
+  - id: crossref
+    source:
+      config:
+        url: "https://api.crossref.org/works?rows=50"
+
+  # A matrix job — fans into one job per feed (ids `feed-tech` / `feed-science` /
+  # `feed-business`), each with `{{ slug }}` substituted into the URL and a
+  # per-feed jsonl sink. The defaults' source kind/method/json_path are inherited.
+  - id: "feed-{{ slug }}"
+    matrix:
+      - { slug: tech }
+      - { slug: science }
+      - { slug: business }
+    source:
+      config:
+        url: "https://feeds.example.com/{{ slug }}?rows=50"
+    sinks:
+      - include: workflows/fragments/webhook-sink.yaml
+      - kind: jsonl
+        config: { path: "/data/{{ slug }}.jsonl" }
