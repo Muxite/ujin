@@ -11,6 +11,9 @@
   `detail_cache_path`, `detail_cache_ttl_secs`) that skips re-fetching detail for source_ids
   seen within a TTL. No site profiles are baked in — see below.
 
+### docs(sync/marketplace)
+- **docs(sync/marketplace)**: Audited README and all `docs/` pages against the shipped marketplace externalization surface. `docs/JOBS.md` was missing the `marketplace_search` source kind entirely — added row with full config key reference and a "no profiles built in" callout. `docs/MARKETPLACE.md` was missing a config reference for job-source parameters (`terms_per_poll`, `max_results`, `engine`, `with_description`, `detail_cache`, `detail_cache_path`, `detail_cache_ttl_secs`) documented only in CHANGELOG — added "Full config reference" table. README and `docs/MARKETPLACE.md` already correctly described profile externalization; no other docs surfaces had drift. No production code changed; test suite unaffected (94.63% coverage, floor 90%).
+
 ### Changed (breaking for marketplace consumers)
 - **Marketplace profiles are now externally supplied, not built in.** `ujin.poll.marketplace`
   keeps the generic engine (`MarketplaceSearchPollable`) but no longer ships the hardcoded
