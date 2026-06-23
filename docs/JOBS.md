@@ -47,6 +47,7 @@ in-memory `POST /targets` left open.
 | `command` | `argv[]` | fingerprints stdout |
 | `scrape` | `url`, `mode?`, `force_refresh?` | full HTTP→obscura→sitemap→RSS chain + extraction |
 | `browser` | `url`, `engine?`, `actions[]`, `extract?` (`links`\|`article`\|`structured`\|`raw`), `results_selector?`, `headless?` | drive a real browser through an interaction recipe (`load_more`, scroll, click), then extract — see [BROWSER.md](BROWSER.md) |
+| `marketplace_search` | `profile`, `profiles?`, `profiles_path?`, `categories?`, `terms_per_poll?`, `max_results?`, `engine?` (`auto`\|`http`\|`browser`), `proxy?`, `timeout_secs?`, `headless?`, `with_description?`, `detail_cache?`, `detail_cache_path?`, `detail_cache_ttl_secs?` | sweep a site profile's keyterm bank per poll; **no profiles are built in** — supply via `profiles` inline, `profiles_path`, or `$UJIN_MARKETPLACE_PROFILES` — see [MARKETPLACE.md](MARKETPLACE.md) |
 | `plugin:<name>` | (plugin-defined) | a custom source — see PLUGINS.md |
 
 ### Transforms (`kind`) — run in order; one returning nothing drops the event
