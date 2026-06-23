@@ -71,12 +71,13 @@ ujin jobs-serve --workflows ./examples/workflows      # or set UJIN_WORKFLOWS_DI
   "workflows": { "dir": "/workflows", "loaded": ["crossref-papers", "example-page"], "failed": [] } }
 ```
 
-## Defaults and reusable fragments
+## Defaults, fragments, and matrix fan-out
 
-When you run **many similar workflows**, two optional, purely-additive conveniences
-keep the files DRY. A workflow that uses neither loads byte-for-byte as before, so
-existing single-file workflows, `{jobs: [...]}`/list forms, filename-stem ids, and
-`${VAR}`/`${VAR:-default}` substitution are unchanged.
+When you run **many similar workflows**, three optional, purely-additive conveniences
+keep the files DRY: a `defaults:` block, `include:`/`use:` fragments, and a
+`matrix:`/`for_each:` fan-out (they compose in that order). A workflow that uses none
+loads byte-for-byte as before, so existing single-file workflows, `{jobs: [...]}`/list
+forms, filename-stem ids, and `${VAR}`/`${VAR:-default}` substitution are unchanged.
 
 ### `defaults:` — shared keys, deep-merged into each job
 
@@ -136,6 +137,56 @@ schedule:
 See `examples/workflows/site-feeds.yaml` (+ `examples/workflows/fragments/`) for a
 runnable end-to-end example.
 
+### `matrix:` / `for_each:` — fan one template into many
+
+A workflow mapping (or a `jobs:` list entry) may carry a **`matrix:`** key — alias
+**`for_each:`** — a list of variable maps. ujin loads it as **one workflow per
+entry**, substituting each entry's variables into every `{{ var }}` placeholder
+across the `source`, `transforms`, `sinks`, and `schedule`. One definition, N
+saved searches:
+
+```yaml
+# /workflows/marketplace-search.yaml
+matrix:
+  - { slug: laptop,  query: "gaming laptop", floor: 500 }
+  - { slug: gpu,     query: "rtx 4090",      floor: 800 }
+  - { slug: monitor, query: "4k monitor",    floor: 200 }
+
+id: "search-{{ slug }}"          # -> search-laptop, search-gpu, search-monitor
+source:
+  kind: api
+  config:
+    url: "https://api.example.com/search?q={{ query }}&min_price={{ floor }}"
+    json_path: results
+sinks:
+  - kind: sqlite
+  - kind: jsonl
+    config: { path: "/data/{{ slug }}.jsonl" }
+schedule:
+  mode: adaptive
+  base: 1800
+```
+
+- **Substitution.** `{{ var }}` (whitespace-tolerant) is replaced from the entry's
+  map. A string that is *exactly* one placeholder keeps the variable's native type
+  (`min_price: "{{ floor }}"` → the integer `500`, not `"500"`); a placeholder
+  embedded in a larger string interpolates `str(value)`. An unknown variable is
+  left verbatim (a stray `{{ x }}` is not fatal). The `${VAR}` / `${VAR:-default}`
+  env syntax is unrelated and still expands first, at file-read time.
+- **Stable, distinct ids.** Give `id:` a template that references a per-entry
+  variable (`id: search-{{ slug }}`) so each job gets a deterministic id and
+  **reloading the file upserts the same N jobs** instead of duplicating them.
+  Omit `id:` and ids fall back to `<stem>-<index>` (`marketplace-search-0`, `-1`,
+  …). Ids that collide (e.g. a static `id:` with no varying variable) are rejected
+  and the file lands in the `failed` list.
+- **Composes with `defaults:` / includes.** Matrix expansion runs *after* a
+  top-level `defaults:` block and any `include:`/`use:` fragments are resolved, so
+  variables substitute into the already-merged result.
+- **Additive.** A file with no `matrix:`/`for_each:` key loads to exactly the same
+  workflow(s) as before — this feature is opt-in per file.
+
+See `examples/workflows/marketplace-search.yaml` for a runnable matrix template.
+
 ## Collect — the container does the job
 
 Each workflow is driven by the same [adaptive engine](../README.md#how-it-works)
@@ -180,6 +231,6 @@ the registry. Two ways to extend the menu:
 
 `examples/workflows/` ships runnable workflow files:
 `crossref-papers.yaml` (adaptive API poll), `example-page.yaml` (a minimal HTTP
-poll), and `site-feeds.yaml` (multiple jobs sharing a `defaults:` block and
-reusable `fragments/`). Copy them into your mounted `./workflows` directory to try
-them.
+poll), `site-feeds.yaml` (multiple jobs sharing a `defaults:` block and reusable
+`fragments/`), and `marketplace-search.yaml` (a `matrix:` template fanned into three
+saved searches). Copy them into your mounted `./workflows` directory to try them.

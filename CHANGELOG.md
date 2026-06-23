@@ -16,6 +16,20 @@
   so fragments kept in a subdirectory (e.g. `fragments/`) are never loaded as
   standalone workflows. New example `examples/workflows/site-feeds.yaml`
   (+ `examples/workflows/fragments/`); see `docs/WORKFLOWS.md`.
+- **`matrix:`/`for_each:` workflow templates** — a workflow file (or a `jobs:` list
+  entry) may carry a `matrix:` key (alias `for_each:`), a list of variable maps, and
+  ujin loads it as **one JobSpec per entry**, substituting each entry's variables into
+  every `{{ var }}` placeholder across the source, transforms, sinks, and schedule. A
+  whole-value placeholder keeps the variable's native type (`min_price: "{{ floor }}"` →
+  the integer `500`); an embedded one interpolates `str(value)`; an unknown variable is
+  left verbatim. Each generated job gets a **stable, distinct id/name** — an explicit
+  `id:` template (e.g. `id: feed-{{ slug }}`) is honored after substitution, otherwise
+  `<stem>-<index>` — so reloading the same template upserts the same N jobs instead of
+  duplicating them (colliding ids are rejected). Expansion is a clearly-separated step
+  that runs after defaults/include resolution and composes with it (vars substitute into
+  the merged result). Strictly additive: a file with no matrix key loads to exactly the
+  same JobSpec set as before. Example at `examples/workflows/marketplace-search.yaml`;
+  documented in `docs/WORKFLOWS.md` and `README.md`.
 
 ### Added (generic marketplace engine)
 - Absorbed the generic engine improvements from the marketplace development line, keeping
