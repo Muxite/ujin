@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **test(hardening): hermetic coverage for robots, scrape/build, extract/images, extract/contacts.** Added 22 offline tests in `tests/test_hardening.py` closing every uncovered branch in the four near-floor modules: `ujin/robots.py` (same-agent multi-group parse, unknown directive key, empty `Allow:` pattern, `re.error` in `_match`, and all three `_http_fetcher` paths via injected aiohttp fakes), `ujin/scrape/build.py` (`learn_strategy=True` StrategyFeedback construction and both strategy-close paths), `ujin/extract/images.py` (selectolax import failure, per-node inner except, outer-loop except, urljoin exception fallback, and srcset leading-comma edge case), and `ujin/extract/contacts.py` (empty/missing href, empty mailto and tel addresses, urlparse exception in `_is_social_href`, urljoin exception in `_resolve`, and parser.feed exception swallow). All four modules reach 100% line and branch coverage; total suite coverage rises to 96.67%.
+
 ## 0.26.0 — 2026-06-24
 
 - **docs(sync): fix stale `plan validate --json` schema examples; guard `examples/matrix-from-file.yaml`.** The `--json` output of `ujin plan validate` includes `warnings` and `strict` fields that were absent from the JSON examples in `docs/INGEST_PLAN.md` (normal-case and missing-path cases) and `docs/WORKFLOWS.md`; corrected both to match actual CLI output. Added five offline tests to `tests/test_examples_plan_validate.py` covering the new 0.25 `examples/matrix-from-file.yaml` (file-backed matrix plan) — validate, render, `--json` forms, and expected ids — so example-file drift is caught at CI time.
