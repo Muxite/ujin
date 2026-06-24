@@ -17,6 +17,7 @@ Endpoints::
   POST   /jobs/{id}/resume
   GET    /jobs/{id}/runs        recent run history
   GET    /jobs/{id}/events      recent persisted events (sqlite sink)
+  POST   /plan/reload           re-read the configured INGEST-PLAN and upsert jobs
   WS     /jobs/events           live stream of change events
 
 Needs the ``jobs`` extra (fastapi, uvicorn, websockets, pydantic, scrape stack).
@@ -28,6 +29,7 @@ import difflib
 import logging
 import os
 import re
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -51,23 +53,44 @@ log = logging.getLogger("ujin.jobs.app")
 #: ``jobs-serve --plan PATH`` flag overrides it. Unset -> no plan is loaded.
 INGEST_PLAN_ENV = "UJIN_INGEST_PLAN"
 
-# ``${VAR}`` / ``${VAR:-default}`` references in a workflow/job file, expanded
-# against the environment at load time. Lets a mounted file reference secrets
-# (an ingest token, a backend URL) without committing them. An unset variable
-# with no default expands to "" (and logs once), mirroring shell semantics.
-_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+# ``${VAR}`` / ``${VAR:-default}`` / ``${VAR:?message}`` references in a
+# workflow/job file, expanded against the environment at load time. Lets a
+# mounted file reference secrets (an ingest token, a backend URL) without
+# committing them. An unset variable with no default expands to "" (and logs
+# once), mirroring shell semantics. The ``:?`` form raises an error when the
+# variable is unset or empty, so a missing required secret is caught early.
+#
+# Regex groups: 1=name, 2=operator (``:-`` or ``:?``), 3=operand (may be "").
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:[-?])([^}]*))?\}")
+
+
+class EnvVarRequiredError(ValueError):
+    """A ``${VAR:?message}`` env var is unset or empty at load time.
+
+    Raised during expansion so the offending plan/workflow lands in the
+    ``failed`` list (``GET /health``) with an actionable message, rather than
+    expanding silently or crashing startup for every other job.
+    """
 
 
 def _expand_env(text: str) -> str:
-    """Expand ``${VAR}`` / ``${VAR:-default}`` in *text* from os.environ."""
+    """Expand ``${VAR}`` / ``${VAR:-default}`` / ``${VAR:?message}`` in *text*."""
     def _sub(m: "re.Match[str]") -> str:
-        name, default = m.group(1), m.group(2)
+        name, op, operand = m.group(1), m.group(2), m.group(3)
         val = os.environ.get(name)
+        if op == ":-":
+            return val if val is not None else operand
+        if op == ":?":
+            if not val:  # unset or empty
+                detail = f" — {operand.strip()}" if operand and operand.strip() else ""
+                raise EnvVarRequiredError(
+                    f"required variable {name!r} is unset or empty{detail}"
+                )
+            return val
+        # plain ${VAR} — no operator
         if val is None:
-            if default is None:
-                log.warning("workflow env var %s unset; expanding to empty", name)
-                return ""
-            return default
+            log.warning("workflow env var %s unset; expanding to empty", name)
+            return ""
         return val
 
     return _ENV_REF.sub(_sub, text)
@@ -370,6 +393,47 @@ def _report_warnings(messages: "list[str]", warnings: "list | None") -> None:
             warnings.append(msg)
 
 
+# ── job-id selection (--only / --exclude) ──────────────────────────────────── #
+#
+# Applied AFTER full resolution (includes, defaults, matrix fan-out, ${VAR})
+# so patterns always match the final expanded ids. Strictly additive: with no
+# patterns the loader and health output are byte-for-byte unchanged.
+
+
+def _select_jobs(specs, only=None, exclude=None):
+    """Filter *specs* by fnmatch job-id patterns.
+
+    ``only``    — keep jobs whose id matches ANY pattern; applied first.
+    ``exclude`` — remove jobs whose id matches ANY exclude pattern.
+    Both ``None`` and ``[]`` mean "no filter" — the list is returned unchanged.
+    Raises ``ValueError`` (clean ``ujin: …`` message) when ``only`` is given
+    but no job id matches, so callers can exit non-zero without a traceback.
+    """
+    from fnmatch import fnmatch
+
+    if not only and not exclude:
+        return specs
+
+    def _m(job_id, patterns):
+        return any(fnmatch(job_id, p) for p in patterns)
+
+    if only:
+        selected = [s for s in specs if _m(s.id, only)]
+        if not selected:
+            pats = ", ".join(repr(p) for p in only)
+            raise ValueError(
+                f"ujin: --only {pats}: no job ids matched "
+                f"({len(specs)} job(s) resolved)"
+            )
+    else:
+        selected = list(specs)
+
+    if exclude:
+        selected = [s for s in selected if not _m(s.id, exclude)]
+
+    return selected
+
+
 def _preload_specs(path: str) -> list:
     """Parse a jobs.yaml (top-level list, or {jobs: [...]}) into JobSpecs."""
     import yaml
@@ -635,6 +699,37 @@ def _load_ingest_plan(
     return specs
 
 
+def _apply_ingest_plan(manager, plan_src, only=None, exclude=None) -> "dict[str, list]":
+    """Resolve *plan_src*, apply ``--only``/``--exclude``, upsert into *manager*.
+
+    Shared by startup and ``POST /plan/reload`` so both go through the identical
+    :func:`_load_ingest_plan` resolution (defaults/include/matrix/``${VAR}``),
+    :func:`_select_jobs` selection, and error handling. Returns the same
+    ``{"path", "loaded", "failed"}`` summary that ``GET /health`` exposes: a
+    loader/file-level or per-job problem fails only that record (with a
+    ``ujin: …`` message) while the remaining jobs upsert by their stable ids.
+    Re-applying is idempotent — same ids upsert the same jobs.
+
+    Raises ``ValueError`` (clean ``ujin: …`` message) when an ``--only`` pattern
+    matches no resolved job, so the caller decides whether that is fatal (startup
+    exits non-zero) or merely reported (reload keeps the server running).
+    """
+    plan_status: dict[str, list] = {
+        "path": str(plan_src), "loaded": [], "failed": [],
+    }
+    plan_specs = _load_ingest_plan(plan_src, failed=plan_status["failed"])
+    if only is not None or exclude is not None:
+        plan_specs = _select_jobs(plan_specs, only, exclude)
+    for spec in plan_specs:
+        try:
+            manager.create(spec)
+            plan_status["loaded"].append(spec.id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("plan job %s failed: %s", spec.id, exc)
+            plan_status["failed"].append({"id": spec.id, "error": f"ujin: {exc}"})
+    return plan_status
+
+
 def create_jobs_app(
     config_path: str | None = None,
     *,
@@ -642,6 +737,8 @@ def create_jobs_app(
     plan_path: str | None = None,
     scrape_config: Any = None,
     run_engine: bool = True,
+    only: list | None = None,
+    exclude: list | None = None,
 ) -> Any:
     try:
         from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -715,19 +812,14 @@ def create_jobs_app(
         # a bad job within it) is reported, not fatal. Only attached to app.state
         # when a plan is configured, so /health is unchanged without one.
         if plan_src:
-            plan_status: dict[str, list] = {
-                "path": str(plan_src), "loaded": [], "failed": [],
-            }
-            for spec in _load_ingest_plan(plan_src, failed=plan_status["failed"]):
-                try:
-                    manager.create(spec)
-                    plan_status["loaded"].append(spec.id)
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("plan job %s failed: %s", spec.id, exc)
-                    plan_status["failed"].append(
-                        {"id": spec.id, "error": f"ujin: {exc}"}
-                    )
-            app.state.plan = plan_status
+            try:
+                app.state.plan = _apply_ingest_plan(
+                    manager, plan_src, only=only, exclude=exclude
+                )
+            except ValueError as exc:
+                # A --only pattern matched no resolved job: fatal at startup.
+                print(str(exc), file=sys.stderr)
+                sys.exit(1)
 
         app.state.engine = engine
         app.state.store = store
@@ -810,6 +902,34 @@ def create_jobs_app(
         status = load_plugins()
         app.state.plugins = status
         return status
+
+    @app.post("/plan/reload")
+    def plan_reload() -> dict[str, Any]:
+        """Re-read the configured INGEST-PLAN and upsert its jobs, no restart.
+
+        Goes through the same loader and ``--only``/``--exclude`` selection as
+        startup, so resolution and error handling are identical: a per-job error
+        fails only that job (reported in ``failed``) while the rest reload. Refreshes
+        the ``/health`` plan status and returns the same ``{"path", "loaded",
+        "failed"}`` summary. When no plan is configured it is a safe no-op: nothing
+        changes and ``reloaded`` is ``false``. Unlike startup, a ``--only`` pattern
+        that now matches nothing is reported rather than fatal — the server keeps
+        running. The route is gated by the optional API-key auth like every other
+        mutating endpoint.
+        """
+        if not plan_src:
+            return {"reloaded": False, "detail": "no plan configured",
+                    "loaded": [], "failed": []}
+        try:
+            plan_status = _apply_ingest_plan(
+                app.state.manager, plan_src, only=only, exclude=exclude
+            )
+        except ValueError as exc:
+            # --only matched no job on reload: report, don't kill the server.
+            return {"reloaded": False, "detail": str(exc),
+                    "loaded": [], "failed": []}
+        app.state.plan = plan_status
+        return {"reloaded": True, **plan_status}
 
     @app.get("/jobs")
     def list_jobs() -> list[dict[str, Any]]:
@@ -927,10 +1047,13 @@ def serve(  # pragma: no cover -- launches uvicorn; not testable without a live 
     config_path: str | None = None,
     workflows_dir: str | None = None,
     plan_path: str | None = None,
+    only: list | None = None,
+    exclude: list | None = None,
 ) -> None:
     import uvicorn
 
     uvicorn.run(
-        create_jobs_app(config_path, workflows_dir=workflows_dir, plan_path=plan_path),
+        create_jobs_app(config_path, workflows_dir=workflows_dir, plan_path=plan_path,
+                        only=only, exclude=exclude),
         host=host, port=port,
     )

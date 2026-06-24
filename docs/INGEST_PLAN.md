@@ -55,8 +55,28 @@ jobs:
 
 Each job is the same declarative shape `JobSpec.from_dict` accepts for the
 [jobs API](JOBS.md) and [workflow files](WORKFLOWS.md):
-`source` / `transforms` / `sinks` / `schedule`, with `${VAR}` / `${VAR:-default}`
-substitution expanded from the environment at load time.
+`source` / `transforms` / `sinks` / `schedule`, with environment substitution
+expanded from the environment at load time. Three forms are supported:
+
+| Form | Behaviour |
+|------|-----------|
+| `${VAR}` | Expands to the value of `VAR`, or `""` (with a log warning) when unset. |
+| `${VAR:-default}` | Expands to the value of `VAR`, or `default` when `VAR` is unset. |
+| `${VAR:?message}` | Expands to the value of `VAR`; raises an actionable error (naming `VAR` and including `message`) when `VAR` is unset **or** empty. |
+
+Use `${VAR:?message}` for secrets or required configuration that must be
+present at load time — the plan (or workflow) lands in the `failed` list
+reported by `GET /health` and `ujin plan validate` rather than loading with
+a silently empty value:
+
+```yaml
+source:
+  kind: http
+  config:
+    url: "https://api.example.com/"
+    headers:
+      Authorization: "Bearer ${API_TOKEN:?set API_TOKEN to your ingest token}"
+```
 
 ### `defaults:` — shared keys, deep-merged under every job
 
@@ -162,6 +182,42 @@ Errors **never abort startup**:
 - A **per-job** problem (a bad `matrix:`, a colliding id, a spec that won't build)
   fails *just that job* — the remaining valid jobs still load — and is reported in
   `plan.failed` naming the offending job.
+
+## Reloading a plan without restarting
+
+When the plan file changes, re-apply it in-process instead of restarting the server:
+
+```bash
+curl -X POST localhost:8902/plan/reload
+```
+
+`POST /plan/reload` re-reads the configured plan path (`--plan` / `$UJIN_INGEST_PLAN`),
+re-runs the **identical** resolution and error handling as startup
+(`defaults:`/`include:`/`matrix:`/`${VAR}`), and upserts the resolved jobs by their
+stable ids into the running job manager — so added or changed jobs become visible via
+`GET /jobs` and the refreshed `GET /health` plan block with no downtime. The response
+mirrors the startup plan-status shape, plus a `reloaded` flag:
+
+```json
+{
+  "reloaded": true,
+  "path": "/data/ingest-plan.yaml",
+  "loaded": ["crossref", "feed-tech", "feed-science"],
+  "failed": [{"id": "feed-business", "error": "ujin: plan job feed-business: …"}]
+}
+```
+
+A single malformed job is reported in `failed` while the rest reload (a reload never
+aborts). Reload only **upserts** — it never deletes jobs dropped from the file. If the
+server was started with [`--only`/`--exclude`](#job-id-selection----only-and---exclude)
+selectors, reload applies the **same** filters, so it never loads jobs the startup
+filter excluded; unlike startup, a `--only` pattern that now matches nothing is reported
+(`{"reloaded": false, "detail": "ujin: --only …: no job ids matched", …}`) rather than
+aborting the running server. When **no plan is configured** the endpoint is a safe no-op
+that changes nothing and
+returns `{"reloaded": false, "detail": "no plan configured", "loaded": [], "failed": []}`.
+Like every mutating jobs route, `/plan/reload` is gated by the optional API-key auth
+(`UJIN_API_KEY`); only `/health` stays open.
 
 ## Validating a plan without starting the server
 
@@ -286,6 +342,44 @@ ujin plan render ./ingest-plan.yaml --json | python3 -c \
 
 `ujin plan render` exits zero when all jobs resolve and non-zero with a clean
 `ujin: …` message (no traceback) on a missing/unreadable path or any failed job.
+
+## Job-id selection — `--only` and `--exclude`
+
+All three plan-aware commands (`plan render`, `plan validate`, and `jobs-serve`)
+accept `--only` and `--exclude` to filter which jobs are actually processed.
+Selection runs **after full resolution** — after `defaults:` deep-merge,
+`include:`/`use:` fragment inlining, `matrix:`/`for_each:` fan-out, and `${VAR}`
+substitution — so patterns always match the **final expanded job id**.
+
+```bash
+# render only jobs whose id starts with "feed-"
+ujin plan render  ./ingest-plan.yaml --only 'feed-*'
+
+# comma-separated or repeatable patterns
+ujin plan render  ./ingest-plan.yaml --only 'feed-tech,feed-science'
+ujin plan render  ./ingest-plan.yaml --only 'feed-tech' --only 'feed-science'
+
+# --exclude subtracts from the --only set
+ujin plan render  ./ingest-plan.yaml --only 'feed-*' --exclude feed-tech
+
+# validate only the selected subset
+ujin plan validate ./ingest-plan.yaml --only 'feed-*' --json
+
+# preload only matching jobs; /health plan.loaded reflects the filtered set
+ujin jobs-serve   --plan ./ingest-plan.yaml --only 'feed-*'
+```
+
+Patterns are **fnmatch-style globs** (`*` matches any string, `?` matches one
+character, `[seq]` matches a character in the set) matched case-sensitively
+against each fully-expanded job id. When both flags are given, `--exclude`
+subtracts from the `--only` set. A `--only` pattern that matches no resolved
+job exits non-zero immediately with a clean `ujin: …` message and no traceback:
+
+```
+ujin: --only 'no-such-*': no job ids matched (5 job(s) resolved)
+```
+
+With no selector flags, all three commands are **byte-for-byte unchanged**.
 
 ## Example
 

@@ -81,7 +81,32 @@ When you run **many similar workflows**, three optional, purely-additive conveni
 keep the files DRY: a `defaults:` block, `include:`/`use:` fragments, and a
 `matrix:`/`for_each:` fan-out (they compose in that order). A workflow that uses none
 loads byte-for-byte as before, so existing single-file workflows, `{jobs: [...]}`/list
-forms, filename-stem ids, and `${VAR}`/`${VAR:-default}` substitution are unchanged.
+forms, filename-stem ids, and env substitution are unchanged.
+
+### Environment variable substitution
+
+Three `${…}` forms are expanded at file-read time (before YAML parsing),
+letting you keep secrets out of the file itself:
+
+| Form | Behaviour |
+|------|-----------|
+| `${VAR}` | Expands to the value of `VAR`, or `""` (with a log warning) when unset. |
+| `${VAR:-default}` | Expands to the value of `VAR`, or `default` when `VAR` is unset. |
+| `${VAR:?message}` | Expands to the value of `VAR`; raises an actionable error (naming `VAR` and including `message`) when `VAR` is unset **or** empty. |
+
+Use `${VAR:?message}` for required configuration — the workflow file lands in
+the `failed` list (reported by `GET /health` and `ujin plan validate`) instead
+of loading with a silently empty value:
+
+```yaml
+# /workflows/feeds.yaml
+source:
+  kind: http
+  config:
+    url: "https://api.example.com/"
+    headers:
+      Authorization: "Bearer ${API_TOKEN:?set API_TOKEN to your ingest token}"
+```
 
 ### `defaults:` — shared keys, deep-merged into each job
 
@@ -175,8 +200,9 @@ schedule:
   map. A string that is *exactly* one placeholder keeps the variable's native type
   (`min_price: "{{ floor }}"` → the integer `500`, not `"500"`); a placeholder
   embedded in a larger string interpolates `str(value)`. An unknown variable is
-  left verbatim (a stray `{{ x }}` is not fatal). The `${VAR}` / `${VAR:-default}`
-  env syntax is unrelated and still expands first, at file-read time.
+  left verbatim (a stray `{{ x }}` is not fatal). The env substitution syntax
+  (`${VAR}`, `${VAR:-default}`, `${VAR:?message}`) is unrelated and still
+  expands first, at file-read time — see the table below.
 - **Stable, distinct ids.** Give `id:` a template that references a per-entry
   variable (`id: search-{{ slug }}`) so each job gets a deterministic id and
   **reloading the file upserts the same N jobs** instead of duplicating them.

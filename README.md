@@ -103,6 +103,11 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
 ujin jobs-serve --plan examples/ingest-plan.yaml   # :8902 — many jobs from one file
 ujin plan validate examples/ingest-plan.yaml        # validate plan before deploying (exit 0 = ok)
 ujin plan render   examples/ingest-plan.yaml        # print fully-expanded job specs (--json for CI)
+
+# Job-id selectors — filter after full resolution (defaults, includes, matrix fan-out):
+ujin plan render  examples/ingest-plan.yaml --only 'feed-*'            # matching ids only
+ujin plan render  examples/ingest-plan.yaml --only 'feed-*' --exclude feed-tech
+ujin jobs-serve   --plan examples/ingest-plan.yaml --only 'feed-*'     # preload subset
 ```
 
 `--plan` (or `$UJIN_INGEST_PLAN`) mounts a single YAML file that declares many jobs
@@ -114,12 +119,26 @@ at once. Three additive layers keep large plans DRY:
 - **`matrix:`/`for_each:`** — a list of variable maps; ujin substitutes each into
   `{{ var }}` placeholders across the source/transforms/sinks/schedule, emitting one
   job per entry with a stable, deterministic id so reloads upsert rather than duplicate.
+- **`${VAR}` / `${VAR:-default}` / `${VAR:?message}`** — environment substitution
+  expanded at file-read time. `${VAR:?message}` raises a clear error (naming the
+  variable and including `message`) when `VAR` is unset or empty, so missing secrets
+  are caught early rather than silently expanding to an empty string.
+
+`ujin plan validate` and `ujin plan render` accept `--only PATTERN[,PATTERN…]` and
+`--exclude PATTERN[,PATTERN…]` (fnmatch-style globs, comma-separated or repeatable)
+to filter the resolved jobs **after** all resolution layers. `jobs-serve --plan` also
+accepts both flags and reflects only the selected jobs in `GET /health`. A `--only`
+pattern that matches nothing exits non-zero with a clean `ujin: …` message.
 
 `ujin plan validate` checks a plan file **or** a workflows directory with the same
 loaders as `jobs-serve` — identical ids and error messages — without starting the
 server. `ujin plan render` prints every fully-expanded `JobSpec` after all resolution
 layers so you can verify matrix fan-out and defaults merges before deploying.
-See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md), [docs/WORKFLOWS.md](docs/WORKFLOWS.md),
+
+Changed the plan file? `POST /plan/reload` re-reads it and upserts the resolved jobs
+in-process — no restart — sharing the startup loader (a single bad job is reported,
+the rest reload) and refreshing the `/health` plan status; with no plan configured
+it is a safe no-op. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md), [docs/WORKFLOWS.md](docs/WORKFLOWS.md),
 and the [external-config recipe](docs/recipes/external-config-flow.md).
 
 ## Watch a page for change
@@ -246,7 +265,8 @@ Three FastAPI apps — run any combination. Full reference in
 - **Jobs control plane** (`:8902`): `POST /jobs` (source→transforms→sinks→schedule),
   `GET/DELETE /jobs/{id}`, `/jobs/{id}/run|pause|resume|runs|events`,
   `/jobs/{id}/content` + `/jobs/{id}/results` (hand out obtained data), `WS /jobs/events`,
-  `/kinds`, `/metrics`, `POST /plugins/reload`. Durable + plugin-extensible.
+  `/kinds`, `/metrics`, `POST /plugins/reload`, `POST /plan/reload` (re-read the
+  INGEST-PLAN, no restart). Durable + plugin-extensible.
   File-driven workflows load from `./workflows` (with `matrix:`/`for_each:` template
   fan-out) — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 - **Poller control** (`:8900`): `GET /health /metrics /targets`,

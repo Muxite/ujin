@@ -93,7 +93,7 @@ def test_main_scrape_serve_dispatch(monkeypatch):
 def test_main_jobs_serve_dispatch(monkeypatch):
     called = {}
 
-    def fake_serve(host, port, config_path, workflows_dir, plan_path):
+    def fake_serve(host, port, config_path, workflows_dir, plan_path, only=None, exclude=None):
         called.update(port=port, workflows_dir=workflows_dir, plan_path=plan_path)
 
     monkeypatch.setattr("ujin.jobs.app.serve", fake_serve)
