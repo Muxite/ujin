@@ -317,6 +317,165 @@ def test_health_reports_failed_jobs_while_valid_load(tmp_path, monkeypatch):
         assert "good" in {j["id"] for j in c.get("/jobs").json()}
 
 
+# ── required-variable substitution: ${VAR:?message} ─────────────────────────── #
+
+def test_required_var_present_substitutes_value(tmp_path, monkeypatch):
+    """${VAR:?msg} expands to the env value when the variable is set and non-empty."""
+    monkeypatch.setenv("TEST_REQUIRED_TOKEN", "mytoken")
+    plan = tmp_path / "plan.yaml"
+    plan.write_text(
+        "- id: j\n"
+        "  schedule: {mode: once}\n"
+        '  source: {kind: command, config: {argv: ["printf", "${TEST_REQUIRED_TOKEN:?must be set}"]}}\n',
+        encoding="utf-8",
+    )
+    failed: list = []
+    specs = _load_ingest_plan(plan, failed=failed)
+    assert failed == []
+    assert len(specs) == 1
+    assert specs[0].source.config["argv"][-1] == "mytoken"
+
+
+def test_required_var_unset_raises_actionable_error(tmp_path, monkeypatch):
+    """${VAR:?msg} fails with an error naming the variable when it is unset."""
+    monkeypatch.delenv("TEST_MISSING_VAR", raising=False)
+    plan = tmp_path / "plan.yaml"
+    plan.write_text(
+        "- id: j\n"
+        "  schedule: {mode: once}\n"
+        '  source: {kind: command, config: {argv: ["printf", "${TEST_MISSING_VAR:?set the API token}"]}}\n',
+        encoding="utf-8",
+    )
+    failed: list = []
+    specs = _load_ingest_plan(plan, failed=failed)
+    assert specs == []
+    assert len(failed) == 1
+    assert "TEST_MISSING_VAR" in failed[0]["error"]
+    assert failed[0]["error"].startswith("ujin:")
+
+
+def test_required_var_empty_raises_actionable_error(tmp_path, monkeypatch):
+    """${VAR:?msg} fails with an error when the variable is set but empty."""
+    monkeypatch.setenv("TEST_EMPTY_VAR", "")
+    plan = tmp_path / "plan.yaml"
+    plan.write_text(
+        "- id: j\n"
+        "  schedule: {mode: once}\n"
+        '  source: {kind: command, config: {argv: ["printf", "${TEST_EMPTY_VAR:?cannot be empty}"]}}\n',
+        encoding="utf-8",
+    )
+    failed: list = []
+    specs = _load_ingest_plan(plan, failed=failed)
+    assert specs == []
+    assert len(failed) == 1
+    assert "TEST_EMPTY_VAR" in failed[0]["error"]
+    assert failed[0]["error"].startswith("ujin:")
+
+
+def test_required_var_error_includes_custom_message(tmp_path, monkeypatch):
+    """The optional message from ${VAR:?message} appears in the error text."""
+    monkeypatch.delenv("UJIN_API_KEY", raising=False)
+    plan = tmp_path / "plan.yaml"
+    plan.write_text(
+        "- id: j\n"
+        "  schedule: {mode: once}\n"
+        '  source: {kind: command, config: {argv: ["printf", "${UJIN_API_KEY:?set your API key in .env}"]}}\n',
+        encoding="utf-8",
+    )
+    failed: list = []
+    _load_ingest_plan(plan, failed=failed)
+    assert len(failed) == 1
+    assert "set your API key in .env" in failed[0]["error"]
+
+
+def test_required_var_no_message_still_names_variable(tmp_path, monkeypatch):
+    """${VAR:?} with no message still names the variable in the error."""
+    monkeypatch.delenv("UNNAMED_REQUIRED", raising=False)
+    plan = tmp_path / "plan.yaml"
+    plan.write_text(
+        "- id: j\n"
+        "  schedule: {mode: once}\n"
+        '  source: {kind: command, config: {argv: ["printf", "${UNNAMED_REQUIRED:?}"]}}\n',
+        encoding="utf-8",
+    )
+    failed: list = []
+    _load_ingest_plan(plan, failed=failed)
+    assert len(failed) == 1
+    assert "UNNAMED_REQUIRED" in failed[0]["error"]
+
+
+def test_plain_var_substitution_unchanged(tmp_path, monkeypatch):
+    """${VAR} (no operator) still expands to the value or empty — regression guard."""
+    monkeypatch.setenv("PLAIN_SET", "hello")
+    monkeypatch.delenv("PLAIN_UNSET", raising=False)
+    plan = tmp_path / "plan.yaml"
+    plan.write_text(
+        "- id: set\n"
+        "  schedule: {mode: once}\n"
+        '  source: {kind: command, config: {argv: ["printf", "${PLAIN_SET}"]}}\n'
+        "- id: unset\n"
+        "  schedule: {mode: once}\n"
+        '  source: {kind: command, config: {argv: ["printf", "${PLAIN_UNSET}"]}}\n',
+        encoding="utf-8",
+    )
+    failed: list = []
+    specs = _load_ingest_plan(plan, failed=failed)
+    assert failed == []
+    assert len(specs) == 2
+    by_id = {s.id: s for s in specs}
+    assert by_id["set"].source.config["argv"][-1] == "hello"
+    assert by_id["unset"].source.config["argv"][-1] == ""
+
+
+def test_default_var_substitution_unchanged(tmp_path, monkeypatch):
+    """${VAR:-default} still returns value-or-default — regression guard."""
+    monkeypatch.setenv("DEF_SET", "val")
+    monkeypatch.delenv("DEF_UNSET", raising=False)
+    plan = tmp_path / "plan.yaml"
+    plan.write_text(
+        "- id: set\n"
+        "  schedule: {mode: once}\n"
+        '  source: {kind: command, config: {argv: ["printf", "${DEF_SET:-fallback}"]}}\n'
+        "- id: unset\n"
+        "  schedule: {mode: once}\n"
+        '  source: {kind: command, config: {argv: ["printf", "${DEF_UNSET:-fallback}"]}}\n',
+        encoding="utf-8",
+    )
+    failed: list = []
+    specs = _load_ingest_plan(plan, failed=failed)
+    assert failed == []
+    assert len(specs) == 2
+    by_id = {s.id: s for s in specs}
+    assert by_id["set"].source.config["argv"][-1] == "val"
+    assert by_id["unset"].source.config["argv"][-1] == "fallback"
+
+
+def test_required_var_health_reports_as_failed(tmp_path, monkeypatch):
+    """An unsatisfied ${VAR:?} in a plan appears in /health failed; other jobs load."""
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    monkeypatch.delenv("MISSING_HEALTH_VAR", raising=False)
+    plan = tmp_path / "plan.yaml"
+    plan.write_text(
+        "jobs:\n"
+        "  - id: good\n"
+        "    schedule: {mode: once}\n"
+        "    source: {kind: command, config: {argv: [printf, ok]}}\n"
+        "  - id: bad\n"
+        "    schedule: {mode: once}\n"
+        "    source: {kind: command, config: {argv: [printf, '${MISSING_HEALTH_VAR:?must be set}']}}\n",
+        encoding="utf-8",
+    )
+    # A required var failure is file-level: the whole plan fails, not one job.
+    with TestClient(create_jobs_app(run_engine=False, plan_path=str(plan))) as c:
+        health = c.get("/health").json()
+        assert health["plan"]["failed"]
+        assert all(f["error"].startswith("ujin:") for f in health["plan"]["failed"])
+        assert "MISSING_HEALTH_VAR" in health["plan"]["failed"][0]["error"]
+
+
 def test_reload_upserts_plan_jobs(tmp_path):
     TestClient = _client()
     from ujin.jobs.app import create_jobs_app

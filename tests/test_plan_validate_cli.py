@@ -336,6 +336,65 @@ def test_workflow_dir_misspelled_top_level_key(tmp_path, capsys):
     assert main(["plan", "validate", str(tmp_path), "--strict"]) != 0
 
 
+# ── required-variable: ${VAR:?message} in plan validate ──────────────────────── #
+
+def test_required_var_unset_plan_exits_nonzero(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("REQUIRED_CLI_VAR", raising=False)
+    plan = tmp_path / "plan.yaml"
+    plan.write_text(
+        "- id: j\n"
+        "  schedule: {mode: once}\n"
+        '  source: {kind: command, config: {argv: [printf, "${REQUIRED_CLI_VAR:?set it}"]}}\n',
+        encoding="utf-8",
+    )
+    rc = main(["plan", "validate", str(plan)])
+    assert rc != 0
+
+
+def test_required_var_unset_plan_message_actionable(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("REQUIRED_CLI_VAR", raising=False)
+    plan = tmp_path / "plan.yaml"
+    plan.write_text(
+        "- id: j\n"
+        "  schedule: {mode: once}\n"
+        '  source: {kind: command, config: {argv: [printf, "${REQUIRED_CLI_VAR:?set it}"]}}\n',
+        encoding="utf-8",
+    )
+    main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert "ujin:" in out
+    assert "REQUIRED_CLI_VAR" in out
+    assert "FAIL" in out
+
+
+def test_required_var_set_plan_exits_zero(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("REQUIRED_CLI_VAR", "present")
+    plan = tmp_path / "plan.yaml"
+    plan.write_text(
+        "- id: j\n"
+        "  schedule: {mode: once}\n"
+        '  source: {kind: command, config: {argv: [printf, "${REQUIRED_CLI_VAR:?set it}"]}}\n',
+        encoding="utf-8",
+    )
+    rc = main(["plan", "validate", str(plan)])
+    assert rc == 0
+
+
+def test_required_var_no_traceback(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("REQUIRED_CLI_VAR", raising=False)
+    plan = tmp_path / "plan.yaml"
+    plan.write_text(
+        "- id: j\n"
+        "  schedule: {mode: once}\n"
+        '  source: {kind: command, config: {argv: [printf, "${REQUIRED_CLI_VAR:?set it}"]}}\n',
+        encoding="utf-8",
+    )
+    main(["plan", "validate", str(plan)])
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "EnvVarRequiredError" not in err
+
+
 # ── examples/ all validate cleanly (no schema warnings, strict-clean) ────────── #
 
 _EXAMPLES = Path(__file__).resolve().parents[1] / "examples"

@@ -53,23 +53,44 @@ log = logging.getLogger("ujin.jobs.app")
 #: ``jobs-serve --plan PATH`` flag overrides it. Unset -> no plan is loaded.
 INGEST_PLAN_ENV = "UJIN_INGEST_PLAN"
 
-# ``${VAR}`` / ``${VAR:-default}`` references in a workflow/job file, expanded
-# against the environment at load time. Lets a mounted file reference secrets
-# (an ingest token, a backend URL) without committing them. An unset variable
-# with no default expands to "" (and logs once), mirroring shell semantics.
-_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+# ``${VAR}`` / ``${VAR:-default}`` / ``${VAR:?message}`` references in a
+# workflow/job file, expanded against the environment at load time. Lets a
+# mounted file reference secrets (an ingest token, a backend URL) without
+# committing them. An unset variable with no default expands to "" (and logs
+# once), mirroring shell semantics. The ``:?`` form raises an error when the
+# variable is unset or empty, so a missing required secret is caught early.
+#
+# Regex groups: 1=name, 2=operator (``:-`` or ``:?``), 3=operand (may be "").
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:[-?])([^}]*))?\}")
+
+
+class EnvVarRequiredError(ValueError):
+    """A ``${VAR:?message}`` env var is unset or empty at load time.
+
+    Raised during expansion so the offending plan/workflow lands in the
+    ``failed`` list (``GET /health``) with an actionable message, rather than
+    expanding silently or crashing startup for every other job.
+    """
 
 
 def _expand_env(text: str) -> str:
-    """Expand ``${VAR}`` / ``${VAR:-default}`` in *text* from os.environ."""
+    """Expand ``${VAR}`` / ``${VAR:-default}`` / ``${VAR:?message}`` in *text*."""
     def _sub(m: "re.Match[str]") -> str:
-        name, default = m.group(1), m.group(2)
+        name, op, operand = m.group(1), m.group(2), m.group(3)
         val = os.environ.get(name)
+        if op == ":-":
+            return val if val is not None else operand
+        if op == ":?":
+            if not val:  # unset or empty
+                detail = f" — {operand.strip()}" if operand and operand.strip() else ""
+                raise EnvVarRequiredError(
+                    f"required variable {name!r} is unset or empty{detail}"
+                )
+            return val
+        # plain ${VAR} — no operator
         if val is None:
-            if default is None:
-                log.warning("workflow env var %s unset; expanding to empty", name)
-                return ""
-            return default
+            log.warning("workflow env var %s unset; expanding to empty", name)
+            return ""
         return val
 
     return _ENV_REF.sub(_sub, text)

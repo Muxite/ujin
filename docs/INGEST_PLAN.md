@@ -55,8 +55,28 @@ jobs:
 
 Each job is the same declarative shape `JobSpec.from_dict` accepts for the
 [jobs API](JOBS.md) and [workflow files](WORKFLOWS.md):
-`source` / `transforms` / `sinks` / `schedule`, with `${VAR}` / `${VAR:-default}`
-substitution expanded from the environment at load time.
+`source` / `transforms` / `sinks` / `schedule`, with environment substitution
+expanded from the environment at load time. Three forms are supported:
+
+| Form | Behaviour |
+|------|-----------|
+| `${VAR}` | Expands to the value of `VAR`, or `""` (with a log warning) when unset. |
+| `${VAR:-default}` | Expands to the value of `VAR`, or `default` when `VAR` is unset. |
+| `${VAR:?message}` | Expands to the value of `VAR`; raises an actionable error (naming `VAR` and including `message`) when `VAR` is unset **or** empty. |
+
+Use `${VAR:?message}` for secrets or required configuration that must be
+present at load time — the plan (or workflow) lands in the `failed` list
+reported by `GET /health` and `ujin plan validate` rather than loading with
+a silently empty value:
+
+```yaml
+source:
+  kind: http
+  config:
+    url: "https://api.example.com/"
+    headers:
+      Authorization: "Bearer ${API_TOKEN:?set API_TOKEN to your ingest token}"
+```
 
 ### `defaults:` — shared keys, deep-merged under every job
 
