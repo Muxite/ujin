@@ -91,6 +91,8 @@ class JobSpec:
         """Build a JobSpec from a plain dict (nested specs coerced)."""
         data = dict(data)
         src = data.get("source") or {}
+        if not src:
+            raise ValueError("missing required 'source:' key")
         source = src if isinstance(src, SourceSpec) else SourceSpec(**src)
         transforms = [
             t if isinstance(t, TransformSpec) else TransformSpec(**t)

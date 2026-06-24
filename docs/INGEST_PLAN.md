@@ -388,6 +388,32 @@ Errors **never abort startup**:
   fails *just that job* — the remaining valid jobs still load — and is reported in
   `plan.failed` naming the offending job.
 
+### Actionable validation errors
+
+Each malformed-input case produces a `ujin: …` message that names the offending
+file, job id, and key — never a bare Python traceback:
+
+| Malformed input | Error scope | Message contains |
+|---|---|---|
+| `matrix:`/`for_each:` is a scalar (e.g. `42` or `"bad"`) | per-job | `must be a list of variable maps or a mapping of axis-name -> value-list, got <type>` |
+| `matrix:` axis value is not a non-empty list | per-job | `` `matrix:` axis '<name>' must be a non-empty list of values `` |
+| `include:`/`use:` path does not resolve | file-level | `include fragment not found: '<path>' (looked in: …)` |
+| Top-level document is a bare scalar (workflow file) | file-level | `top-level must be a job mapping or a list of jobs, got <type>` |
+| Top-level document is a bare scalar (plan file) | file-level | `must be a list of jobs or a mapping with a \`jobs:\` list, got <type>` |
+| Job mapping is missing its `source:` key | per-job | `missing required 'source:' key` |
+
+`ujin plan validate` surfaces these as `FAIL  <job-id>: ujin: …` lines (or in the
+`failed` array with `--json`) and exits non-zero. The error always names the
+originating file so you can locate the problem immediately:
+
+```
+FAIL  bad-job: ujin: plan job bad-job in plan.yaml: missing required 'source:' key
+FAIL  plan     ujin: plan.yaml: include fragment not found: 'missing.yaml' (looked in: …)
+```
+
+Use `ujin plan validate --strict` to also promote schema warnings (unrecognized or
+misspelled keys) to failures — useful in CI.
+
 ## Introspecting the active plan (`GET /plan`)
 
 To see exactly which jobs the running server's active plan and workflows directory
@@ -711,6 +737,31 @@ ujin plan render ./ingest-plan.yaml --json | python3 -c \
 
 `ujin plan render` exits zero when all jobs resolve and non-zero with a clean
 `ujin: …` message (no traceback) on a missing/unreadable path or any failed job.
+
+### Concise overview — `--summary`
+
+Add `--summary` to print a compact human-readable overview instead of the full
+expanded specs — useful for a quick sanity-check before deploying:
+
+```bash
+ujin plan render ./ingest-plan.yaml --summary
+ujin plan render ./workflows/       --summary   # also works for a workflows directory
+```
+
+Output format: a job count on the first line, then one indented line per resolved
+job showing its id, source kind (and url if present), schedule, and number of sinks:
+
+```
+3 jobs
+  crossref    api:https://api.crossref.org/works?rows=50  adaptive/60s  0 sinks
+  feed-tech   api:https://feeds.example.com/tech?rows=50  adaptive/60s  1 sink
+  feed-science  api:https://feeds.example.com/science?rows=50  adaptive/60s  1 sink
+```
+
+`--summary` reuses the same loaders as the normal render path, so resolution
+(`defaults:`, `include:`/`use:`, `matrix:`/`for_each:`, profiles, `${VAR}`) is
+identical. It composes with `--only`/`--exclude`, `--env-file`, and `--profile`;
+the default `ujin plan render` output (no flag) is byte-for-byte unchanged.
 
 ### Provenance — `--explain`
 
