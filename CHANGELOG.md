@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.21.0 — 2026-06-24
 
 - **docs(sync): audit external-config surface; fix INGEST_PLAN.md stable-id rule;
   add `$UJIN_WORKFLOWS_DIR`/`--workflows` to README jobs paragraph; document
