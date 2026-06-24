@@ -444,6 +444,110 @@ def _explain_comment_lines(prov: dict, yaml_mod) -> "list[str]":
     return lines
 
 
+def _resolve_diff_input(path_str: str) -> "tuple[dict | None, str | None]":
+    """Resolve a ``plan diff`` OLD/NEW input into ``{job_id: comparable_spec}``.
+
+    Reuses the same loaders as ``plan validate``/``plan render`` so the resolved
+    job ids and specs are identical to what the server would produce — defaults
+    deep-merge, include:/use: fragments, matrix:/for_each: fan-out, and ${VAR}
+    substitution are all expanded. A file path loads as an INGEST-PLAN; a
+    directory loads as a workflows dir.
+
+    Returns ``(jobs, None)`` on success, where *jobs* maps each resolved job id to
+    its spec dict with ``created_at`` stripped — that field is per-load wall-clock
+    noise that would otherwise mark every job as changed. Returns ``(None, msg)``
+    with a clean ``ujin: …`` message (no traceback) when the path is missing or
+    any job fails to load/resolve.
+    """
+    from ujin.jobs.app import _load_ingest_plan, _load_workflows_dir
+
+    path = Path(path_str)
+    if not path.exists():
+        return None, f"ujin: path not found: {path_str}"
+
+    failed: list = []
+    if path.is_dir():
+        specs = _load_workflows_dir(str(path), failed=failed)
+    else:
+        specs = _load_ingest_plan(path, failed=failed)
+
+    if failed:
+        # Loader failure messages are already ``ujin: …``-prefixed and name the
+        # offending file/job; surface the first one as the clean error.
+        return None, failed[0]["error"]
+
+    jobs: dict = {}
+    for spec in specs:
+        d = spec.to_dict()
+        d.pop("created_at", None)
+        jobs[spec.id] = d
+    return jobs, None
+
+
+def _cmd_plan_diff(args: argparse.Namespace) -> int:
+    """Diff two resolved plans (or workflows dirs) keyed by final job id.
+
+    Resolves OLD and NEW with the same loaders as ``plan validate``/``plan
+    render`` (defaults/include/matrix/${VAR} fully expanded), then reports, by
+    job id, the jobs **added** in NEW, **removed** in NEW, and **changed**
+    (present in both with a differing resolved spec). Exits zero whenever both
+    inputs resolve — including when there is no difference. An unreadable or
+    schema-invalid OLD/NEW input exits non-zero with a clean ``ujin: …`` message
+    and no traceback.
+
+    ``--json`` emits the same information as a structured object with distinct
+    ``added``/``removed``/``changed`` groupings. ``--env-file`` is accepted
+    consistently with the other plan subcommands.
+    """
+    import json as _json
+
+    env_file = getattr(args, "env_file", None)
+    if env_file:
+        rc = _apply_env_file(env_file)
+        if rc:
+            return rc
+
+    old_jobs, err = _resolve_diff_input(args.old)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    new_jobs, err = _resolve_diff_input(args.new)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+
+    old_ids = set(old_jobs)
+    new_ids = set(new_jobs)
+    added = sorted(new_ids - old_ids)
+    removed = sorted(old_ids - new_ids)
+    changed = sorted(i for i in (old_ids & new_ids) if old_jobs[i] != new_jobs[i])
+
+    if args.json:
+        print(_json.dumps({
+            "added": [{"id": i, "spec": new_jobs[i]} for i in added],
+            "removed": [{"id": i, "spec": old_jobs[i]} for i in removed],
+            "changed": [{"id": i, "old": old_jobs[i], "new": new_jobs[i]}
+                        for i in changed],
+        }, indent=2))
+    else:
+        for i in added:
+            print(f"+ {i}")
+        for i in removed:
+            print(f"- {i}")
+        for i in changed:
+            print(f"~ {i}")
+        if added or removed or changed:
+            print(
+                f"ujin: {len(added)} added, {len(removed)} removed, "
+                f"{len(changed)} changed",
+                file=sys.stderr,
+            )
+        else:
+            print("no changes")
+
+    return 0
+
+
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
     from ujin.mcp import serve
 
@@ -940,6 +1044,41 @@ def main(argv: list[str] | None = None) -> int:
         help="exclude jobs whose id matches this fnmatch pattern "
              "(comma-separated or repeatable; subtracts from --only)")
     p_plan_render.set_defaults(func=_cmd_plan_render)
+
+    p_plan_diff = plan_sub.add_parser(
+        "diff",
+        help="diff two plans/workflows dirs by resolved job id",
+        description="Resolve OLD and NEW (each a plan file or a workflows "
+                    "directory) using the same loaders as `plan validate` and "
+                    "`plan render` — defaults: deep-merge, include:/use: "
+                    "fragments, matrix:/for_each: fan-out, and ${VAR} "
+                    "substitution all expanded — then report, keyed by final job "
+                    "id, the jobs added in NEW, removed in NEW, and changed "
+                    "(present in both but with a differing resolved spec). Exits "
+                    "zero whenever both inputs resolve (including no difference). "
+                    "--json emits the same information as a structured object "
+                    "with distinct added/removed/changed groupings. An unreadable "
+                    "or schema-invalid input exits non-zero with a clean "
+                    "`ujin: …` message (no traceback).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="examples:\n"
+               "  ujin plan diff ./old-plan.yaml ./new-plan.yaml\n"
+               "  ujin plan diff ./workflows/ ./new-workflows/\n"
+               "  ujin plan diff ./old-plan.yaml ./new-plan.yaml --json",
+    )
+    p_plan_diff.add_argument("old", metavar="OLD",
+                             help="baseline plan file or workflows directory")
+    p_plan_diff.add_argument("new", metavar="NEW",
+                             help="updated plan file or workflows directory")
+    p_plan_diff.add_argument("--json", action="store_true",
+                             help="emit the diff as machine-readable JSON with "
+                                  "distinct added/removed/changed groupings")
+    p_plan_diff.add_argument(
+        "--env-file", default=None, metavar="PATH",
+        help="load KEY=VALUE pairs from PATH and use them for ${VAR} substitution "
+             "when resolving both plans (process env vars take precedence; the "
+             "file only fills in variables not already set)")
+    p_plan_diff.set_defaults(func=_cmd_plan_diff)
 
     p_watch = sub.add_parser(
         "watch", help="watch a URL's regions for change (adaptive, jittered)",
