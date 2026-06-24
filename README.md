@@ -1,6 +1,6 @@
 # ujin
 
-The **ultimate scraper-poller**. Two halves that share one toolkit:
+The **ultimate scraper-poller**. Three parts that share one toolkit:
 
 1. **Adaptive multi-role poller** — poll *anything* (HTTP pages, RSS, JSON APIs,
    GraphQL endpoints, shell commands, Python callables, scoped page regions, or
@@ -11,6 +11,13 @@ The **ultimate scraper-poller**. Two halves that share one toolkit:
    fingerprinted change detection, structured-data + HTML-table + image +
    head-metadata + feed-URL extraction, and optional social/trends sources —
    all behind a small HTTP API.
+3. **Declarative jobs control plane** — `source → transforms → sinks → schedule`
+   driven by REST or file-based config: shared `defaults:` deep-merged under
+   every job, reusable `include:`/`use:` fragment files, and `matrix:`/`for_each:`
+   fan-out to turn one template into N jobs; or mount a single **INGEST-PLAN**
+   file with `--plan` / `$UJIN_INGEST_PLAN` for one-file multi-job deploys.
+   Validate and inspect offline with `ujin plan validate` / `ujin plan render`
+   before committing to a deploy.
 
 It bundles the [obscura](https://github.com/Muxite/obscura) headless renderer as
 a submodule, and stays a **pure-python pip install** (the renderer is built
@@ -89,6 +96,31 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
 curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
   -d '{"urls":["https://apnews.com","https://www.reuters.com/world/"],"mode":"links"}'
 ```
+
+## Quick start — jobs and file-driven config
+
+```bash
+ujin jobs-serve --plan examples/ingest-plan.yaml   # :8902 — many jobs from one file
+ujin plan validate examples/ingest-plan.yaml        # validate plan before deploying (exit 0 = ok)
+ujin plan render   examples/ingest-plan.yaml        # print fully-expanded job specs (--json for CI)
+```
+
+`--plan` (or `$UJIN_INGEST_PLAN`) mounts a single YAML file that declares many jobs
+at once. Three additive layers keep large plans DRY:
+
+- **`defaults:`** — a top-level mapping deep-merged under every job; per-job keys win.
+- **`include:`/`use:`** — pull in a fragment file for a shared sink, schedule, or
+  transform pipeline; paths resolve relative to the plan file, then `$UJIN_WORKFLOWS_DIR`.
+- **`matrix:`/`for_each:`** — a list of variable maps; ujin substitutes each into
+  `{{ var }}` placeholders across the source/transforms/sinks/schedule, emitting one
+  job per entry with a stable, deterministic id so reloads upsert rather than duplicate.
+
+`ujin plan validate` checks a plan file **or** a workflows directory with the same
+loaders as `jobs-serve` — identical ids and error messages — without starting the
+server. `ujin plan render` prints every fully-expanded `JobSpec` after all resolution
+layers so you can verify matrix fan-out and defaults merges before deploying.
+See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md), [docs/WORKFLOWS.md](docs/WORKFLOWS.md),
+and the [external-config recipe](docs/recipes/external-config-flow.md).
 
 ## Watch a page for change
 
