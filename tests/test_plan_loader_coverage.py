@@ -271,9 +271,9 @@ def test_expand_matrix_both_keys_raises():
 
 
 def test_expand_matrix_non_list_rows_raises():
-    """`matrix:` value must be a list — a scalar raises ValueError."""
+    """`matrix:` scalar (neither list nor mapping) raises ValueError naming both forms."""
     entry = {"id": "j", "matrix": "nope", "source": {"kind": "command", "config": {}}}
-    with pytest.raises(ValueError, match="non-empty list"):
+    with pytest.raises(ValueError, match="list"):
         _expand_matrix(entry, "j")
 
 

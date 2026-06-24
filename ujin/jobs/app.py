@@ -569,6 +569,11 @@ def _matrix_rows(value: Any, key: str, root: "Path | None") -> list:
     value — including one whose filters prune the fan-out to zero jobs — so the
     containing file lands in the loader's ``failed`` list.
     """
+    if not isinstance(value, (list, dict)):
+        raise ValueError(
+            f"`{key}:` must be a list of variable maps or a mapping of "
+            f"axis-name -> value-list, got {type(value).__name__}"
+        )
     exclude: list = []
     include: list = []
     if isinstance(value, dict):
@@ -964,6 +969,16 @@ def _specs_from_workflow_file(
     # Inline reusable fragments, then peel off a top-level `defaults:` block. Both
     # are no-ops when absent, so the paths below stay identical to the old loader.
     data = _resolve_includes(data, path.parent)
+
+    # A bare scalar (integer, plain string, etc.) is not a valid workflow shape —
+    # neither a single-job mapping nor a list of jobs. Catch it here so the caller
+    # gets a clean ``ujin: …`` message instead of a cryptic ``'int' object is not
+    # iterable`` or ``dictionary update sequence …`` error from the iteration below.
+    if not isinstance(data, (dict, list)):
+        raise ValueError(
+            f"top-level must be a job mapping or a list of jobs, "
+            f"got {type(data).__name__}"
+        )
 
     # Advisory schema check on the resolved top level. A workflow file's top level
     # may be a container (`jobs:`/`defaults:`) OR a single job written directly, so
