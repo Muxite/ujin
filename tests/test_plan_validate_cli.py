@@ -535,3 +535,128 @@ def test_examples_validate_clean_even_strict(rel, capsys, monkeypatch):
     assert data["ok"] is True
     assert data["failed"] == []
     assert data["warnings"] == []        # shipped examples carry no unknown keys
+
+
+# ── missing source ────────────────────────────────────────────────────────────── #
+#
+# A job mapping with no `source:` key must fail with a clear message naming the
+# offending job and file — not a bare Python TypeError from SourceSpec.__init__.
+
+def test_plan_missing_source_exits_nonzero(tmp_path, capsys):
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [{"id": "no-source", "schedule": {"mode": "once"}}])
+    rc = main(["plan", "validate", str(plan)])
+    assert rc != 0
+
+
+def test_plan_missing_source_message_names_job_file_and_key(tmp_path, capsys):
+    # Good job still loads; bad job names file, job id, and the missing key.
+    plan = tmp_path / "src-plan.yaml"
+    _write(plan, [
+        {"id": "good", **_minimal_job()},
+        {"id": "no-source", "schedule": {"mode": "once"}},
+    ])
+    main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert "ok  good" in out
+    assert "FAIL" in out
+    assert "no-source" in out
+    assert "src-plan.yaml" in out
+    assert "source" in out
+    # Must not be a raw Python exception type
+    assert "TypeError" not in out
+    assert "Traceback" not in out
+
+
+def test_plan_missing_source_no_traceback(tmp_path, capsys):
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [{"id": "j", "schedule": {"mode": "once"}}])
+    main(["plan", "validate", str(plan)])
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "TypeError" not in err
+
+
+def test_workflow_missing_source_exits_nonzero(tmp_path, capsys):
+    _write(tmp_path / "no-src.yaml", {"schedule": {"mode": "once"}})
+    rc = main(["plan", "validate", str(tmp_path)])
+    assert rc != 0
+
+
+def test_workflow_missing_source_message_names_file_and_key(tmp_path, capsys):
+    _write(tmp_path / "needs-source.yaml", {"schedule": {"mode": "once"}})
+    main(["plan", "validate", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "FAIL" in out
+    assert "needs-source" in out
+    assert "source" in out
+    assert "TypeError" not in out
+
+
+# ── non-conforming top-level in workflow file ────────────────────────────────── #
+#
+# A workflow file that parses to a bare scalar (integer, plain string, etc.) must
+# produce a clean ujin: … message naming the file — not a cryptic Python error
+# like "'int' object is not iterable".
+
+def test_workflow_bare_integer_exits_nonzero(tmp_path, capsys):
+    (tmp_path / "bad.yaml").write_text("42\n", encoding="utf-8")
+    rc = main(["plan", "validate", str(tmp_path)])
+    assert rc != 0
+
+
+def test_workflow_bare_integer_names_file(tmp_path, capsys):
+    (tmp_path / "bad-shape.yaml").write_text("42\n", encoding="utf-8")
+    main(["plan", "validate", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "bad-shape" in out
+    assert "ujin:" in out
+    # Message must be actionable — not a raw Python exception
+    assert "object is not iterable" not in out
+    assert "Traceback" not in out
+
+
+def test_workflow_bare_string_names_file(tmp_path, capsys):
+    (tmp_path / "string-doc.yaml").write_text("just a string\n", encoding="utf-8")
+    main(["plan", "validate", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "string-doc" in out
+    assert "ujin:" in out
+    assert "dictionary update" not in out
+
+
+def test_workflow_bare_scalar_good_sibling_still_loads(tmp_path, capsys):
+    # The scalar-doc file fails; the valid sibling still loads.
+    _write(tmp_path / "good.yaml", _minimal_job())
+    (tmp_path / "bad.yaml").write_text("42\n", encoding="utf-8")
+    main(["plan", "validate", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "ok  good" in out
+    assert "FAIL" in out
+
+
+# ── matrix scalar value: error describes both valid shapes ───────────────────── #
+#
+# `matrix: 42` (a scalar, neither list nor axis-mapping) used to say only "must be
+# a non-empty list of variable maps", omitting the cross-product form. The message
+# should now name both valid shapes so users know either form is accepted.
+
+def test_matrix_scalar_value_message_mentions_both_shapes(tmp_path, capsys):
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [{"id": "j", "matrix": 42, **_minimal_job()}])
+    main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert "FAIL" in out
+    # Both valid forms must be described
+    assert "list" in out.lower()
+    assert "mapping" in out.lower()
+
+
+def test_for_each_scalar_value_message_mentions_both_shapes(tmp_path, capsys):
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [{"id": "j", "for_each": "bad", **_minimal_job()}])
+    main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert "FAIL" in out
+    assert "list" in out.lower()
+    assert "mapping" in out.lower()
