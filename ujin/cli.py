@@ -336,6 +336,13 @@ def _cmd_plan_render(args: argparse.Namespace) -> int:
     and failures are identical to what the server would produce. Exits zero when all
     jobs resolve; non-zero with a clean ``ujin: …`` message (no traceback) on a
     missing/unreadable path or any failed job.
+
+    With ``--explain`` each rendered job is annotated with its provenance — the
+    originating plan/workflow source file and, for ``matrix:``/``for_each:``-expanded
+    jobs, the matrix entry index and the variable map that produced it. Provenance is
+    threaded through the loaders only when ``--explain`` is set, so the default render
+    path is byte-for-byte unchanged. ``--explain`` composes with ``--json`` (the
+    machine-readable form), ``--only``/``--exclude``, and ``--env-file``.
     """
     import json as _json
 
@@ -352,16 +359,20 @@ def _cmd_plan_render(args: argparse.Namespace) -> int:
     path = Path(args.path)
     only = _parse_patterns(getattr(args, "only", None))
     exclude = _parse_patterns(getattr(args, "exclude", None))
+    explain = getattr(args, "explain", False)
 
     if not path.exists():
         print(f"ujin: path not found: {args.path}", file=sys.stderr)
         return 1
 
     failed: list = []
+    # Provenance is collected only under --explain; without it the loaders run on
+    # the existing code path (provenance=None) so the default render is unchanged.
+    provenance: list | None = [] if explain else None
     if path.is_dir():
-        specs = _load_workflows_dir(str(path), failed=failed)
+        specs = _load_workflows_dir(str(path), failed=failed, provenance=provenance)
     else:
-        specs = _load_ingest_plan(path, failed=failed)
+        specs = _load_ingest_plan(path, failed=failed, provenance=provenance)
 
     # Apply --only/--exclude selection after full resolution so patterns match
     # the final expanded job ids (post defaults-merge, includes, matrix fan-out).
@@ -381,16 +392,56 @@ def _cmd_plan_render(args: argparse.Namespace) -> int:
         )
         return 1
 
+    # Map each resolved job id to its provenance record (ids are unique post-
+    # resolution), so it survives --only/--exclude reordering/filtering of specs.
+    prov_by_id = {p["id"]: p for p in (provenance or [])}
+
+    def _prov(spec) -> dict:
+        p = prov_by_id.get(spec.id, {})
+        return {k: v for k, v in p.items() if k != "id"}
+
     if args.json:
-        print(_json.dumps([s.to_dict() for s in specs], indent=2))
+        if explain:
+            print(_json.dumps(
+                [{"spec": s.to_dict(), "provenance": _prov(s)} for s in specs],
+                indent=2,
+            ))
+        else:
+            print(_json.dumps([s.to_dict() for s in specs], indent=2))
     else:
         for i, spec in enumerate(specs):
             if i:
                 print()
             print(f"--- # {spec.id}")
+            if explain:
+                for line in _explain_comment_lines(_prov(spec), _yaml):
+                    print(line)
             print(_yaml.dump(spec.to_dict(), default_flow_style=False, sort_keys=False), end="")
 
     return 0
+
+
+def _explain_comment_lines(prov: dict, yaml_mod) -> "list[str]":
+    """Render a job's provenance as ``# ...`` comment lines for ``--explain`` YAML.
+
+    Emits a ``# source:`` line naming the originating file and, for a
+    matrix/for_each-expanded job, a ``# matrix:`` line naming the key, 0-based entry
+    index, and the variable map that produced the job. Returns ``[]`` for an empty
+    provenance record so the YAML body still prints.
+    """
+    lines: list[str] = []
+    src = prov.get("source")
+    if src:
+        lines.append(f"# source: {src}")
+    matrix = prov.get("matrix")
+    if matrix:
+        flow = yaml_mod.dump(
+            matrix.get("vars", {}), default_flow_style=True, sort_keys=False
+        ).strip()
+        lines.append(
+            f"# {matrix.get('key', 'matrix')}: entry {matrix.get('index')} -> {flow}"
+        )
+    return lines
 
 
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
@@ -855,17 +906,26 @@ def main(argv: list[str] | None = None) -> int:
                     "and ${VAR}/${VAR:-default} substitution — in human-readable YAML. "
                     "--json emits the resolved specs as a JSON array (same shape as "
                     "the REST /jobs endpoint). "
+                    "--explain annotates each job with its provenance — the "
+                    "originating source file and, for matrix:/for_each: jobs, the "
+                    "matrix entry index and variable map that produced it. "
                     "Exits zero when all jobs resolve; non-zero on any failure.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="examples:\n"
                "  ujin plan render ./ingest-plan.yaml\n"
                "  ujin plan render ./workflows/\n"
-               "  ujin plan render ./ingest-plan.yaml --json",
+               "  ujin plan render ./ingest-plan.yaml --json\n"
+               "  ujin plan render ./ingest-plan.yaml --explain\n"
+               "  ujin plan render ./ingest-plan.yaml --explain --json",
     )
     p_plan_render.add_argument("path",
                                help="INGEST-PLAN file or workflows directory to render")
     p_plan_render.add_argument("--json", action="store_true",
                                help="emit resolved specs as a JSON array instead of YAML")
+    p_plan_render.add_argument(
+        "--explain", action="store_true",
+        help="annotate each rendered job with its provenance (source file, and the "
+             "matrix entry index + variable map for matrix/for_each-expanded jobs)")
     p_plan_render.add_argument(
         "--env-file", default=None, metavar="PATH",
         help="load KEY=VALUE pairs from PATH and use them for ${VAR} substitution "
