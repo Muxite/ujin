@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- **docs(sync): fix `--explain --json` index in `INGEST_PLAN.md`; extend external-config recipe to cover all five resolution layers.** `rows[1]` in the `ujin plan render --explain --json` example pointed to `feed-tech` (matrix index 0) instead of `feed-science` (matrix index 1) — corrected to `rows[2]`. Updated `docs/recipes/external-config-flow.md` to describe all five additive config layers (`defaults:`, `include:`/`use:`, `matrix:`/`for_each:`, `vars:`, `profiles:`) — the recipe previously said "three" — with an updated layers-compose table, a new §6 showing `vars:` and `profiles:` in practice, and a new §7 demonstrating `POST /plan/reload` with `?prune=true` and `?dry_run=true`. No production code changed.
+- **docs(sync): add `vars:` and `profiles:` to README feature list; fix `--explain --json` index in `INGEST_PLAN.md`; extend external-config recipe to cover all five resolution layers.** Updated the opening feature-list bullet for the declarative jobs control plane in `README.md` to name all five additive layers — `defaults:`, `include:`/`use:`, `vars:`, `profiles:`, and `matrix:`/`for_each:` — matching the detail already present in the quickstart section. Fixed `rows[1]` in the `ujin plan render --explain --json` example in `INGEST_PLAN.md` (pointed to `feed-tech`, matrix index 0, instead of `feed-science`, matrix index 1) — corrected to `rows[2]`. Updated `docs/recipes/external-config-flow.md` to describe all five additive config layers — the recipe previously said "three" — with an updated layers-compose table, a new §6 showing `vars:` and `profiles:` in practice, and a new §7 demonstrating `POST /plan/reload` with `?prune=true` and `?dry_run=true`. No production code changed.
 
 ## 0.36.0 — 2026-06-24
 
