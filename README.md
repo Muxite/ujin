@@ -238,7 +238,15 @@ plan-owned jobs dropped from the file (returned in a `pruned` list); API- and
 preload-created jobs are never pruned. Add `?dry_run=true` (or a `{"dry_run": true}`
 body) to preview the reload without touching the manager — the response reports the
 ids that would be `added`/`updated`/`unchanged` (and `removed` with `prune`) while
-`GET /jobs` stays identical. Want to see what the active plan/workflows resolve to
+`GET /jobs` stays identical. To skip the manual POST entirely, start
+`jobs-serve --watch-plan` (or `UJIN_WATCH_PLAN=1`; tune the poll interval with
+`--watch-interval` / `$UJIN_WATCH_INTERVAL`, default `2.0`s): a stdlib-only
+background poller re-applies the **same** reload-with-prune automatically whenever
+the `--plan` file changes on disk — added/changed jobs appear and removed plan-owned
+jobs are pruned with no restart. Off by default (a no-config deploy is unchanged); a
+malformed save is skipped (jobs kept, error reported in `failed`), API/preload jobs
+are never pruned, and it is race-free with the manual endpoint. Want to see what the
+active plan/workflows resolve to
 without touching anything? `GET /plan` is the read-only, live counterpart to
 `ujin plan render --explain`: it returns every currently-resolved job id with its
 provenance — the originating plan/workflow file, plus the matrix entry for
