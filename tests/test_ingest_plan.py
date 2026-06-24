@@ -636,3 +636,123 @@ def test_reload_endpoint_reports_only_no_match_without_killing_server(tmp_path, 
         # Server still serving; the originally-loaded job is untouched.
         assert c.get("/health").json()["status"] == "ok"
         assert {j["id"] for j in c.get("/jobs").json()} == {"alpha"}
+
+
+# ── POST /plan/reload?prune=true: drop plan-owned jobs gone from the file ───── #
+def _cmd_job(job_id, arg="x"):
+    # `name` is explicit so the same dict works for the positional jobs.yaml
+    # preload too (its loader doesn't default a name the way the plan loader does).
+    return {"id": job_id, "name": job_id, "schedule": {"mode": "once"},
+            "source": {"kind": "command", "config": {"argv": ["printf", arg]}}}
+
+
+def test_reload_prune_removes_job_dropped_from_plan(tmp_path, monkeypatch):
+    # With prune on, a job edited out of the plan disappears from the running
+    # manager (and the /health plan set) and is listed under `pruned`.
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [_cmd_job("keep", "k"), _cmd_job("drop", "d")])
+
+    with TestClient(create_jobs_app(run_engine=False, plan_path=str(plan))) as c:
+        assert {j["id"] for j in c.get("/jobs").json()} == {"keep", "drop"}
+        # Drop one job from the file, reload with prune via the query param.
+        _write(plan, [_cmd_job("keep", "k")])
+        body = c.post("/plan/reload?prune=true").json()
+        assert body["reloaded"] is True
+        assert body["loaded"] == ["keep"]
+        assert body["pruned"] == ["drop"]
+        # The dropped job is gone from /jobs and the refreshed /health plan set.
+        assert {j["id"] for j in c.get("/jobs").json()} == {"keep"}
+        assert c.get("/jobs/drop").status_code == 404
+        health = c.get("/health").json()["plan"]
+        assert health["loaded"] == ["keep"] and health["pruned"] == ["drop"]
+
+
+def test_reload_prune_accepts_json_body(tmp_path, monkeypatch):
+    # The opt-in is also accepted as a {"prune": true} JSON body, not only ?prune.
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [_cmd_job("keep", "k"), _cmd_job("drop", "d")])
+
+    with TestClient(create_jobs_app(run_engine=False, plan_path=str(plan))) as c:
+        _write(plan, [_cmd_job("keep", "k")])
+        body = c.post("/plan/reload", json={"prune": True}).json()
+        assert body["reloaded"] is True and body["pruned"] == ["drop"]
+        assert {j["id"] for j in c.get("/jobs").json()} == {"keep"}
+
+
+def test_reload_without_prune_retains_dropped_job(tmp_path, monkeypatch):
+    # Regression: no prune option -> upsert-only, removes nothing, no `pruned`
+    # key in either the response or the /health plan block (byte-identical to 0.24).
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [_cmd_job("keep", "k"), _cmd_job("drop", "d")])
+
+    with TestClient(create_jobs_app(run_engine=False, plan_path=str(plan))) as c:
+        _write(plan, [_cmd_job("keep", "k")])
+        body = c.post("/plan/reload").json()
+        assert body["reloaded"] is True
+        assert "pruned" not in body
+        # The dropped job is retained (current upsert-only behaviour).
+        assert {j["id"] for j in c.get("/jobs").json()} == {"keep", "drop"}
+        assert "pruned" not in c.get("/health").json()["plan"]
+
+
+def test_reload_prune_never_removes_api_or_preload_jobs(tmp_path, monkeypatch):
+    # The guard: jobs created via the REST API or the positional jobs.yaml preload
+    # are never pruned, even when prune is on and their ids are absent from the plan.
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    preload = tmp_path / "jobs.yaml"
+    _write(preload, [_cmd_job("preloaded", "p")])
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [_cmd_job("planjob", "x")])
+
+    app = create_jobs_app(str(preload), run_engine=False, plan_path=str(plan))
+    with TestClient(app) as c:
+        api_id = c.post("/jobs", json={
+            "name": "apijob", "schedule": {"mode": "once"},
+            "source": {"kind": "command", "config": {"argv": ["printf", "a"]}},
+        }).json()["id"]
+        assert {"preloaded", "planjob", api_id} <= {
+            j["id"] for j in c.get("/jobs").json()
+        }
+        # Empty the plan entirely and prune: only the plan-owned job is removed.
+        _write(plan, [])
+        body = c.post("/plan/reload?prune=true").json()
+        assert body["reloaded"] is True and body["pruned"] == ["planjob"]
+        ids = {j["id"] for j in c.get("/jobs").json()}
+        assert "planjob" not in ids
+        assert "preloaded" in ids and api_id in ids
+
+
+def test_reload_prune_skips_when_plan_unreadable(tmp_path, monkeypatch):
+    # A file-level read failure must not wipe plan jobs even with prune on: the
+    # empty id set can't be trusted, so prune is skipped and `pruned` is empty.
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [_cmd_job("alpha", "a")])
+
+    with TestClient(create_jobs_app(run_engine=False, plan_path=str(plan))) as c:
+        assert {j["id"] for j in c.get("/jobs").json()} == {"alpha"}
+        # A bare scalar is neither a list nor a mapping -> a file-level error.
+        plan.write_text("just a string\n", encoding="utf-8")
+        body = c.post("/plan/reload?prune=true").json()
+        assert body["reloaded"] is True
+        assert body["pruned"] == [] and body["failed"]
+        # alpha survives the broken reload.
+        assert {j["id"] for j in c.get("/jobs").json()} == {"alpha"}
