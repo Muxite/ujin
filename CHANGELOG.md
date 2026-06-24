@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- **docs(readme): surface external-config capabilities in README feature list and quickstart.** Expanded the intro from "two halves" to three parts, adding the declarative jobs control plane with `defaults:`, `include:`/`use:` fragments, `matrix:`/`for_each:` fan-out, and the single mounted INGEST-PLAN (`--plan`/`$UJIN_INGEST_PLAN`) as a top-level feature. Added a "Quick start — jobs and file-driven config" section with runnable `ujin plan validate` / `ujin plan render` commands and a concise description of the three additive config layers.
 - **docs(recipes): add end-to-end external-config flow recipe.** New `docs/recipes/external-config-flow.md` walks through the full `defaults:` + `include:` fragments + `matrix:` fan-out pipeline inside a single mounted INGEST-PLAN, with runnable snippets for `ujin plan validate` and `ujin plan render`. Updated `docs/recipes/README.md` index. Added `tests/test_examples_plan_validate.py` to guard example-file freshness: the shipped `examples/ingest-plan.yaml` and `examples/workflows/` must continue to validate and render without errors.
 
 ## 0.22.0 — 2026-06-24
