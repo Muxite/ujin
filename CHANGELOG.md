@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **docs(sync): fix stale layer count in `examples/ingest-plan.yaml` and `docs/recipes/external-config-flow.md`.** The example comment said "same three additive layers" (showing only `defaults:`, `include:`, and `matrix:`); updated to "six additive layers (three demonstrated here)" with a pointer to the other three (`vars:`, `profiles:`, `${VAR}` env substitution) and the relevant examples/docs. The recipe intro said "five additive config layers" and its layers table omitted `${VAR}` env substitution; updated the count to "six additive resolution layers" and added a `${VAR}` row as the first entry in the table, with a corrected prose description of the full execution order. Both fixes bring these files into agreement with `docs/INGEST_PLAN.md` (fixed to "six" in 0.39.0) and the README. No production code changed.
+
 ## 0.39.0 — 2026-06-24
 
 - **docs(sync): document the opt-in `jobs-serve --watch-plan` auto-reload in `README.md`.** The plan-file watcher (`--watch-plan` / `$UJIN_WATCH_PLAN`, poll interval tuned by `--watch-interval` / `$UJIN_WATCH_INTERVAL`, default `2.0`s) was already shipped — wired into `create_jobs_app`'s lifespan, covered by `tests/test_plan_watch.py`, and described in `docs/JOBS.md` and `docs/INGEST_PLAN.md` — but the README jobs control-plane section documented only the manual `POST /plan/reload`. Extended the reload paragraph with a sentence describing the opt-in, stdlib-only background poller that re-applies the **same** reload-with-prune automatically whenever the `--plan` file changes on disk: added/changed jobs appear and removed plan-owned jobs are pruned with no restart, off by default (a no-config deploy is byte-identical), a malformed save is skipped (jobs kept, error reported in `failed`), API/preload jobs are never pruned, and it is race-free with the manual endpoint. No production code changed.

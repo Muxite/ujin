@@ -5,12 +5,15 @@
 #   ujin jobs-serve --plan /path/ingest-plan.yaml          # --plan wins over the env var
 #
 # It's the single-file counterpart to a /workflows directory: same job shape
-# (source -> transforms -> sinks -> schedule) and the same three additive layers,
-# shown together here:
+# (source -> transforms -> sinks -> schedule) and the same six additive layers.
+# Three are demonstrated here:
 #   * a top-level `defaults:` block, deep-merged UNDER every job (per-job keys win)
 #   * `include:` fragments, shared across jobs (resolved relative to THIS file's
 #     dir, then $UJIN_WORKFLOWS_DIR)
 #   * a per-job `matrix:` fan-out — one job per variable map
+# The other three — `vars:` placeholder defaults, `profiles:` named overlays, and
+# `${VAR}`/`${VAR:-default}` env substitution — are shown in examples/vars-defaults.yaml,
+# examples/profiles.yaml, and docs/INGEST_PLAN.md.
 #
 # This file loads to four jobs: `crossref`, `feed-tech`, `feed-science`,
 # `feed-business`. Ids are stable, so re-loading the plan upserts rather than
