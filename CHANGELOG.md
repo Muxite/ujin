@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.38.0 — 2026-06-24
 
 - **docs(sync): add `profiles:` to the workflows-dir paragraph in README.md.** The workflows-directory description in the README quickstart named four additive layers (`defaults:`, `include:`/`use:`, `matrix:`/`for_each:`, `vars:`) but omitted `profiles:` overlays, even though the feature-list bullet and the INGEST-PLAN paragraph already mentioned it. Added a sentence describing the `profiles:` block, its `--profile`/`$UJIN_PLAN_PROFILE` selection, and the lenient per-file behaviour (a file without `profiles:` is left unchanged). No production-code changes.
 - **docs(sync): fix layer-count in INGEST_PLAN.md; split MARKETPLACE.md supply-mechanism list into three explicit subsections.** INGEST_PLAN.md said "all five resolution layers" but only listed four (missing `vars:` defaults); updated at three locations: the intro paragraph, the `plan render` section, and the `--summary` blurb. MARKETPLACE.md labelled the profile-supply section "Two mechanisms" but the engine actually supports three independent mechanisms (`$UJIN_MARKETPLACE_PROFILES` env var, `profiles_path:` config key, and inline `profiles:` mapping); refactored into three numbered subsections matching the acceptance surface. No production-code changes.
