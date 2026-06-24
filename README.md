@@ -105,6 +105,7 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
 ```bash
 ujin jobs-serve --plan examples/ingest-plan.yaml   # :8902 — many jobs from one file
 ujin plan validate examples/ingest-plan.yaml        # validate plan before deploying (exit 0 = ok)
+ujin plan validate examples/ingest-plan.yaml --schema   # also check document shape vs the JSON Schema
 ujin plan render   examples/ingest-plan.yaml        # print fully-expanded job specs (--json for CI)
 ujin plan render   examples/ingest-plan.yaml --summary  # concise overview: job count + one line per job
 
@@ -183,12 +184,17 @@ pattern that matches nothing exits non-zero with a clean `ujin: …` message.
 
 `ujin plan validate` checks a plan file **or** a workflows directory with the same
 loaders as `jobs-serve` — identical ids and error messages — without starting the
-server. `ujin plan render` prints every fully-expanded `JobSpec` after all resolution
-layers so you can verify matrix fan-out and defaults merges before deploying. Add
-`--explain` to annotate each job with its provenance — the originating source file
-and, for matrix/for_each-expanded jobs, the matrix entry index and variable map that
-produced it (as `#` comments in YAML, or a `provenance` object with `--json`); the
-default render output is unchanged without the flag.
+server. Add `--schema` to *additionally* check the **unresolved** document against the
+JSON Schema `ujin plan schema` emits, reporting structural shape violations (a scalar
+document, a non-list `jobs:`, a string `source:`) with the offending JSON path (e.g.
+`$.jobs[0].source`); it complements the loader and `--strict` checks and is off by
+default, so output and exit codes are byte-for-byte unchanged without it. `ujin plan
+render` prints every fully-expanded `JobSpec` after all resolution layers so you can
+verify matrix fan-out and defaults merges before deploying. Add `--explain` to annotate
+each job with its provenance — the originating source file and, for matrix/for_each-expanded
+jobs, the matrix entry index and variable map that produced it (as `#` comments in YAML,
+or a `provenance` object with `--json`); the default render output is unchanged without
+the flag.
 
 `ujin plan diff OLD NEW` resolves two plans (or workflows directories) with the same
 loaders and reports, keyed by final job id, which jobs were **added** in `NEW` (`+`),
@@ -207,7 +213,8 @@ INGEST-PLAN / workflow file format itself — the per-job shape, the top-level
 `defaults:` block, `include:`/`use:`, `matrix:`/`for_each:`, `vars:`, and
 `profiles:` — to stdout, or to a file with `--out PATH`. Feed it to an editor for
 autocompletion/linting, or to a draft-2020-12 validator for a CI well-formedness
-check before `plan validate` runs the loaders. It describes the *unresolved* file,
+check before `plan validate` runs the loaders (or run `plan validate --schema` to
+perform that same check inline, no external validator needed). It describes the *unresolved* file,
 so it is deliberately permissive (a job may omit keys that `defaults:` or the
 filename stem supply) but still rejects a structurally-malformed plan (a scalar
 document, a non-list `jobs:`, a string `source:`). The command is read-only and
@@ -343,7 +350,7 @@ ujin serve targets.yaml      # run the poll engine as a daemon
 ujin api [targets.yaml]      # poller control service (REST + WS) on :8900
 ujin scrape-serve            # rich scrape HTTP service on :8901
 ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
-ujin plan validate <path>    # validate a plan file or workflows dir (--json/--strict for CI)
+ujin plan validate <path>    # validate a plan file or workflows dir (--json/--strict for CI; --schema checks document shape)
 ujin plan render <path>      # resolve and print every expanded job (--json for CI; --summary for concise overview)
 ujin plan diff OLD NEW       # diff two plans/dirs by resolved job id (--json; --exit-code/--check exits non-zero on any diff)
 ujin plan schema             # print the INGEST-PLAN/workflow JSON Schema, draft 2020-12 (--out PATH to a file)

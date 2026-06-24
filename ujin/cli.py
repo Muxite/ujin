@@ -263,6 +263,44 @@ def _cmd_jobs_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _collect_schema_violations(path: Path) -> list:
+    """Return structural JSON-Schema violations for the UNRESOLVED document(s) at *path*.
+
+    Reads the raw YAML (no env substitution — that only ever touches string values,
+    never the document shape) and checks it against the schema ``ujin plan schema``
+    emits, via the stdlib-only walker in :func:`ujin.jobs.schema.validate_document`.
+    A directory validates every top-level ``*.y*ml`` workflow file — the same scan
+    the loader uses — prefixing each message with the file name; a single file
+    validates that one document. Each message names the offending JSON location
+    (e.g. ``$.jobs[0].source``). Documents that fail to parse as YAML are skipped:
+    the loader-level check already reports those, so the schema pass only *adds*
+    structural findings rather than duplicating parse errors.
+    """
+    import yaml
+
+    from ujin.jobs.schema import plan_schema, validate_document
+
+    schema = plan_schema()
+    out: list = []
+
+    def _check(doc_path: Path, label: "str | None") -> None:
+        try:
+            document = yaml.safe_load(doc_path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            return  # parse/read failures are the loader's domain, not the schema's
+        if document is None:  # empty / comment-only file declares no document
+            return
+        for msg in validate_document(document, schema):
+            out.append(f"{label}: {msg}" if label else msg)
+
+    if path.is_dir():
+        for fp in sorted(path.glob("*.y*ml")):
+            _check(fp, fp.name)
+    else:
+        _check(path, path.name)
+    return out
+
+
 def _cmd_plan_validate(args: argparse.Namespace) -> int:
     """Validate an INGEST-PLAN file or a workflows directory without starting the server.
 
@@ -274,6 +312,12 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
     ``--json``). By default they are advisory and do not affect the exit code — a
     previously-valid file stays valid. ``--strict`` promotes every such warning to a
     failure (non-zero exit) for CI use, leaving genuine load failures unchanged.
+
+    ``--schema`` additionally checks the *unresolved* document(s) against the JSON
+    Schema ``ujin plan schema`` emits, reporting structural shape violations (a
+    scalar document, a non-list ``jobs:``, a string ``source:``) with the offending
+    JSON path. It complements — does not replace — the checks above and is off by
+    default, so output and exit codes are byte-for-byte unchanged without the flag.
     """
     import json as _json
 
@@ -324,13 +368,23 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
             return 1
 
     resolved = [s.id for s in specs]
+    # `--schema` additionally checks the UNRESOLVED document against the JSON Schema
+    # `ujin plan schema` emits — a structural shape check that complements (does not
+    # replace) the loader-level and --strict checks above. Off by default, so output
+    # and exit codes are byte-for-byte unchanged without the flag.
+    schema = getattr(args, "schema", False)
+    schema_errors = _collect_schema_violations(path) if schema else []
     # Schema warnings only fail the run under --strict; otherwise they are reported
     # but the file stays valid (additive default — no previously-valid file breaks).
-    ok = not failed and not (strict and warnings)
+    # Structural --schema violations are hard failures, like a load failure.
+    ok = not failed and not (strict and warnings) and not schema_errors
 
     if args.json:
-        print(_json.dumps({"ok": ok, "resolved": resolved, "failed": failed,
-                           "warnings": warnings, "strict": strict}, indent=2))
+        payload = {"ok": ok, "resolved": resolved, "failed": failed,
+                   "warnings": warnings, "strict": strict}
+        if schema:
+            payload["schema_errors"] = schema_errors
+        print(_json.dumps(payload, indent=2))
     else:
         for job_id in resolved:
             print(f"ok  {job_id}")
@@ -339,8 +393,10 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
         label = "FAIL" if strict else "WARN"
         for w in warnings:
             print(f"{label}  {w}")
+        for e in schema_errors:
+            print(f"FAIL  schema: {e}")
         if not ok:
-            n = len(failed) + (len(warnings) if strict else 0)
+            n = len(failed) + (len(warnings) if strict else 0) + len(schema_errors)
             print(
                 f"ujin: {n} failure(s); {len(resolved)} job(s) resolved",
                 file=sys.stderr,
@@ -1168,7 +1224,8 @@ def main(argv: list[str] | None = None) -> int:
                "  ujin plan validate ./ingest-plan.yaml\n"
                "  ujin plan validate ./workflows/\n"
                "  ujin plan validate ./ingest-plan.yaml --json\n"
-               "  ujin plan validate ./ingest-plan.yaml --strict   # fail CI on unknown keys",
+               "  ujin plan validate ./ingest-plan.yaml --strict   # fail CI on unknown keys\n"
+               "  ujin plan validate ./ingest-plan.yaml --schema   # check document shape",
     )
     p_plan_validate.add_argument("path",
                                  help="INGEST-PLAN file or workflows directory to validate")
@@ -1177,6 +1234,11 @@ def main(argv: list[str] | None = None) -> int:
     p_plan_validate.add_argument("--strict", action="store_true",
                                  help="treat unrecognized/misspelled keys as failures "
                                       "(non-zero exit) instead of advisory warnings")
+    p_plan_validate.add_argument("--schema", action="store_true",
+                                 help="also check the unresolved document(s) against the "
+                                      "JSON Schema `ujin plan schema` emits, reporting "
+                                      "structural shape violations (e.g. a non-list `jobs:`, "
+                                      "a string `source:`) with the offending JSON path")
     p_plan_validate.add_argument(
         "--env-file", default=None, metavar="PATH",
         help="load KEY=VALUE pairs from PATH and use them for ${VAR} substitution "
