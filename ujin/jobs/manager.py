@@ -79,6 +79,14 @@ class JobManager:
         self.hub = hub
         self.scrape_service = scrape_service
         self.jobs: dict[str, JobHandle] = {}
+        # Provenance: job id -> where the running job came from ("plan" for the
+        # mounted INGEST-PLAN, "preload"/"workflow" for the positional/dir
+        # loaders, "api" for REST/`create`). Used by `POST /plan/reload?prune=true`
+        # to remove only plan-owned jobs dropped from the file — API- and
+        # preload-created jobs are never pruned. Jobs rebuilt from the durable
+        # store (see `load_from_store`) carry no entry until a loader re-claims
+        # them, so an unknown provenance is treated as "not plan-owned".
+        self.origins: dict[str, str] = {}
 
     @property
     def _ctx(self) -> BuildContext:
@@ -168,10 +176,25 @@ class JobManager:
         return handle
 
     # -- CRUD -------------------------------------------------------------- #
-    def create(self, spec: JobSpec) -> JobHandle:
+    def create(self, spec: JobSpec, *, origin: str = "api") -> JobHandle:
+        """Validate, persist, and track a job.
+
+        *origin* records provenance (``"plan"``/``"preload"``/``"workflow"``/
+        ``"api"``) so a plan reload can prune only plan-owned jobs. It defaults to
+        ``"api"`` — the value for REST-created jobs — so existing callers are
+        unaffected.
+        """
         handle = self.register(spec)  # validates kinds before we persist
         self.store.upsert(spec)
+        self.origins[spec.id] = origin
         return handle
+
+    def plan_owned_ids(self) -> list[str]:
+        """Ids the manager tracks as originating from the INGEST-PLAN (a snapshot).
+
+        Returned as a fresh list so callers may delete jobs while iterating it.
+        """
+        return [jid for jid, origin in self.origins.items() if origin == "plan"]
 
     def get(self, job_id: str) -> JobHandle | None:
         return self.jobs.get(job_id)
@@ -184,6 +207,7 @@ class JobManager:
         if handle is None:
             return False
         self.engine.targets.pop(job_id, None)
+        self.origins.pop(job_id, None)
         self.store.delete(job_id)
         return True
 

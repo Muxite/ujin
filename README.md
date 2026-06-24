@@ -144,7 +144,9 @@ layers so you can verify matrix fan-out and defaults merges before deploying.
 Changed the plan file? `POST /plan/reload` re-reads it and upserts the resolved jobs
 in-process — no restart — sharing the startup loader (a single bad job is reported,
 the rest reload) and refreshing the `/health` plan status; with no plan configured
-it is a safe no-op. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md), [docs/WORKFLOWS.md](docs/WORKFLOWS.md),
+it is a safe no-op. Add `?prune=true` (or a `{"prune": true}` body) to also remove
+plan-owned jobs dropped from the file (returned in a `pruned` list); API- and
+preload-created jobs are never pruned. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md), [docs/WORKFLOWS.md](docs/WORKFLOWS.md),
 and the [external-config recipe](docs/recipes/external-config-flow.md).
 
 ## Watch a page for change
@@ -273,7 +275,8 @@ Three FastAPI apps — run any combination. Full reference in
   `GET/DELETE /jobs/{id}`, `/jobs/{id}/run|pause|resume|runs|events`,
   `/jobs/{id}/content` + `/jobs/{id}/results` (hand out obtained data), `WS /jobs/events`,
   `/kinds`, `/metrics`, `POST /plugins/reload`, `POST /plan/reload` (re-read the
-  INGEST-PLAN, no restart). Durable + plugin-extensible.
+  INGEST-PLAN, no restart; `?prune=true` also drops plan-owned jobs gone from the
+  file). Durable + plugin-extensible.
   File-driven workflows load from `./workflows` (with `matrix:`/`for_each:` template
   fan-out) — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 - **Poller control** (`:8900`): `GET /health /metrics /targets`,

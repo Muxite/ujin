@@ -104,6 +104,7 @@ GET    /jobs/{id}/results?limit=N  recent buffer of obtained results (per change
 WS     /jobs/events             live change stream (all jobs)
 POST   /plugins/reload          re-import plugins -> {loaded, failed}
 POST   /plan/reload             re-read the INGEST-PLAN -> {reloaded, path, loaded, failed}
+POST   /plan/reload?prune=true   …also remove plan-owned jobs gone from the file -> +{pruned}
 ```
 
 The `plan` field in `/health` is only present when `--plan`/`$UJIN_INGEST_PLAN` is
@@ -115,7 +116,10 @@ stable ids — picking up added/changed jobs without restarting the server — t
 refreshes the `/health` plan status. It shares the startup loader, so a single
 malformed job is reported in `failed` while the rest reload. With no plan configured
 it is a safe no-op (`{"reloaded": false, "detail": "no plan configured", …}`). Like
-every mutating route it sits behind the optional API-key auth — see
+every mutating route it sits behind the optional API-key auth. Add `?prune=true`
+(or a `{"prune": true}` body) to also **remove** plan-owned jobs whose ids vanished
+from the file (returned in a `pruned` list); jobs created via the API or the
+positional preload are never pruned. See
 [INGEST_PLAN.md](INGEST_PLAN.md#reloading-a-plan-without-restarting).
 
 File-driven jobs (**workflows**) load from `UJIN_WORKFLOWS_DIR` on startup (id =
