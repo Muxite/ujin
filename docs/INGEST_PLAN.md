@@ -307,6 +307,50 @@ malformed file), so a transient read error never wipes plan jobs — that reload
 the failure and `pruned` is `[]`. Without the option the response omits `pruned` entirely
 and nothing is removed, byte-for-byte the upsert-only behaviour.
 
+### Previewing a reload (dry run)
+
+To see what a reload *would* do before committing to it, add `?dry_run=true` (or a
+`{"dry_run": true}` JSON body, accepted exactly like `prune`):
+
+```bash
+curl -X POST 'localhost:8902/plan/reload?dry_run=true'
+# combine with prune to also preview removals:
+curl -X POST 'localhost:8902/plan/reload?prune=true&dry_run=true'
+# or, equivalently, via a JSON body:
+curl -X POST localhost:8902/plan/reload -H 'content-type: application/json' \
+     -d '{"dry_run": true, "prune": true}'
+```
+
+A dry run resolves the plan through the **identical** loader as a real reload
+(`defaults:`/`include:`/`matrix:`/`${VAR}`) and the same `--only`/`--exclude` filters,
+but **mutates nothing** — the job manager is untouched, so `GET /jobs` and the
+`/health` plan block are identical immediately before and after the call. Instead of
+upserting, the response classifies each resolved job id:
+
+```json
+{
+  "reloaded": false,
+  "dry_run": true,
+  "path": "/data/ingest-plan.yaml",
+  "added": ["feed-business"],
+  "updated": ["feed-tech"],
+  "unchanged": ["crossref", "feed-science"],
+  "loaded": [],
+  "failed": [],
+  "removed": ["feed-defunct"]
+}
+```
+
+`added` are ids not currently running (a real reload would create them), `updated`
+are running jobs whose resolved spec differs (would be re-registered), and
+`unchanged` are running jobs the re-read plan leaves identical (a no-op upsert).
+`removed` is present only with `prune` and lists the plan-owned ids a real prune
+would delete — but no job is removed. `reloaded` stays `false`; nothing was applied.
+A malformed job still surfaces in `failed`, and the same guards apply: a file-level
+read error reports no removals, and `--only` matching nothing is reported rather than
+fatal. With **no plan configured** the dry run is a non-error no-op returning
+`{"reloaded": false, "dry_run": true, "detail": "no plan configured", "loaded": [], "failed": []}`.
+
 ## Validating a plan without starting the server
 
 Use `ujin plan validate` to check a plan file (or a workflows directory) with the
@@ -478,6 +522,60 @@ ujin plan render ./ingest-plan.yaml --explain --json | python3 -c \
 
 `--explain` composes with `--json`, `--only`/`--exclude` (provenance survives
 selection — it is keyed to the final expanded id), and `--env-file`.
+
+## Diffing two plans — `plan diff`
+
+Use `ujin plan diff OLD NEW` to see what changed between two plans (or two
+workflows directories) **before** you reload or redeploy. Both inputs are resolved
+with the same loaders as `plan validate`/`plan render` — `defaults:` deep-merge,
+`include:`/`use:` fragments, `matrix:`/`for_each:` fan-out, and `${VAR}`
+substitution all expanded — then compared keyed by **final job id**:
+
+```bash
+ujin plan diff ./old-plan.yaml ./ingest-plan.yaml          # human-readable
+ujin plan diff ./old-workflows/ ./workflows/               # also works for dirs
+ujin plan diff ./old-plan.yaml ./ingest-plan.yaml --json   # machine-readable (CI)
+```
+
+The human form prints one line per affected job — `+` added in `NEW`, `-` removed
+in `NEW`, `~` changed (present in both but with a differing resolved spec) — and a
+summary count on stderr:
+
+```
++ feed-business
+- feed-tech
+~ feed-science
+ujin: 1 added, 1 removed, 1 changed
+```
+
+Diffing a plan against an identical copy prints `no changes`. The comparison
+ignores each job's per-load `created_at` timestamp, so two files with identical
+content diff empty.
+
+`--json` emits the same information as a structured object with distinct
+`added`/`removed`/`changed` groupings. Added and removed entries carry the job's
+resolved `spec`; changed entries carry both `old` and `new` (each with the
+`created_at` noise stripped), so a downstream tool can show a field-level diff:
+
+```bash
+ujin plan diff ./old-plan.yaml ./ingest-plan.yaml --json | python3 -c \
+  "import sys,json; d=json.load(sys.stdin); \
+   print(len(d['added']),'added', len(d['removed']),'removed', len(d['changed']),'changed')"
+```
+
+```json
+{
+  "added":   [{"id": "feed-business", "spec": { … }}],
+  "removed": [{"id": "feed-tech", "spec": { … }}],
+  "changed": [{"id": "feed-science", "old": { … }, "new": { … }}]
+}
+```
+
+`plan diff` exits **zero** whenever both inputs resolve — including when there is
+no difference. `--env-file` is accepted consistently with the other plan
+subcommands (it fills in `${VAR}`s not already in the environment for both plans).
+An unreadable or schema-invalid `OLD`/`NEW` input exits non-zero with a clean
+`ujin: …` message and no traceback.
 
 ## Job-id selection — `--only` and `--exclude`
 

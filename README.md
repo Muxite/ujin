@@ -16,8 +16,9 @@ The **ultimate scraper-poller**. Three parts that share one toolkit:
    every job, reusable `include:`/`use:` fragment files, and `matrix:`/`for_each:`
    fan-out to turn one template into N jobs; or mount a single **INGEST-PLAN**
    file with `--plan` / `$UJIN_INGEST_PLAN` for one-file multi-job deploys.
-   Validate and inspect offline with `ujin plan validate` / `ujin plan render`
-   before committing to a deploy.
+   Validate and inspect offline with `ujin plan validate` / `ujin plan render`,
+   and diff two plans by resolved job id with `ujin plan diff`, before committing
+   to a deploy.
 
 It bundles the [obscura](https://github.com/Muxite/obscura) headless renderer as
 a submodule, and stays a **pure-python pip install** (the renderer is built
@@ -117,6 +118,10 @@ ujin jobs-serve   --plan examples/ingest-plan.yaml --only 'feed-*'     # preload
 # Provenance — show which source file and matrix row produced each expanded job:
 ujin plan render  examples/ingest-plan.yaml --explain                  # `# source:` / `# matrix:` comments
 ujin plan render  examples/ingest-plan.yaml --explain --json           # machine-readable provenance
+
+# Diff two plans by resolved job id — what was added, removed, or changed:
+ujin plan diff    old-plan.yaml examples/ingest-plan.yaml              # `+`/`-`/`~` per job id
+ujin plan diff    old-plan.yaml examples/ingest-plan.yaml --json       # machine-readable (CI)
 ```
 
 `--plan` (or `$UJIN_INGEST_PLAN`) mounts a single YAML file that declares many jobs
@@ -149,12 +154,25 @@ and, for matrix/for_each-expanded jobs, the matrix entry index and variable map 
 produced it (as `#` comments in YAML, or a `provenance` object with `--json`); the
 default render output is unchanged without the flag.
 
+`ujin plan diff OLD NEW` resolves two plans (or workflows directories) with the same
+loaders and reports, keyed by final job id, which jobs were **added** in `NEW` (`+`),
+**removed** in `NEW` (`-`), and **changed** (`~`, present in both but with a differing
+resolved spec). It exits zero whenever both inputs resolve — an identical pair prints
+`no changes`. `--json` emits the same information as a structured object with distinct
+`added`/`removed`/`changed` groupings (added/removed carry each job's `spec`; changed
+carries `old` and `new`), and `--env-file` is accepted as with the other plan
+subcommands. An unreadable or schema-invalid input exits non-zero with a clean
+`ujin: …` message and no traceback.
+
 Changed the plan file? `POST /plan/reload` re-reads it and upserts the resolved jobs
 in-process — no restart — sharing the startup loader (a single bad job is reported,
 the rest reload) and refreshing the `/health` plan status; with no plan configured
 it is a safe no-op. Add `?prune=true` (or a `{"prune": true}` body) to also remove
 plan-owned jobs dropped from the file (returned in a `pruned` list); API- and
-preload-created jobs are never pruned. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md), [docs/WORKFLOWS.md](docs/WORKFLOWS.md),
+preload-created jobs are never pruned. Add `?dry_run=true` (or a `{"dry_run": true}`
+body) to preview the reload without touching the manager — the response reports the
+ids that would be `added`/`updated`/`unchanged` (and `removed` with `prune`) while
+`GET /jobs` stays identical. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md), [docs/WORKFLOWS.md](docs/WORKFLOWS.md),
 and the [external-config recipe](docs/recipes/external-config-flow.md).
 
 ## Watch a page for change
@@ -256,6 +274,7 @@ ujin scrape-serve            # rich scrape HTTP service on :8901
 ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
 ujin plan validate <path>    # validate a plan file or workflows dir (--json/--strict for CI)
 ujin plan render <path>      # resolve and print every expanded job (--json for CI)
+ujin plan diff OLD NEW       # diff two plans by resolved job id: added/removed/changed (--json)
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
 ujin learned site_state.db   # inspect the durable per-host learned state (--json)
@@ -284,7 +303,8 @@ Three FastAPI apps — run any combination. Full reference in
   `/jobs/{id}/content` + `/jobs/{id}/results` (hand out obtained data), `WS /jobs/events`,
   `/kinds`, `/metrics`, `POST /plugins/reload`, `POST /plan/reload` (re-read the
   INGEST-PLAN, no restart; `?prune=true` also drops plan-owned jobs gone from the
-  file). Durable + plugin-extensible.
+  file, `?dry_run=true` previews the effect without mutating anything). Durable +
+  plugin-extensible.
   File-driven workflows load from `./workflows` (with `matrix:`/`for_each:` template
   fan-out) — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 - **Poller control** (`:8900`): `GET /health /metrics /targets`,

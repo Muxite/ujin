@@ -18,6 +18,7 @@ Endpoints::
   GET    /jobs/{id}/runs        recent run history
   GET    /jobs/{id}/events      recent persisted events (sqlite sink)
   POST   /plan/reload           re-read the configured INGEST-PLAN and upsert jobs
+                                (?prune drops removed jobs; ?dry_run previews only)
   WS     /jobs/events           live stream of change events
 
 Needs the ``jobs`` extra (fastapi, uvicorn, websockets, pydantic, scrape stack).
@@ -931,6 +932,79 @@ def _apply_ingest_plan(
     return plan_status
 
 
+def _spec_differs(current: "JobSpec", resolved: "JobSpec") -> bool:
+    """True if *resolved* would change the running job *current* on a reload.
+
+    Compares the declared job (source/transforms/sinks/schedule/name/enabled),
+    ignoring ``created_at`` — that is stamped at parse time, not declared by the
+    plan, so an otherwise-identical re-read reports as *unchanged* rather than
+    *updated*.
+    """
+    a = current.to_dict(); a.pop("created_at", None)
+    b = resolved.to_dict(); b.pop("created_at", None)
+    return a != b
+
+
+def _dryrun_ingest_plan(
+    manager, plan_src, only=None, exclude=None, *, prune=False
+) -> "dict[str, list]":
+    """Preview a reload of *plan_src* WITHOUT mutating *manager*.
+
+    Resolves the plan through the **identical** :func:`_load_ingest_plan`
+    resolution (defaults/include/matrix/``${VAR}``) and ``--only``/``--exclude``
+    selection as :func:`_apply_ingest_plan`, then classifies every resolved job id
+    against the running jobs instead of upserting it:
+
+      * ``added``     — id not currently running (a real reload would create it);
+      * ``updated``   — id running but the resolved spec differs (would re-register);
+      * ``unchanged`` — id running with an identical resolved spec (a no-op upsert).
+
+    With *prune* set it also lists, under ``removed``, the plan-owned ids the
+    re-read plan no longer declares — exactly the ids a real prune would delete,
+    with the same file-level-read-failure guard, but **nothing is removed**.
+
+    Returns the ``{"path", "loaded", "failed"}`` summary shape (``loaded`` stays
+    empty — nothing is loaded in a dry run) extended with the classification
+    lists, so the response mirrors the real reload summary. Raises ``ValueError``
+    on an ``--only`` pattern that matches nothing, like the real apply, so the
+    caller reports it without killing the server.
+    """
+    plan_status: dict[str, list] = {
+        "path": str(plan_src), "loaded": [], "failed": [],
+    }
+    present: list[str] = []
+    plan_specs = _load_ingest_plan(
+        plan_src, failed=plan_status["failed"], present=present
+    )
+    if only is not None or exclude is not None:
+        plan_specs = _select_jobs(plan_specs, only, exclude)
+    added: list[str] = []
+    updated: list[str] = []
+    unchanged: list[str] = []
+    for spec in plan_specs:
+        handle = manager.get(spec.id)
+        if handle is None:
+            added.append(spec.id)
+        elif _spec_differs(handle.spec, spec):
+            updated.append(spec.id)
+        else:
+            unchanged.append(spec.id)
+    plan_status["added"] = added
+    plan_status["updated"] = updated
+    plan_status["unchanged"] = unchanged
+    if prune:
+        # Mirror _apply_ingest_plan's prune gate exactly, but only *report* the
+        # ids — never delete. A file-level read failure (no present ids + a
+        # failure record) means the empty id set can't be trusted, so report none.
+        keep = set(present)
+        file_failed = not present and bool(plan_status["failed"])
+        removed: list[str] = []
+        if not file_failed:
+            removed = [jid for jid in manager.plan_owned_ids() if jid not in keep]
+        plan_status["removed"] = sorted(removed)
+    return plan_status
+
+
 def create_jobs_app(
     config_path: str | None = None,
     *,
@@ -1111,7 +1185,9 @@ def create_jobs_app(
         return status
 
     @app.post("/plan/reload")
-    async def plan_reload(request: Request, prune: bool = False) -> dict[str, Any]:
+    async def plan_reload(
+        request: Request, prune: bool = False, dry_run: bool = False
+    ) -> dict[str, Any]:
         """Re-read the configured INGEST-PLAN and upsert its jobs, no restart.
 
         Goes through the same loader and ``--only``/``--exclude`` selection as
@@ -1130,18 +1206,43 @@ def create_jobs_app(
         positional ``jobs.yaml`` preload are never pruned, even when absent from the
         plan. Without the option the reload is upsert-only and removes nothing — the
         default, byte-for-byte the pre-prune behaviour.
+
+        Pass ``?dry_run=true`` (or a ``{"dry_run": true}`` JSON body) to **preview**
+        the effect without mutating anything: the plan resolves exactly as a real
+        reload would, but instead of upserting, the response reports which plan job
+        ids would be ``added``/``updated``/``unchanged`` (and, with ``prune``, which
+        would be ``removed``). ``reloaded`` stays ``false`` and ``GET /jobs`` and
+        ``GET /health`` are untouched — identical immediately before and after.
         """
-        # Accept the opt-in via either ?prune=true or a {"prune": true} JSON body.
-        if not prune:
+        # Accept the opt-ins via either query params (?prune=true&dry_run=true) or a
+        # JSON body ({"prune": true, "dry_run": true}). Read the body once for both.
+        if not prune or not dry_run:
             try:
                 body = await request.json()
-            except Exception:  # noqa: BLE001 - no/invalid body -> no prune
+            except Exception:  # noqa: BLE001 - no/invalid body -> query params only
                 body = None
             if isinstance(body, dict):
-                prune = bool(body.get("prune", False))
+                if not prune:
+                    prune = bool(body.get("prune", False))
+                if not dry_run:
+                    dry_run = bool(body.get("dry_run", False))
         if not plan_src:
-            return {"reloaded": False, "detail": "no plan configured",
-                    "loaded": [], "failed": []}
+            out = {"reloaded": False, "detail": "no plan configured",
+                   "loaded": [], "failed": []}
+            if dry_run:
+                out["dry_run"] = True
+            return out
+        if dry_run:
+            # Preview only: never touch the manager or app.state.plan.
+            try:
+                preview = _dryrun_ingest_plan(
+                    app.state.manager, plan_src, only=only, exclude=exclude,
+                    prune=prune,
+                )
+            except ValueError as exc:
+                return {"reloaded": False, "dry_run": True, "detail": str(exc),
+                        "loaded": [], "failed": []}
+            return {"reloaded": False, "dry_run": True, **preview}
         try:
             plan_status = _apply_ingest_plan(
                 app.state.manager, plan_src, only=only, exclude=exclude, prune=prune
