@@ -33,9 +33,13 @@ into your app and evolve it there.
 
 ## Supplying profiles
 
-Two mechanisms, usable together (inline overrides file entries of the same name):
+Three mechanisms, usable together — inline `profiles:` overrides same-named entries
+from `profiles_path:` or `$UJIN_MARKETPLACE_PROFILES`:
 
-### 1. Mounted file (volume) — `UJIN_MARKETPLACE_PROFILES`
+### 1. Mounted file (volume) — `$UJIN_MARKETPLACE_PROFILES`
+
+Point the env var at a YAML/JSON file on the host (or a Docker volume) and every
+`marketplace_search` source in the container picks it up automatically:
 
 ```yaml
 # docker-compose.yml (in the consuming app)
@@ -47,15 +51,32 @@ services:
       UJIN_MARKETPLACE_PROFILES: /config/marketplace_profiles.yaml
 ```
 
-### 2. In the workflow / source config (held by the calling program)
+`$UJIN_MARKETPLACE_PROFILES` is consulted as a **fallback** when neither `profiles:`
+nor `profiles_path:` is present in the source config.
+
+### 2. File path in the source config — `profiles_path:`
+
+Name a YAML/JSON profile file directly in the workflow or job source config:
 
 ```yaml
 source:
   kind: marketplace_search
   profile: ebay
-  # either point at a file...
   profiles_path: /config/marketplace_profiles.yaml
-  # ...or pass the mapping inline:
+  terms_per_poll: 3
+  max_results: 8
+```
+
+`profiles_path:` takes precedence over `$UJIN_MARKETPLACE_PROFILES`.
+
+### 3. Inline mapping in the source config — `profiles:`
+
+Embed the profile definition directly in the workflow or job:
+
+```yaml
+source:
+  kind: marketplace_search
+  profile: ebay
   profiles:
     ebay:
       domain: ebay.com
@@ -65,6 +86,11 @@ source:
   terms_per_poll: 3
   max_results: 8
 ```
+
+Inline `profiles:` overrides same-named entries from `profiles_path:` and
+`$UJIN_MARKETPLACE_PROFILES`. All three mechanisms compose: a source that sets both
+`profiles_path:` and `profiles:` uses the inline entries for named overrides and
+falls back to the file for the rest.
 
 If the named `profile` isn't found in the resolved set, construction raises a clear
 `ValueError` listing what's available — ujin no longer falls back to a built-in profile.

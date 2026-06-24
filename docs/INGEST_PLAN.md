@@ -4,7 +4,7 @@ An **INGEST-PLAN** is a single YAML/JSON file that declares **many jobs at once*
 It's the file-driven counterpart to the [workflows](WORKFLOWS.md) directory for
 when you'd rather mount *one file* than a folder: same `source → transforms →
 sinks → schedule` job shape, same engine, same durability, and the same additive
-conveniences (`defaults:`, `include:`/`use:`, `matrix:`/`for_each:`).
+conveniences (`defaults:`, `include:`/`use:`, `vars:`, `profiles:`, `matrix:`/`for_each:`).
 
 A plan is **strictly additive**: one that uses none of `defaults`/`include`/
 `matrix` loads to exactly the jobs of the equivalent plain list, and a deploy with
@@ -689,12 +689,55 @@ ujin plan validate ./ingest-plan.yaml --strict        # CI: unknown keys fail th
 ujin plan validate ./ingest-plan.yaml --strict --json
 ```
 
+### Checking document shape — `--schema`
+
+The loader and `--strict` checks above operate on the *resolved* plan (after
+`defaults:` merge, `include:` splicing, and `matrix:` fan-out). `--schema` adds an
+*opt-in*, complementary check of the **unresolved** document against the JSON Schema
+[`ujin plan schema`](#exporting-the-file-format-schema--plan-schema) emits — the same
+schema, applied inline with no external validator. It reports structural shape
+violations, each naming the offending JSON path (the document root `$`, a key, or a
+job index):
+
+```bash
+ujin plan validate ./ingest-plan.yaml --schema          # check shape too
+ujin plan validate ./ingest-plan.yaml --schema --json   # CI-friendly
+```
+
+A structurally-malformed document fails (exit non-zero) with the location named:
+
+```
+FAIL  schema: ingest-plan.yaml: $.jobs: expected array, got string
+ujin: 1 failure(s); 0 job(s) resolved
+```
+
+With `--json` the violations appear in an added `schema_errors` array (present only
+when `--schema` is passed, so output is byte-for-byte unchanged without the flag):
+
+```json
+{
+  "ok": false,
+  "resolved": [],
+  "failed": [],
+  "warnings": [],
+  "strict": false,
+  "schema_errors": ["ingest-plan.yaml: $.jobs[0].source: expected object, got string"]
+}
+```
+
+The check is implemented with a small stdlib-only walker over the schema dict, so it
+adds **no mandatory third-party dependency**. Because the schema describes the
+*unresolved* file and keeps `additionalProperties` open, `--schema` never reports
+unknown keys (that stays the job of `--strict`) and never rejects a plan the loader
+would accept — it only catches the document being the wrong *shape*. It is off by
+default; without `--schema`, `ujin plan validate` output and exit codes are unchanged.
+
 ## Inspecting fully-resolved jobs
 
 Use `ujin plan render` to print every fully-expanded `JobSpec` — after all five
 resolution layers (`defaults:` deep-merge, `include:`/`use:` fragments,
-`matrix:`/`for_each:` fan-out, `${VAR}` substitution) — in human-readable YAML,
-using the **same loaders** as `jobs-serve` and `plan validate`:
+`matrix:`/`for_each:` fan-out, `vars:` defaults, and `${VAR}` substitution) — in
+human-readable YAML, using the **same loaders** as `jobs-serve` and `plan validate`:
 
 ```bash
 ujin plan render ./ingest-plan.yaml          # YAML, one document per job
@@ -759,7 +802,7 @@ job showing its id, source kind (and url if present), schedule, and number of si
 ```
 
 `--summary` reuses the same loaders as the normal render path, so resolution
-(`defaults:`, `include:`/`use:`, `matrix:`/`for_each:`, profiles, `${VAR}`) is
+(`defaults:`, `include:`/`use:`, `matrix:`/`for_each:`, `vars:`, profiles, `${VAR}`) is
 identical. It composes with `--only`/`--exclude`, `--env-file`, and `--profile`;
 the default `ujin plan render` output (no flag) is byte-for-byte unchanged.
 
