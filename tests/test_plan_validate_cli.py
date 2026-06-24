@@ -395,6 +395,126 @@ def test_required_var_no_traceback(tmp_path, capsys, monkeypatch):
     assert "EnvVarRequiredError" not in err
 
 
+# ── improved diagnostics: error messages name the offending file/job ─────────── #
+#
+# Each test below exercises a distinct invalid-input case and asserts on
+# stable outcome-level facts: exit code non-zero, and that the offending
+# file name (and job id where applicable) appears somewhere in the output.
+# Exact wording is intentionally not pinned — only structural presence.
+
+def test_per_job_error_names_plan_file(tmp_path, capsys):
+    # A bad matrix on a named job should produce a per-job error that
+    # names both the plan file and the job id.
+    plan = tmp_path / "myplan.yaml"
+    _write(plan, [
+        {"id": "good-job", **_minimal_job()},
+        {"id": "bad-job", "matrix": "not-a-list", **_minimal_job()},
+    ])
+    rc = main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "myplan.yaml" in out
+    assert "bad-job" in out
+
+
+def test_workflow_dir_failure_names_workflow_file(tmp_path, capsys):
+    # A workflow file that fails to parse should produce a failure record
+    # that names the workflow file.
+    (tmp_path / "broken-workflow.yaml").write_text(
+        "key: [unclosed bracket", encoding="utf-8"
+    )
+    rc = main(["plan", "validate", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "broken-workflow.yaml" in out
+    assert "ujin:" in out
+
+
+def test_duplicate_job_id_exits_nonzero_names_file(tmp_path, capsys):
+    # Two entries sharing an explicit id in the same plan → per-job failure
+    # naming the plan file.
+    plan = tmp_path / "dup-plan.yaml"
+    _write(plan, [
+        {"id": "same-id", **_minimal_job("https://a/")},
+        {"id": "same-id", **_minimal_job("https://b/")},
+    ])
+    rc = main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "dup-plan.yaml" in out
+    assert "same-id" in out
+
+
+def test_defaults_type_mismatch_names_file(tmp_path, capsys):
+    # `defaults:` must be a mapping; a list here is a file-level error
+    # that should name the plan file.
+    plan = tmp_path / "bad-defaults.yaml"
+    _write(plan, {"defaults": [1, 2], "jobs": [{"id": "j", **_minimal_job()}]})
+    rc = main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "bad-defaults.yaml" in out
+    assert "ujin:" in out
+
+
+def test_matrix_non_dict_row_names_job_and_file(tmp_path, capsys):
+    # A matrix row that is a string (not a variable map) → per-job error
+    # naming the job id and the plan file.
+    plan = tmp_path / "matrix-plan.yaml"
+    _write(plan, [{"id": "matrix-job", "matrix": ["not-a-map"], **_minimal_job()}])
+    rc = main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "matrix-plan.yaml" in out
+    assert "matrix-job" in out
+
+
+def test_include_missing_names_plan_file(tmp_path, capsys):
+    # A top-level include of a nonexistent fragment → file-level error
+    # that names the plan file.
+    plan = tmp_path / "include-plan.yaml"
+    plan.write_text("include: no-such-fragment.yaml\njobs: []\n", encoding="utf-8")
+    rc = main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "include-plan.yaml" in out
+    assert "ujin:" in out
+
+
+def test_workflow_required_var_unset_names_file(tmp_path, capsys, monkeypatch):
+    # A workflow file with ${VAR:?} and the var unset → failure record that
+    # names the workflow file.
+    monkeypatch.delenv("REQUIRED_WF_VAR", raising=False)
+    wf = tmp_path / "secret-workflow.yaml"
+    wf.write_text(
+        "source:\n"
+        "  kind: http\n"
+        "  config:\n"
+        '    url: "https://api.example.com/${REQUIRED_WF_VAR:?set REQUIRED_WF_VAR}"\n'
+        "schedule: {mode: once}\n",
+        encoding="utf-8",
+    )
+    rc = main(["plan", "validate", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "secret-workflow.yaml" in out
+    assert "ujin:" in out
+
+
+def test_per_job_error_json_names_plan_file(tmp_path, capsys):
+    # --json output for a per-job failure must include the plan file name
+    # in the error field.
+    plan = tmp_path / "json-plan.yaml"
+    _write(plan, [{"id": "failing", "matrix": 42, **_minimal_job()}])
+    rc = main(["plan", "validate", str(plan), "--json"])
+    assert rc != 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is False
+    assert len(data["failed"]) == 1
+    assert "json-plan.yaml" in data["failed"][0]["error"]
+    assert "failing" in data["failed"][0]["error"]
+
+
 # ── examples/ all validate cleanly (no schema warnings, strict-clean) ────────── #
 
 _EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
