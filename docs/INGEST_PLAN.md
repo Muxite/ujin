@@ -734,9 +734,9 @@ default; without `--schema`, `ujin plan validate` output and exit codes are unch
 
 ## Inspecting fully-resolved jobs
 
-Use `ujin plan render` to print every fully-expanded `JobSpec` — after all five
+Use `ujin plan render` to print every fully-expanded `JobSpec` — after all six
 resolution layers (`defaults:` deep-merge, `include:`/`use:` fragments,
-`matrix:`/`for_each:` fan-out, `vars:` defaults, and `${VAR}` substitution) — in
+`matrix:`/`for_each:` fan-out, `vars:` defaults, `profiles:` overlays, and `${VAR}` substitution) — in
 human-readable YAML, using the **same loaders** as `jobs-serve` and `plan validate`:
 
 ```bash

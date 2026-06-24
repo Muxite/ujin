@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **docs(sync): fix stale layer count in `docs/INGEST_PLAN.md`.** The `ujin plan render` section said "all five resolution layers" and listed `defaults:`, `include:`/`use:`, `matrix:`/`for_each:`, `vars:`, and `${VAR}` substitution — omitting `profiles:` overlays, which were added in 0.34.0. Updated to "all six resolution layers" and added `profiles:` overlays to the list, consistent with the `--summary` paragraph in the same file. No production-code changes.
+
 ## 0.38.0 — 2026-06-24
 
 - **docs(sync): add `profiles:` to the workflows-dir paragraph in README.md.** The workflows-directory description in the README quickstart named four additive layers (`defaults:`, `include:`/`use:`, `matrix:`/`for_each:`, `vars:`) but omitted `profiles:` overlays, even though the feature-list bullet and the INGEST-PLAN paragraph already mentioned it. Added a sentence describing the `profiles:` block, its `--profile`/`$UJIN_PLAN_PROFILE` selection, and the lenient per-file behaviour (a file without `profiles:` is left unchanged). No production-code changes.
