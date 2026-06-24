@@ -17,6 +17,8 @@ Endpoints::
   POST   /jobs/{id}/resume
   GET    /jobs/{id}/runs        recent run history
   GET    /jobs/{id}/events      recent persisted events (sqlite sink)
+  GET    /plan                  read-only: jobs the active plan/workflows resolve to,
+                                each with provenance (source file + matrix vars)
   POST   /plan/reload           re-read the configured INGEST-PLAN and upsert jobs
                                 (?prune drops removed jobs; ?dry_run previews only)
   WS     /jobs/events           live stream of change events
@@ -42,9 +44,10 @@ from typing import Any
 try:
     from fastapi import Request, WebSocket  # for handler annotations
 
-    from .api_models import JobCreate
+    from .api_models import JobCreate, PlanIntrospection
 except ModuleNotFoundError:  # pragma: no cover - jobs extra missing
     JobCreate = None  # type: ignore[assignment,misc]
+    PlanIntrospection = None  # type: ignore[assignment,misc]
     Request = None  # type: ignore[assignment,misc]
     WebSocket = None  # type: ignore[assignment,misc]
 
@@ -1005,6 +1008,56 @@ def _dryrun_ingest_plan(
     return plan_status
 
 
+def _introspect_active_plan(
+    plan_src, wf_dir, only=None, exclude=None
+) -> "dict[str, Any]":
+    """Resolve the active workflows dir + INGEST-PLAN into a read-only payload.
+
+    Backs the ``GET /plan`` endpoint. Runs the **same** loaders and provenance
+    plumbing that ``plan render --explain`` uses (:func:`_load_workflows_dir` and
+    :func:`_load_ingest_plan` with ``provenance=...``), so each resolved job carries
+    its originating source file and — for ``matrix:``/``for_each:`` fan-out — the
+    matrix entry (key/index/vars) that produced it. Pure read: nothing is created,
+    mutated, or deleted; the manager is never touched.
+
+    Resolution mirrors startup: the workflows dir is scanned unfiltered, while the
+    plan honours ``--only``/``--exclude`` exactly as :func:`_apply_ingest_plan` does
+    — but an ``--only`` pattern that now matches nothing is treated as "no jobs
+    selected" rather than fatal, since this route only reads. Returns the
+    ``{"plan_path", "workflows_dir", "jobs", "failed"}`` shape consumed by
+    :class:`~ujin.jobs.api_models.PlanIntrospection`, where every ``jobs`` entry is
+    ``{"id", "provenance": {"source", ["matrix"]}}``.
+    """
+    prov: list = []
+    failed: list = []
+    # Workflows directory: scanned unfiltered, matching the startup load order
+    # (only the plan applies --only/--exclude). A non-existent dir yields nothing.
+    if wf_dir:
+        _load_workflows_dir(wf_dir, failed=failed, provenance=prov)
+    # INGEST-PLAN: resolve with provenance, then apply the same selection startup
+    # would. A no-match --only is reported as zero selected, never raised (read-only).
+    if plan_src:
+        plan_prov: list = []
+        plan_specs = _load_ingest_plan(plan_src, failed=failed, provenance=plan_prov)
+        if only is not None or exclude is not None:
+            try:
+                keep = {s.id for s in _select_jobs(plan_specs, only, exclude)}
+            except ValueError:
+                keep = set()
+            plan_prov = [p for p in plan_prov if p["id"] in keep]
+        prov.extend(plan_prov)
+    jobs = [
+        {"id": p["id"], "provenance": {k: v for k, v in p.items() if k != "id"}}
+        for p in prov
+    ]
+    return {
+        "plan_path": str(plan_src) if plan_src else None,
+        "workflows_dir": wf_dir,
+        "jobs": jobs,
+        "failed": failed,
+    }
+
+
 def create_jobs_app(
     config_path: str | None = None,
     *,
@@ -1183,6 +1236,24 @@ def create_jobs_app(
         status = load_plugins()
         app.state.plugins = status
         return status
+
+    @app.get("/plan", response_model=PlanIntrospection)
+    def plan_introspect() -> "PlanIntrospection":
+        """Read-only view of the jobs the active plan / workflows dir resolve to.
+
+        Re-runs the **same** loaders and provenance plumbing as ``plan render
+        --explain`` (via :func:`_introspect_active_plan`) over the configured
+        workflows directory and INGEST-PLAN, returning each resolved job's id plus
+        its provenance — the originating source file and, for ``matrix:``/
+        ``for_each:``-expanded jobs, the matrix entry (key/index/vars) that produced
+        it. Purely introspective: it never creates, mutates, or deletes a job, so
+        every other endpoint behaves exactly as before. Unresolvable files/jobs are
+        reported in ``failed`` exactly as ``GET /health`` lists them. With neither a
+        plan nor a populated workflows dir configured, ``jobs`` is empty.
+        """
+        return PlanIntrospection(
+            **_introspect_active_plan(plan_src, wf_dir, only=only, exclude=exclude)
+        )
 
     @app.post("/plan/reload")
     async def plan_reload(
