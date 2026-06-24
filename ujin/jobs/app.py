@@ -210,19 +210,36 @@ def _resolve_fragment_path(ref: str, root: Path) -> Path:
     )
 
 
-def _load_fragment(ref: str, root: Path, seen: "tuple[Path, ...]") -> Any:
-    """Parse a fragment file and recursively resolve its own includes."""
+def _load_fragment(
+    ref: str, root: Path, seen: "tuple[Path, ...]", _cache: "dict | None" = None
+) -> Any:
+    """Parse a fragment file and recursively resolve its own includes.
+
+    *_cache* (keyed by resolved absolute Path) avoids re-reading the same
+    fragment file when multiple jobs share the same ``include:`` path within
+    one plan-load call.  The cached value is the already-resolved fragment
+    (result of ``_resolve_includes``), so sub-includes within the fragment are
+    inlined only once regardless of how many jobs reference it.  ``None``
+    disables caching (the default for callers that don't create a cache).
+    """
     import yaml
 
     fp = _resolve_fragment_path(ref, root)
     if fp in seen:
         chain = " -> ".join(p.name for p in (*seen, fp))
         raise WorkflowIncludeError(f"cyclic include detected: {chain}")
+    if _cache is not None and fp in _cache:
+        return _cache[fp]
     text = _expand_env(fp.read_text(encoding="utf-8"))
-    return _resolve_includes(yaml.safe_load(text), fp.parent, seen + (fp,))
+    result = _resolve_includes(yaml.safe_load(text), fp.parent, seen + (fp,), _cache)
+    if _cache is not None:
+        _cache[fp] = result
+    return result
 
 
-def _resolve_includes(node: Any, root: Path, seen: "tuple[Path, ...]" = ()) -> Any:
+def _resolve_includes(
+    node: Any, root: Path, seen: "tuple[Path, ...]" = (), _cache: "dict | None" = None
+) -> Any:
     """Inline every ``include:``/``use:`` fragment found anywhere in *node*.
 
     A mapping with an ``include:`` is deep-merged *over* the referenced
@@ -230,6 +247,9 @@ def _resolve_includes(node: Any, root: Path, seen: "tuple[Path, ...]" = ()) -> A
     list item whose include expands to a list is spliced into the list (so a
     transform-pipeline fragment drops straight into ``transforms:``). With no
     include keys present, *node* is returned structurally unchanged.
+
+    *_cache* is threaded to :func:`_load_fragment` so repeated references to the
+    same fragment path within one plan-load are read and parsed only once.
     """
     if isinstance(node, dict):
         refs, rest = _split_include(node)
@@ -241,14 +261,14 @@ def _resolve_includes(node: Any, root: Path, seen: "tuple[Path, ...]" = ()) -> A
         # ``{from: ...}``, cross-product axes) carry no fragments either, so passing
         # the value through unchanged stays byte-for-byte equivalent for them.
         resolved = {
-            k: (v if k in _MATRIX_KEYS else _resolve_includes(v, root, seen))
+            k: (v if k in _MATRIX_KEYS else _resolve_includes(v, root, seen, _cache))
             for k, v in rest.items()
         }
         if not refs:
             return resolved
         merged: Any = None
         for ref in refs:
-            frag = _load_fragment(ref, root, seen)
+            frag = _load_fragment(ref, root, seen, _cache)
             merged = frag if merged is None else _deep_merge(merged, frag)
         if isinstance(merged, list):
             if resolved:
@@ -261,7 +281,7 @@ def _resolve_includes(node: Any, root: Path, seen: "tuple[Path, ...]" = ()) -> A
     if isinstance(node, list):
         out: list = []
         for item in node:
-            resolved = _resolve_includes(item, root, seen)
+            resolved = _resolve_includes(item, root, seen, _cache)
             if _has_include(item) and isinstance(resolved, list):
                 out.extend(resolved)
             else:
@@ -1083,7 +1103,7 @@ def _specs_from_workflow_file(
 
     # Inline reusable fragments, then peel off a top-level `defaults:` block. Both
     # are no-ops when absent, so the paths below stay identical to the old loader.
-    data = _resolve_includes(data, path.parent)
+    data = _resolve_includes(data, path.parent, _cache={})
 
     # A bare scalar (integer, plain string, etc.) is not a valid workflow shape —
     # neither a single-job mapping nor a list of jobs. Catch it here so the caller
@@ -1148,6 +1168,14 @@ def _specs_from_workflow_file(
         raw = [merged]
     else:
         raw = data.get("jobs", data) if isinstance(data, dict) else data
+        # Validate before merging so a non-mapping entry raises a clear error
+        # (naming the file and position) rather than a cryptic TypeError.
+        for _j, _e in enumerate(raw or []):
+            if not isinstance(_e, dict):
+                raise ValueError(
+                    f"workflow {path.name}: jobs entry {_j} must be a mapping, "
+                    f"got {type(_e).__name__}"
+                )
         raw = [
             (_deep_merge(defaults, entry) if defaults else dict(entry))
             for entry in (raw or [])
@@ -1355,7 +1383,7 @@ def _load_ingest_plan(
     # ── file-level parse: one failure record covers the whole plan ──
     try:
         data = yaml.safe_load(_expand_env(path.read_text(encoding="utf-8")))
-        data = _resolve_includes(data, path.parent)
+        data = _resolve_includes(data, path.parent, _cache={})
         defaults, entries = _plan_entries(data, path.name)
         # Profile overlay: deep-merge the selected `profiles:` entry OVER the base
         # `defaults:` before the per-job merge below, so each job inherits the
@@ -1395,6 +1423,11 @@ def _load_ingest_plan(
             stem if len(entries) == 1 else f"{stem}-{i}"
         )
         try:
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"plan {path.name}: jobs entry {i} must be a mapping, "
+                    f"got {type(entry).__name__}"
+                )
             merged = _deep_merge(defaults, entry) if defaults else dict(entry)
             # Advisory per-job schema check on the merged mapping (names the file
             # and job id); reported, never silently dropped, and the job still loads.
