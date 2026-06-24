@@ -118,7 +118,10 @@ the same jobs rather than duplicating them:
 
 - an explicit `id:` wins (for a matrix entry, an `id:` *template* such as
   `feed-{{ slug }}` yields a distinct id per entry);
-- otherwise the id is `<plan-stem>-<index>` (`ingest-plan-0`, `ingest-plan-1`, …);
+- otherwise a **single-entry plan** gets just `<plan-stem>` (e.g. `ingest-plan`),
+  and a **multi-entry plan** gets `<plan-stem>-<index>` (`ingest-plan-0`,
+  `ingest-plan-1`, …) — the same single-vs-multi asymmetry as a single-file
+  workflow vs a `jobs:` list;
 - a matrix entry without an explicit `id:` template appends a per-entry suffix
   (`<base>-<n>`).
 
