@@ -189,40 +189,61 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
     Reuses the same loaders as ``jobs-serve`` so the resolved job ids and failures
     are identical to what the server would produce. Exits zero when all jobs resolve;
     non-zero when any fail or the path is missing/unreadable.
+
+    Unrecognized/misspelled keys are reported as ``WARN`` lines (or ``warnings`` in
+    ``--json``). By default they are advisory and do not affect the exit code — a
+    previously-valid file stays valid. ``--strict`` promotes every such warning to a
+    failure (non-zero exit) for CI use, leaving genuine load failures unchanged.
     """
     import json as _json
 
     from ujin.jobs.app import _load_ingest_plan, _load_workflows_dir
 
     path = Path(args.path)
+    strict = getattr(args, "strict", False)
 
     if not path.exists():
         msg = f"ujin: path not found: {args.path}"
         if args.json:
-            print(_json.dumps({"ok": False, "error": msg, "resolved": [], "failed": []}))
+            print(_json.dumps({"ok": False, "error": msg, "resolved": [],
+                               "failed": [], "warnings": [], "strict": strict}))
         else:
             print(msg, file=sys.stderr)
         return 1
 
     failed: list = []
+    warnings: list = []
     if path.is_dir():
-        specs = _load_workflows_dir(str(path), failed=failed)
+        specs = _load_workflows_dir(str(path), failed=failed, warnings=warnings)
     else:
-        specs = _load_ingest_plan(path, failed=failed)
+        specs = _load_ingest_plan(path, failed=failed, warnings=warnings)
 
     resolved = [s.id for s in specs]
-    ok = not failed
+    # Schema warnings only fail the run under --strict; otherwise they are reported
+    # but the file stays valid (additive default — no previously-valid file breaks).
+    ok = not failed and not (strict and warnings)
 
     if args.json:
-        print(_json.dumps({"ok": ok, "resolved": resolved, "failed": failed}, indent=2))
+        print(_json.dumps({"ok": ok, "resolved": resolved, "failed": failed,
+                           "warnings": warnings, "strict": strict}, indent=2))
     else:
         for job_id in resolved:
             print(f"ok  {job_id}")
         for entry in failed:
             print(f"FAIL  {entry['id']}: {entry['error']}")
+        label = "FAIL" if strict else "WARN"
+        for w in warnings:
+            print(f"{label}  {w}")
         if not ok:
+            n = len(failed) + (len(warnings) if strict else 0)
             print(
-                f"ujin: {len(failed)} failure(s); {len(resolved)} job(s) resolved",
+                f"ujin: {n} failure(s); {len(resolved)} job(s) resolved",
+                file=sys.stderr,
+            )
+        elif warnings:
+            print(
+                f"ujin: {len(warnings)} warning(s); {len(resolved)} job(s) resolved "
+                "(re-run with --strict to fail on these)",
                 file=sys.stderr,
             )
 
@@ -682,18 +703,24 @@ def main(argv: list[str] | None = None) -> int:
         description="Load an INGEST-PLAN file or a workflows directory using the same "
                     "loaders as `jobs-serve`, print each resolved job id and each "
                     "failure with an actionable error, then exit zero (all ok) or "
-                    "non-zero (any failures). A missing or unreadable path exits non-zero "
+                    "non-zero (any failures). Unrecognized/misspelled keys are reported "
+                    "as advisory `WARN` lines that do NOT affect the exit code unless "
+                    "`--strict` is given. A missing or unreadable path exits non-zero "
                     "immediately with a clean `ujin: …` message (no traceback).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="examples:\n"
                "  ujin plan validate ./ingest-plan.yaml\n"
                "  ujin plan validate ./workflows/\n"
-               "  ujin plan validate ./ingest-plan.yaml --json",
+               "  ujin plan validate ./ingest-plan.yaml --json\n"
+               "  ujin plan validate ./ingest-plan.yaml --strict   # fail CI on unknown keys",
     )
     p_plan_validate.add_argument("path",
                                  help="INGEST-PLAN file or workflows directory to validate")
     p_plan_validate.add_argument("--json", action="store_true",
                                  help="emit machine-readable JSON instead of a human table")
+    p_plan_validate.add_argument("--strict", action="store_true",
+                                 help="treat unrecognized/misspelled keys as failures "
+                                      "(non-zero exit) instead of advisory warnings")
     p_plan_validate.set_defaults(func=_cmd_plan_validate)
 
     p_plan_render = plan_sub.add_parser(

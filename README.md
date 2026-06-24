@@ -186,7 +186,7 @@ ujin serve targets.yaml      # run the poll engine as a daemon
 ujin api [targets.yaml]      # poller control service (REST + WS) on :8900
 ujin scrape-serve            # rich scrape HTTP service on :8901
 ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
-ujin plan validate <path>    # validate a plan file or workflows dir (--json for CI)
+ujin plan validate <path>    # validate a plan file or workflows dir (--json/--strict for CI)
 ujin plan render <path>      # resolve and print every expanded job (--json for CI)
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
