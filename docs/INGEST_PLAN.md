@@ -26,6 +26,36 @@ The plan's jobs are created on startup and are visible like any other job — vi
 `GET /jobs`, `GET /jobs/{id}`, and reflected in `GET /health` (see
 [Reporting](#reporting-and-errors)).
 
+### `--env-file PATH` — inject secrets without committing them
+
+All three plan commands accept `--env-file PATH` to load `KEY=VALUE` pairs from a
+dotenv-style file and feed them into `${VAR}` / `${VAR:-default}` / `${VAR:?message}`
+substitution when the plan is resolved:
+
+```bash
+# .env file (keep out of source control)
+# API_TOKEN=secret123
+# BACKEND_URL=https://api.example.com
+
+ujin plan validate ./ingest-plan.yaml --env-file .env
+ujin plan render   ./ingest-plan.yaml --env-file .env
+ujin jobs-serve    --plan ./ingest-plan.yaml --env-file .env
+```
+
+**Precedence rule: process environment variables always win.** The file only supplies
+values for variables that are *not* already set in the environment, so exporting a
+variable before running the command overrides whatever is in the file:
+
+```bash
+API_TOKEN=override ujin plan render ./ingest-plan.yaml --env-file .env
+# → API_TOKEN resolves to "override", not the value from .env
+```
+
+**File format:** one `KEY=VALUE` per line; blank lines and lines starting with `#`
+are skipped; keys must be valid identifiers (`[A-Za-z_][A-Za-z0-9_]*`). A missing
+or unparseable file exits immediately with a clean `ujin: …` message and no
+traceback.
+
 ## Schema
 
 The top level is **either** a list of job mappings **or** a mapping with a
@@ -230,7 +260,8 @@ mirrors the startup plan-status shape, plus a `reloaded` flag:
 ```
 
 A single malformed job is reported in `failed` while the rest reload (a reload never
-aborts). Reload only **upserts** — it never deletes jobs dropped from the file. If the
+aborts). By default reload only **upserts** — it never deletes jobs dropped from the file
+(see [prune mode](#pruning-jobs-dropped-from-the-plan) to opt into removal). If the
 server was started with [`--only`/`--exclude`](#job-id-selection----only-and---exclude)
 selectors, reload applies the **same** filters, so it never loads jobs the startup
 filter excluded; unlike startup, a `--only` pattern that now matches nothing is reported
@@ -240,6 +271,41 @@ that changes nothing and
 returns `{"reloaded": false, "detail": "no plan configured", "loaded": [], "failed": []}`.
 Like every mutating jobs route, `/plan/reload` is gated by the optional API-key auth
 (`UJIN_API_KEY`); only `/health` stays open.
+
+### Pruning jobs dropped from the plan
+
+By default a reload **upserts only** — a job you delete from the plan file keeps running
+until you remove it explicitly. Pass `?prune=true` (or a `{"prune": true}` JSON body) to
+also **remove** plan-owned jobs whose ids are no longer declared by the re-read plan:
+
+```bash
+curl -X POST 'localhost:8902/plan/reload?prune=true'
+# or, equivalently:
+curl -X POST localhost:8902/plan/reload -H 'content-type: application/json' \
+     -d '{"prune": true}'
+```
+
+The removed ids are returned in a `pruned` list alongside `loaded`/`failed`, and the
+pruned jobs disappear from `GET /jobs` and the refreshed `/health` plan block:
+
+```json
+{
+  "reloaded": true,
+  "path": "/data/ingest-plan.yaml",
+  "loaded": ["crossref", "feed-tech"],
+  "failed": [],
+  "pruned": ["feed-science"]
+}
+```
+
+ujin tracks each running job's **provenance** — whether it came from the mounted
+INGEST-PLAN, the positional `jobs.yaml` preload, the workflows dir, or the REST API — so
+prune only ever removes **plan-owned** jobs. Jobs created via `POST /jobs` or the
+positional preload are **never** pruned, even when their ids are absent from the plan.
+Prune is also skipped when the plan fails to read at the file level (a missing or
+malformed file), so a transient read error never wipes plan jobs — that reload reports
+the failure and `pruned` is `[]`. Without the option the response omits `pruned` entirely
+and nothing is removed, byte-for-byte the upsert-only behaviour.
 
 ## Validating a plan without starting the server
 
@@ -277,7 +343,9 @@ With `--json` the response is a single JSON object on stdout:
   "resolved": ["papers"],
   "failed": [
     {"id": "feed-{{ slug }}", "error": "ujin: plan job feed-{{ slug }}: matrix must be a list, got str"}
-  ]
+  ],
+  "warnings": [],
+  "strict": false
 }
 ```
 
@@ -285,7 +353,7 @@ A missing or unreadable path exits non-zero immediately with a clean `ujin: …`
 and no traceback. The `--json` flag covers that case too:
 
 ```json
-{"ok": false, "error": "ujin: path not found: ./missing.yaml", "resolved": [], "failed": []}
+{"ok": false, "error": "ujin: path not found: ./missing.yaml", "resolved": [], "failed": [], "warnings": [], "strict": false}
 ```
 
 ### Validation & common mistakes — misspelled keys

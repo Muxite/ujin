@@ -39,11 +39,12 @@ from typing import Any
 # annotations into strings resolved against module globals). Guarded so the
 # package still imports without the jobs extra.
 try:
-    from fastapi import WebSocket  # for the WS handler annotation
+    from fastapi import Request, WebSocket  # for handler annotations
 
     from .api_models import JobCreate
 except ModuleNotFoundError:  # pragma: no cover - jobs extra missing
     JobCreate = None  # type: ignore[assignment,misc]
+    Request = None  # type: ignore[assignment,misc]
     WebSocket = None  # type: ignore[assignment,misc]
 
 log = logging.getLogger("ujin.jobs.app")
@@ -94,6 +95,34 @@ def _expand_env(text: str) -> str:
         return val
 
     return _ENV_REF.sub(_sub, text)
+
+
+def _load_env_file(path: Path) -> "dict[str, str]":
+    """Parse a KEY=VALUE env-file into a dict.
+
+    Blank lines and lines whose first non-whitespace character is ``#`` are
+    skipped. A line missing ``=`` or carrying an invalid identifier key raises
+    ``ValueError`` naming the line number so the CLI can emit a clean
+    ``ujin: …`` error without a traceback.
+    """
+    result: dict[str, str] = {}
+    text = path.read_text(encoding="utf-8")
+    for i, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ValueError(
+                f"env-file {path}: line {i}: expected KEY=VALUE, got {line!r}"
+            )
+        key, _, value = line.partition("=")
+        key = key.rstrip()
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            raise ValueError(
+                f"env-file {path}: line {i}: invalid variable name {key!r}"
+            )
+        result[key] = value
+    return result
 
 
 # ── deep-merge + reusable fragments (``defaults:`` / ``include:``) ─────────── #
@@ -669,7 +698,10 @@ def _plan_entries(data: Any, name: str) -> "tuple[dict, list]":
 
 
 def _load_ingest_plan(
-    path, failed: list | None = None, warnings: list | None = None
+    path,
+    failed: list | None = None,
+    warnings: list | None = None,
+    present: list | None = None,
 ) -> list:
     """Load an INGEST-PLAN file into JobSpecs, deriving stable per-job ids.
 
@@ -694,6 +726,12 @@ def _load_ingest_plan(
     Unrecognized/misspelled top-level or per-job keys are *advisory*: each is logged
     and, when *warnings* is given, its ``ujin: …`` message appended there (used by
     ``ujin plan validate --strict``). They never change which jobs load.
+
+    When *present* is given it collects the **derived id of every entry the plan
+    resolved to** — whether the spec built or not — so a caller can tell which job
+    ids the file currently declares (used by the reload prune mode as the keep-set).
+    A file-level failure (the file never parses into entries) leaves *present*
+    untouched, distinguishing "couldn't read the plan" from "the plan is empty".
     """
     import yaml
 
@@ -751,15 +789,23 @@ def _load_ingest_plan(
                         "unique `id:`)"
                     )
                 seen.add(d["id"])
+                if present is not None:
+                    present.append(d["id"])
                 specs.append(JobSpec.from_dict(d))
         except Exception as exc:  # noqa: BLE001
             log.warning("skipping plan job %s in %s: %s", base, path, exc)
             if failed is not None:
                 failed.append({"id": base, "error": f"ujin: plan job {base}: {exc}"})
+            # The entry still names a job the plan declares; record its id so prune
+            # keeps it (a transient build error must not drop a still-present job).
+            if present is not None:
+                present.append(base)
     return specs
 
 
-def _apply_ingest_plan(manager, plan_src, only=None, exclude=None) -> "dict[str, list]":
+def _apply_ingest_plan(
+    manager, plan_src, only=None, exclude=None, *, prune=False
+) -> "dict[str, list]":
     """Resolve *plan_src*, apply ``--only``/``--exclude``, upsert into *manager*.
 
     Shared by startup and ``POST /plan/reload`` so both go through the identical
@@ -768,7 +814,17 @@ def _apply_ingest_plan(manager, plan_src, only=None, exclude=None) -> "dict[str,
     ``{"path", "loaded", "failed"}`` summary that ``GET /health`` exposes: a
     loader/file-level or per-job problem fails only that record (with a
     ``ujin: …`` message) while the remaining jobs upsert by their stable ids.
+    Every upserted job is tagged with ``"plan"`` provenance so prune can find them.
     Re-applying is idempotent — same ids upsert the same jobs.
+
+    With *prune* set, plan-owned jobs whose ids are no longer declared by the
+    re-read plan are removed from *manager* and reported in a ``"pruned"`` list
+    added to the summary. Only jobs the manager tracks as plan-owned are eligible —
+    API-created and positional-preload jobs are never pruned, even when absent from
+    the plan. Prune is **skipped** when the plan fails to read at the file level
+    (an empty id set there can't be trusted), so a transient read error never wipes
+    plan jobs. With *prune* off the summary omits ``"pruned"`` and nothing is
+    removed — byte-for-byte the upsert-only behaviour.
 
     Raises ``ValueError`` (clean ``ujin: …`` message) when an ``--only`` pattern
     matches no resolved job, so the caller decides whether that is fatal (startup
@@ -777,16 +833,35 @@ def _apply_ingest_plan(manager, plan_src, only=None, exclude=None) -> "dict[str,
     plan_status: dict[str, list] = {
         "path": str(plan_src), "loaded": [], "failed": [],
     }
-    plan_specs = _load_ingest_plan(plan_src, failed=plan_status["failed"])
+    # `present` collects the ids the plan currently declares (built or not); it
+    # stays empty on a file-level read failure, which gates prune below.
+    present: list[str] = []
+    plan_specs = _load_ingest_plan(
+        plan_src, failed=plan_status["failed"], present=present
+    )
     if only is not None or exclude is not None:
         plan_specs = _select_jobs(plan_specs, only, exclude)
     for spec in plan_specs:
         try:
-            manager.create(spec)
+            manager.create(spec, origin="plan")
             plan_status["loaded"].append(spec.id)
         except Exception as exc:  # noqa: BLE001
             log.warning("plan job %s failed: %s", spec.id, exc)
             plan_status["failed"].append({"id": spec.id, "error": f"ujin: {exc}"})
+    if prune:
+        # Keep any plan-owned job whose id the file still declares; drop the rest.
+        # Skip entirely on a file-level read failure (present empty + a failure
+        # record) so a broken file never removes still-wanted jobs. A genuinely
+        # empty plan (present empty, no failures) correctly prunes all plan jobs.
+        keep = set(present)
+        file_failed = not present and bool(plan_status["failed"])
+        pruned: list[str] = []
+        if not file_failed:
+            for jid in manager.plan_owned_ids():
+                if jid not in keep:
+                    manager.delete(jid)
+                    pruned.append(jid)
+        plan_status["pruned"] = sorted(pruned)
     return plan_status
 
 
@@ -801,7 +876,13 @@ def create_jobs_app(
     exclude: list | None = None,
 ) -> Any:
     try:
-        from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+        from fastapi import (
+            FastAPI,
+            HTTPException,
+            Request,
+            WebSocket,
+            WebSocketDisconnect,
+        )
     except ModuleNotFoundError as exc:  # pragma: no cover
         raise RuntimeError(
             "ujin jobs service needs the 'jobs' extra: pip install 'ujin[jobs]'"
@@ -850,7 +931,7 @@ def create_jobs_app(
         if config_path:
             for spec in _preload_specs(config_path):
                 try:
-                    manager.create(spec)
+                    manager.create(spec, origin="preload")
                 except Exception as exc:  # noqa: BLE001
                     log.warning("preload job %s failed: %s", spec.name, exc)
 
@@ -860,7 +941,7 @@ def create_jobs_app(
         wf_status: dict[str, list] = {"dir": wf_dir, "loaded": [], "failed": []}
         for spec in _load_workflows_dir(wf_dir, failed=wf_status["failed"]):
             try:
-                manager.create(spec)
+                manager.create(spec, origin="workflow")
                 wf_status["loaded"].append(spec.id)
             except Exception as exc:  # noqa: BLE001
                 log.warning("workflow %s failed: %s", spec.id, exc)
@@ -964,7 +1045,7 @@ def create_jobs_app(
         return status
 
     @app.post("/plan/reload")
-    def plan_reload() -> dict[str, Any]:
+    async def plan_reload(request: Request, prune: bool = False) -> dict[str, Any]:
         """Re-read the configured INGEST-PLAN and upsert its jobs, no restart.
 
         Goes through the same loader and ``--only``/``--exclude`` selection as
@@ -976,13 +1057,28 @@ def create_jobs_app(
         that now matches nothing is reported rather than fatal — the server keeps
         running. The route is gated by the optional API-key auth like every other
         mutating endpoint.
+
+        Pass ``?prune=true`` (or a ``{"prune": true}`` JSON body) to also **remove**
+        plan-owned jobs whose ids vanished from the re-read plan; the removed ids are
+        returned in a ``"pruned"`` list. Jobs created via the REST API or the
+        positional ``jobs.yaml`` preload are never pruned, even when absent from the
+        plan. Without the option the reload is upsert-only and removes nothing — the
+        default, byte-for-byte the pre-prune behaviour.
         """
+        # Accept the opt-in via either ?prune=true or a {"prune": true} JSON body.
+        if not prune:
+            try:
+                body = await request.json()
+            except Exception:  # noqa: BLE001 - no/invalid body -> no prune
+                body = None
+            if isinstance(body, dict):
+                prune = bool(body.get("prune", False))
         if not plan_src:
             return {"reloaded": False, "detail": "no plan configured",
                     "loaded": [], "failed": []}
         try:
             plan_status = _apply_ingest_plan(
-                app.state.manager, plan_src, only=only, exclude=exclude
+                app.state.manager, plan_src, only=only, exclude=exclude, prune=prune
             )
         except ValueError as exc:
             # --only matched no job on reload: report, don't kill the server.

@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -185,8 +186,38 @@ def _parse_patterns(values: "list[str] | None") -> list:
     return out
 
 
+def _apply_env_file(env_file: str) -> int:
+    """Load KEY=VALUE pairs from *env_file* and set unset vars in os.environ.
+
+    Process environment variables take precedence: a key already set in
+    ``os.environ`` is left unchanged; the file only fills in missing vars.
+    Returns 0 on success; prints a clean ``ujin: …`` message to stderr and
+    returns 1 on a missing or unparseable file.
+    """
+    from ujin.jobs.app import _load_env_file
+
+    try:
+        env_vars = _load_env_file(Path(env_file))
+    except OSError as exc:
+        print(f"ujin: env-file not found: {env_file}: {exc.strerror}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"ujin: {exc}", file=sys.stderr)
+        return 1
+    for k, v in env_vars.items():
+        if k not in os.environ:
+            os.environ[k] = v
+    return 0
+
+
 def _cmd_jobs_serve(args: argparse.Namespace) -> int:
     from ujin.jobs.app import serve
+
+    env_file = getattr(args, "env_file", None)
+    if env_file:
+        rc = _apply_env_file(env_file)
+        if rc:
+            return rc
 
     only = _parse_patterns(getattr(args, "only", None))
     exclude = _parse_patterns(getattr(args, "exclude", None))
@@ -224,6 +255,12 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
     import json as _json
 
     from ujin.jobs.app import _load_ingest_plan, _load_workflows_dir, _select_jobs
+
+    env_file = getattr(args, "env_file", None)
+    if env_file:
+        rc = _apply_env_file(env_file)
+        if rc:
+            return rc
 
     path = Path(args.path)
     strict = getattr(args, "strict", False)
@@ -305,6 +342,12 @@ def _cmd_plan_render(args: argparse.Namespace) -> int:
     import yaml as _yaml
 
     from ujin.jobs.app import _load_ingest_plan, _load_workflows_dir, _select_jobs
+
+    env_file = getattr(args, "env_file", None)
+    if env_file:
+        rc = _apply_env_file(env_file)
+        if rc:
+            return rc
 
     path = Path(args.path)
     only = _parse_patterns(getattr(args, "only", None))
@@ -748,6 +791,11 @@ def main(argv: list[str] | None = None) -> int:
         "--exclude", action="append", default=None, metavar="PATTERN",
         help="exclude plan jobs whose id matches this fnmatch pattern "
              "(comma-separated or repeatable; subtracts from --only)")
+    p_jobs.add_argument(
+        "--env-file", default=None, metavar="PATH",
+        help="load KEY=VALUE pairs from PATH and use them for ${VAR} substitution "
+             "when resolving the plan/workflows directory (process env vars take "
+             "precedence; the file only fills in variables not already set)")
     p_jobs.add_argument("--host", default="0.0.0.0", help="bind address (default: 0.0.0.0)")
     p_jobs.add_argument("--port", type=int, default=8902, help="port (default: 8902)")
     p_jobs.set_defaults(func=_cmd_jobs_serve)
@@ -783,6 +831,11 @@ def main(argv: list[str] | None = None) -> int:
                                  help="treat unrecognized/misspelled keys as failures "
                                       "(non-zero exit) instead of advisory warnings")
     p_plan_validate.add_argument(
+        "--env-file", default=None, metavar="PATH",
+        help="load KEY=VALUE pairs from PATH and use them for ${VAR} substitution "
+             "when resolving the plan/workflows directory (process env vars take "
+             "precedence; the file only fills in variables not already set)")
+    p_plan_validate.add_argument(
         "--only", action="append", default=None, metavar="PATTERN",
         help="validate only jobs whose id matches this fnmatch pattern "
              "(comma-separated or repeatable; matched after full resolution)")
@@ -813,6 +866,11 @@ def main(argv: list[str] | None = None) -> int:
                                help="INGEST-PLAN file or workflows directory to render")
     p_plan_render.add_argument("--json", action="store_true",
                                help="emit resolved specs as a JSON array instead of YAML")
+    p_plan_render.add_argument(
+        "--env-file", default=None, metavar="PATH",
+        help="load KEY=VALUE pairs from PATH and use them for ${VAR} substitution "
+             "when resolving the plan/workflows directory (process env vars take "
+             "precedence; the file only fills in variables not already set)")
     p_plan_render.add_argument(
         "--only", action="append", default=None, metavar="PATTERN",
         help="render only jobs whose id matches this fnmatch pattern "
