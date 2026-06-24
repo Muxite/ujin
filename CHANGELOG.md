@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **docs(sync): document the opt-in `jobs-serve --watch-plan` auto-reload in `README.md`.** The plan-file watcher (`--watch-plan` / `$UJIN_WATCH_PLAN`, poll interval tuned by `--watch-interval` / `$UJIN_WATCH_INTERVAL`, default `2.0`s) was already shipped — wired into `create_jobs_app`'s lifespan, covered by `tests/test_plan_watch.py`, and described in `docs/JOBS.md` and `docs/INGEST_PLAN.md` — but the README jobs control-plane section documented only the manual `POST /plan/reload`. Extended the reload paragraph with a sentence describing the opt-in, stdlib-only background poller that re-applies the **same** reload-with-prune automatically whenever the `--plan` file changes on disk: added/changed jobs appear and removed plan-owned jobs are pruned with no restart, off by default (a no-config deploy is byte-identical), a malformed save is skipped (jobs kept, error reported in `failed`), API/preload jobs are never pruned, and it is race-free with the manual endpoint. No production code changed.
+
 ## 0.38.0 — 2026-06-24
 
 - **docs(sync): add `profiles:` to the workflows-dir paragraph in README.md.** The workflows-directory description in the README quickstart named four additive layers (`defaults:`, `include:`/`use:`, `matrix:`/`for_each:`, `vars:`) but omitted `profiles:` overlays, even though the feature-list bullet and the INGEST-PLAN paragraph already mentioned it. Added a sentence describing the `profiles:` block, its `--profile`/`$UJIN_PLAN_PROFILE` selection, and the lenient per-file behaviour (a file without `profiles:` is left unchanged). No production-code changes.
