@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **docs(recipes): add end-to-end external-config flow recipe.** New `docs/recipes/external-config-flow.md` walks through the full `defaults:` + `include:` fragments + `matrix:` fan-out pipeline inside a single mounted INGEST-PLAN, with runnable snippets for `ujin plan validate` and `ujin plan render`. Updated `docs/recipes/README.md` index. Added `tests/test_examples_plan_validate.py` to guard example-file freshness: the shipped `examples/ingest-plan.yaml` and `examples/workflows/` must continue to validate and render without errors.
+
 ## 0.22.0 — 2026-06-24
 
 - **`ujin plan render` — offline plan inspection.** New `ujin plan render <path>` subcommand resolves and prints every fully-expanded `JobSpec` for an INGEST-PLAN file or a workflows directory — after `defaults:` deep-merge, `include:`/`use:` fragment resolution, `matrix:`/`for_each:` fan-out, and `${VAR}`/`${VAR:-default}` substitution — in human-readable YAML. `--json` emits the resolved specs as a JSON array using the same shape as the REST `/jobs` endpoint. Exits zero when all jobs resolve; non-zero with a clean `ujin: …` message (no traceback) on a missing/unreadable path or any failed job. Reuses the identical loaders as `jobs-serve` and `plan validate`. Strictly additive: `ujin plan validate` and all existing CLI behaviour unchanged.
