@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **`--env-file PATH` for `plan validate`, `plan render`, and `jobs-serve`.** All three commands now accept `--env-file PATH` to load `KEY=VALUE` pairs (dotenv-style: blank lines and `#` comments skipped) and feed them into the existing `${VAR}` / `${VAR:-default}` / `${VAR:?message}` substitution when resolving the plan or workflows directory. Precedence: process environment variables win; the file only fills in variables not already set in the environment. A missing or unparseable file exits non-zero immediately with a clean `ujin: …` message and no traceback. Without `--env-file`, all three commands are byte-for-byte unchanged. Documented in `README.md` and `docs/INGEST_PLAN.md` with a runnable example.
+
 ## 0.25.0 — 2026-06-24
 
 - **File-backed `matrix:`/`for_each:` — `matrix: { from: <path> }`.** A matrix/for_each value may now be a `{ from: <path> }` mapping naming an external data file that supplies the list of variable maps, in addition to the existing inline list. The data-file path resolves exactly the way an `include:`/`use:` fragment does — relative to the containing workflow/plan file's directory, then `$UJIN_WORKFLOWS_DIR` (reusing the fragment path-resolution helper) — and the loaded rows drive the same fan-out, `{{ var }}` substitution, and stable-id rules as an inline list, so `matrix: { from: rows.yaml }` produces byte-for-byte the same JobSpecs as inlining `rows.yaml`'s contents. Strictly additive: an inline `matrix:`/`for_each:` list and a file using neither are unchanged. A missing/unreadable data file, or one that is not a non-empty list of variable maps, raises a clear `ValueError` that routes the offending workflow/plan into the loader's `failed` list (`GET /health`) rather than aborting startup. New runnable example `examples/matrix-from-file.yaml` (+ `examples/data/marketplace-searches.yaml`); documented in `docs/WORKFLOWS.md` and `docs/INGEST_PLAN.md`.
