@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **test(product): hermetic branch coverage for `ujin/extract/product.py` — 80% → 96%.** Added `tests/test_product_coverage.py` (83 offline tests) covering: `extract_description` block/meta fallbacks and empty-bullet skipping; `_first_srcset` and the card-image srcset path; `_as_selectors` with None/tuple inputs; `_id_from_href` with None/empty href and additional marketplace patterns (Wayfair, IKEA, Google Shopping); `_currency_from_text` no-symbol default; `_from_jsonld` skip branches (non-dict block, wrong @type, non-dict offers, zero price, ImageObject, absent title/image); card with no valid image; Amazon detail-page price-selector iteration, no-gallery og:image fallback, no-image return-None, URL-without-/dp/, absent rating/review/byline; `_detail_from_jsonld` non-dict block, absent title, list offers, no-image-no-og, protocol-relative image, bad ratingValue, 14+ scalar specs; `_balanced_json` escaped chars and unclosed braces; `_aliexpress_modules` error paths (no-brace, unclosed JSON, invalid JSON, nested walk() shape); `_ali_price_cents` structured-amount fallback chain and formatted-string fallback; AliExpress detail no-title/no-price/no-image, review via `totalValidNumStr`, bad `averageStar`, 14-spec cap, variant fan-out, brand extraction. No production behaviour changes.
+
 ## 0.26.0 — 2026-06-24
 
 - **docs(sync): fix stale `plan validate --json` schema examples; guard `examples/matrix-from-file.yaml`.** The `--json` output of `ujin plan validate` includes `warnings` and `strict` fields that were absent from the JSON examples in `docs/INGEST_PLAN.md` (normal-case and missing-path cases) and `docs/WORKFLOWS.md`; corrected both to match actual CLI output. Added five offline tests to `tests/test_examples_plan_validate.py` covering the new 0.25 `examples/matrix-from-file.yaml` (file-backed matrix plan) — validate, render, `--json` forms, and expected ids — so example-file drift is caught at CI time.
