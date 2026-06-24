@@ -260,6 +260,23 @@ A missing or unreadable path exits non-zero with a clean `ujin: …` message (no
 traceback). Works equally for an INGEST-PLAN file — `ujin plan validate` accepts
 either a file or a directory. See [INGEST_PLAN.md](INGEST_PLAN.md) for details.
 
+## Inspecting fully-resolved jobs
+
+Use `ujin plan render` to print every fully-expanded `JobSpec` — after
+`defaults:` merge, fragment resolution, `matrix:` fan-out, and variable
+substitution — in human-readable YAML, or as a JSON array with `--json`:
+
+```bash
+ujin plan render ./workflows/                  # YAML, one document per job
+ujin plan render ./workflows/ --json           # JSON array (same shape as GET /jobs)
+```
+
+This is useful for verifying that matrix templates expand as expected and that
+defaults are merged the way you intended before committing to a deploy. Each YAML
+document is prefixed with `--- # <id>` so you can grep for a specific job id. The
+`--json` output uses the same spec shape as the REST `/jobs` endpoint. See
+[INGEST_PLAN.md](INGEST_PLAN.md) for full details and examples.
+
 ## Examples
 
 `examples/workflows/` ships runnable workflow files:

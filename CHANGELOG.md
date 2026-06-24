@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **`ujin plan render` — offline plan inspection.** New `ujin plan render <path>` subcommand resolves and prints every fully-expanded `JobSpec` for an INGEST-PLAN file or a workflows directory — after `defaults:` deep-merge, `include:`/`use:` fragment resolution, `matrix:`/`for_each:` fan-out, and `${VAR}`/`${VAR:-default}` substitution — in human-readable YAML. `--json` emits the resolved specs as a JSON array using the same shape as the REST `/jobs` endpoint. Exits zero when all jobs resolve; non-zero with a clean `ujin: …` message (no traceback) on a missing/unreadable path or any failed job. Reuses the identical loaders as `jobs-serve` and `plan validate`. Strictly additive: `ujin plan validate` and all existing CLI behaviour unchanged.
+
 ## 0.21.0 — 2026-06-24
 
 - **docs(sync): audit external-config surface; fix INGEST_PLAN.md stable-id rule;
