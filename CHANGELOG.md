@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **tests(jobs): close coverage gaps in external-config loader and job machinery.** Added 17 offline deterministic tests in `tests/test_jobs_gap_fill.py` covering previously-uncovered branches in `ujin/jobs/transforms.py` (`_matches` non-dict, `SelectTransform` no-fields else-path, `ChunkTransform` empty-string and non-chunkable, `AggregateTransform` unhashable key, non-dict items, and unknown op), `ujin/jobs/model.py` (`JobState.summary()`), `ujin/jobs/sinks.py` (`asyncio.TimeoutError` in `_post_once`, `OSError` in `_spool`, `_drain_spool`, and `_remove`), `ujin/jobs/store.py` (corrupt JSON in `events()` and `results()`), and `ujin/jobs/app.py` (`_dryrun_ingest_plan` file-failed prune branch, `_introspect_active_plan` no-wf_dir branch, and POST `/plan/reload` prune-from-query + dry_run-from-body). Annotated one genuinely unreachable branch in `ChunkTransform._split` with `# pragma: no cover`. All five target files reach 100% line coverage; total suite coverage rises to 98%.
+
 ## 0.35.0 — 2026-06-24
 
 - **feat(plan): `ujin plan render --summary` — concise human-readable overview of a resolved plan.** The new `--summary` flag on `ujin plan render` prints a job count followed by one line per resolved job (id, source kind/url, schedule, and number of sinks) instead of the full expanded YAML/JSON specs; it reuses the same loaders as the normal render path so resolution (defaults/include/matrix/profile/${VAR}) is identical. Composes with `--only`/`--exclude`, `--env-file`, and `--profile`; works for both INGEST-PLAN files and workflows directories. Default `ujin plan render` output (no flag) is byte-for-byte unchanged. Documented in README and `docs/INGEST_PLAN.md` with a runnable example; 23 offline deterministic tests added.
