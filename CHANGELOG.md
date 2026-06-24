@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **docs(sync): fix stale `plan validate --json` schema examples; guard `examples/matrix-from-file.yaml`.** The `--json` output of `ujin plan validate` includes `warnings` and `strict` fields that were absent from the JSON examples in `docs/INGEST_PLAN.md` (normal-case and missing-path cases) and `docs/WORKFLOWS.md`; corrected both to match actual CLI output. Added five offline tests to `tests/test_examples_plan_validate.py` covering the new 0.25 `examples/matrix-from-file.yaml` (file-backed matrix plan) — validate, render, `--json` forms, and expected ids — so example-file drift is caught at CI time.
+
 ## 0.25.0 — 2026-06-24
 
 - **File-backed `matrix:`/`for_each:` — `matrix: { from: <path> }`.** A matrix/for_each value may now be a `{ from: <path> }` mapping naming an external data file that supplies the list of variable maps, in addition to the existing inline list. The data-file path resolves exactly the way an `include:`/`use:` fragment does — relative to the containing workflow/plan file's directory, then `$UJIN_WORKFLOWS_DIR` (reusing the fragment path-resolution helper) — and the loaded rows drive the same fan-out, `{{ var }}` substitution, and stable-id rules as an inline list, so `matrix: { from: rows.yaml }` produces byte-for-byte the same JobSpecs as inlining `rows.yaml`'s contents. Strictly additive: an inline `matrix:`/`for_each:` list and a file using neither are unchanged. A missing/unreadable data file, or one that is not a non-empty list of variable maps, raises a clear `ValueError` that routes the offending workflow/plan into the loader's `failed` list (`GET /health`) rather than aborting startup. New runnable example `examples/matrix-from-file.yaml` (+ `examples/data/marketplace-searches.yaml`); documented in `docs/WORKFLOWS.md` and `docs/INGEST_PLAN.md`.
