@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **Plan/workflow schema validation — catch misspelled keys.** The plan and workflow loaders now check every resolved mapping (the INGEST-PLAN top level, each plan/workflow job, and each workflow file's top level) against an allowlist of recognized keys — `source`/`transforms`/`sinks`/`schedule`/`id`/`name`/`enabled` plus the additive `defaults`/`include`/`use`/`matrix`/`for_each` — *after* `include:`/`defaults:` resolution. An unrecognized key (e.g. `defaluts:` for `defaults:`) is reported with an actionable message naming the file, the job id when applicable, and the offending key, plus a `did you mean <closest>?` hint when a near match exists. Strictly additive and advisory by default: warnings are logged (and surfaced as `WARN` lines / a `warnings` array by `ujin plan validate`) but never change which jobs load, so a previously-valid plan/workflow is byte-for-byte unchanged. New `ujin plan validate --strict` flag promotes these warnings to failures (non-zero exit) for CI use.
+
 ## 0.22.0 — 2026-06-24
 
 - **`ujin plan render` — offline plan inspection.** New `ujin plan render <path>` subcommand resolves and prints every fully-expanded `JobSpec` for an INGEST-PLAN file or a workflows directory — after `defaults:` deep-merge, `include:`/`use:` fragment resolution, `matrix:`/`for_each:` fan-out, and `${VAR}`/`${VAR:-default}` substitution — in human-readable YAML. `--json` emits the resolved specs as a JSON array using the same shape as the REST `/jobs` endpoint. Exits zero when all jobs resolve; non-zero with a clean `ujin: …` message (no traceback) on a missing/unreadable path or any failed job. Reuses the identical loaders as `jobs-serve` and `plan validate`. Strictly additive: `ujin plan validate` and all existing CLI behaviour unchanged.

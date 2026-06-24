@@ -260,6 +260,26 @@ A missing or unreadable path exits non-zero with a clean `ujin: …` message (no
 traceback). Works equally for an INGEST-PLAN file — `ujin plan validate` accepts
 either a file or a directory. See [INGEST_PLAN.md](INGEST_PLAN.md) for details.
 
+### Validation & common mistakes — misspelled keys
+
+After `include:`/`defaults:` resolution the loader checks each workflow against the
+recognized keys — `source`, `transforms`, `sinks`, `schedule`, `id`, `name`, `enabled`
+plus the additive `defaults:`, `matrix:`/`for_each:`, and `include:`/`use:` — and a
+`jobs:` list for the multi-job form. A key outside that set — a typo such as
+`shedule:` for `schedule:` or `sinkz:` for `sinks:` — would otherwise be **silently
+ignored** (the workflow loads with that setting missing). `ujin plan validate` surfaces
+it as an advisory `WARN` line naming the file, the job id when applicable, and the
+unknown key, with a `did you mean …?` hint:
+
+```
+ok  site-feeds-0
+WARN  ujin: workflow site-feeds.yaml job site-feeds-0: unrecognized key 'shedule'; did you mean 'schedule'?
+```
+
+Warnings are advisory by default — the workflow still loads and the exit code is
+unaffected, so the change is additive. Pass `--strict` to promote them to failures
+(`FAIL`, non-zero exit) for a CI gate; with `--json` they appear in a `warnings` array.
+
 ## Inspecting fully-resolved jobs
 
 Use `ujin plan render` to print every fully-expanded `JobSpec` — after
