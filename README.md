@@ -137,7 +137,10 @@ at once. A few additive layers keep large plans DRY:
   product (one job per combination — two axes of sizes M and N give M·N jobs). ujin
   substitutes each row into `{{ var }}` placeholders across the
   source/transforms/sinks/schedule, emitting one job per row with a stable,
-  deterministic id so reloads upsert rather than duplicate.
+  deterministic id so reloads upsert rather than duplicate. A matrix mapping may also
+  carry optional `exclude:` (drop combinations matching a partial variable map) and
+  `include:` (append explicit extra combinations) filter lists — see
+  `examples/matrix-exclude.yaml`.
 - **`vars:`** — a top-level mapping of variable name → default value
   (e.g. `vars: { region: us-east }`) that backfills any `{{ var }}` placeholder the
   environment and matrix leave unset. Precedence for a `{{ NAME }}`: a matrix per-entry

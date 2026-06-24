@@ -233,7 +233,17 @@ def _resolve_includes(node: Any, root: Path, seen: "tuple[Path, ...]" = ()) -> A
     """
     if isinstance(node, dict):
         refs, rest = _split_include(node)
-        resolved = {k: _resolve_includes(v, root, seen) for k, v in rest.items()}
+        # The ``matrix:``/``for_each:`` value is opaque to fragment resolution: it
+        # holds rows/axes plus the additive ``include:``/``exclude:`` filter lists
+        # (handled later by ``_matrix_rows``), never ``include:``/``use:``
+        # *fragments*. Recursing would misread a matrix ``include:`` list of
+        # variable maps as a fragment path; the other matrix forms (inline list,
+        # ``{from: ...}``, cross-product axes) carry no fragments either, so passing
+        # the value through unchanged stays byte-for-byte equivalent for them.
+        resolved = {
+            k: (v if k in _MATRIX_KEYS else _resolve_includes(v, root, seen))
+            for k, v in rest.items()
+        }
         if not refs:
             return resolved
         merged: Any = None
@@ -278,6 +288,22 @@ def _resolve_includes(node: Any, root: Path, seen: "tuple[Path, ...]" = ()) -> A
 # is reserved as an axis name). Kept in its own code path so it neither entangles
 # with, nor conflicts much with, the includes work. A file carrying no matrix key
 # passes through structurally unchanged.
+#
+# Two optional, strictly additive filters may ride along when the matrix value is a
+# **mapping** (they are reserved keys, so ``exclude``/``include`` cannot be axis
+# names):
+#
+#   * ``include:`` — a list of *full* variable maps appended to the base rows. With
+#     no axes and no ``from:``, ``include:`` alone is the whole fan-out — the
+#     inline-list form written as a mapping so it too can carry an ``exclude:``.
+#   * ``exclude:`` — a list of *partial* variable maps; a row (base or include) is
+#     dropped when it agrees with an exclude entry on every key that entry specifies
+#     (an entry naming a key the row lacks never matches). Exclude runs over the whole
+#     fan-out, so it prunes a cross-product, a ``{from: ...}`` list, or an inline list
+#     alike, down to the wanted subset.
+#
+# Both default to absent: a matrix block with neither resolves byte-for-byte as
+# before.
 
 _MATRIX_KEYS = ("matrix", "for_each")
 
@@ -445,29 +471,20 @@ def _cross_product_rows(axes: dict, key: str) -> list:
     ]
 
 
-def _matrix_rows(value: Any, key: str, root: "Path | None") -> list:
-    """Resolve a ``matrix:``/``for_each:`` value into ``(vars, default_suffix)`` rows.
+# Reserved keys of a matrix *mapping* that are not cross-product axes: the
+# ``from:`` data-file disambiguator plus the additive ``exclude:``/``include:``
+# filters. Pulled out before the remaining keys are read as axes.
+_MATRIX_FILTER_KEYS = ("exclude", "include")
 
-    Three input shapes, all producing the same downstream fan-out (one job per row):
 
-    * an **inline list** of variable maps — suffixed by each row's 0-based index;
-    * a **``{from: <path>}``** mapping naming an external data file holding that list
-      (see :func:`_load_matrix_file`) — identical to inline once loaded;
-    * a **cross-product axes** mapping of axis-name -> value-list (any mapping with no
-      ``from:`` key) — one row per cartesian-product combination, suffixed by the
-      combination's slugified values (see :func:`_cross_product_rows`).
+def _index_rows(rows: Any, key: str) -> list:
+    """Validate a plain list of variable maps into ``(vars, str(index))`` rows.
 
-    The ``from:`` key disambiguates the two mapping shapes, so it is reserved (an
-    axes mapping cannot name an axis ``from``). Raises ``ValueError`` on a malformed
-    value so the containing file lands in the loader's ``failed`` list.
+    Shared by the inline-list and ``{from: <path>}`` forms — both supply an explicit
+    list whose rows are suffixed by their 0-based position. Raises ``ValueError`` (so
+    the file lands in the loader's ``failed`` list) on a non-list / empty list, or a
+    row that is not a mapping.
     """
-    if isinstance(value, dict):
-        if "from" in value:
-            rows = _load_matrix_file(value, key, root)
-        else:
-            return _cross_product_rows(value, key)
-    else:
-        rows = value
     if not isinstance(rows, list) or not rows:
         raise ValueError(f"`{key}:` must be a non-empty list of variable maps")
     out: list = []
@@ -479,6 +496,106 @@ def _matrix_rows(value: Any, key: str, root: "Path | None") -> list:
             )
         out.append((row, str(i)))
     return out
+
+
+def _matrix_filters(
+    exclude: Any, include: Any, key: str
+) -> "tuple[list, list]":
+    """Validate the optional ``exclude:``/``include:`` lists into ``(exclude, include)``.
+
+    Each, when present, must be a **list of variable maps**; ``None`` (absent) becomes
+    ``[]`` so callers treat it as a no-op. A malformed value (not a list, or a
+    non-mapping entry) raises ``ValueError`` with an actionable ``ujin: …``-style
+    message, routing the containing file/job through the normal ``failed`` path
+    instead of crashing the loader.
+    """
+    def _check(val: Any, name: str) -> list:
+        if val is None:
+            return []
+        if not isinstance(val, list):
+            raise ValueError(
+                f"`{key}:` `{name}:` must be a list of variable maps, got "
+                f"{type(val).__name__}"
+            )
+        for i, entry in enumerate(val):
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"`{key}:` `{name}:` entry {i} must be a variable map, got "
+                    f"{type(entry).__name__}"
+                )
+        return val
+
+    return _check(exclude, "exclude"), _check(include, "include")
+
+
+def _row_excluded(row_vars: dict, exclude: list) -> bool:
+    """True if *row_vars* agrees with any *exclude* entry on every key it specifies.
+
+    A partial exclude entry matches when each key it names is present in *row_vars*
+    with an equal value; an entry naming a key the row lacks never matches (so an
+    exclude that references an absent key is a no-op, leaving the row in place).
+    """
+    return any(
+        all(k in row_vars and row_vars[k] == v for k, v in entry.items())
+        for entry in exclude
+    )
+
+
+def _matrix_rows(value: Any, key: str, root: "Path | None") -> list:
+    """Resolve a ``matrix:``/``for_each:`` value into ``(vars, default_suffix)`` rows.
+
+    Three base input shapes, all producing the same downstream fan-out (one job per
+    row):
+
+    * an **inline list** of variable maps — suffixed by each row's 0-based index;
+    * a **``{from: <path>}``** mapping naming an external data file holding that list
+      (see :func:`_load_matrix_file`) — identical to inline once loaded;
+    * a **cross-product axes** mapping of axis-name -> value-list (any mapping with no
+      ``from:`` key) — one row per cartesian-product combination, suffixed by the
+      combination's slugified values (see :func:`_cross_product_rows`).
+
+    When the value is a **mapping** it may also carry two optional, strictly additive
+    filters (reserved keys, never axis names): ``include:`` — a list of full variable
+    maps appended (index-suffixed) to the base rows — and ``exclude:`` — a list of
+    partial variable maps; a row (base *or* include) is dropped when it agrees with
+    any exclude entry on every key that entry specifies (see :func:`_row_excluded`).
+    Exclude runs over the whole fan-out, so it prunes a cross-product, a
+    ``{from: ...}`` list, or an inline list alike. With no axes and no ``from:``,
+    ``include:`` alone is the whole fan-out — the inline-list form written as a
+    mapping so it too can pair with an ``exclude:``.
+
+    The ``from:`` key disambiguates the two base mapping shapes, so it is reserved (an
+    axes mapping cannot name an axis ``from``). Raises ``ValueError`` on a malformed
+    value — including one whose filters prune the fan-out to zero jobs — so the
+    containing file lands in the loader's ``failed`` list.
+    """
+    exclude: list = []
+    include: list = []
+    if isinstance(value, dict):
+        exclude, include = _matrix_filters(
+            value.get("exclude"), value.get("include"), key
+        )
+        had_include = "include" in value
+        base_def = {k: v for k, v in value.items() if k not in _MATRIX_FILTER_KEYS}
+        if "from" in base_def:
+            base = _index_rows(_load_matrix_file(base_def, key, root), key)
+        elif base_def or not had_include:
+            # Cross-product axes — also the empty-mapping error path, which routes
+            # through :func:`_cross_product_rows` for its "at least one axis" message.
+            base = _cross_product_rows(base_def, key)
+        else:
+            base = []  # include-only: the inline list written as a mapping
+    else:
+        base = _index_rows(value, key)
+
+    rows = base + [(extra, str(j)) for j, extra in enumerate(include)]
+    rows = [(v, s) for (v, s) in rows if not _row_excluded(v, exclude)]
+    if not rows:
+        raise ValueError(
+            f"`{key}:` expanded to zero jobs after applying `exclude:`/`include:`; "
+            "loosen `exclude:` or supply rows"
+        )
+    return rows
 
 
 def _expand_matrix(
@@ -501,9 +618,10 @@ def _expand_matrix(
     ``<base_id>-<suffix>`` — the suffix being the row index (inline/file forms) or the
     combination's slugified values (cross-product form), so the id is deterministic
     and, for cross-product, independent of axis order. *root* is the containing file's
-    directory, used to resolve a ``from:`` data file. Raises ``ValueError`` (so the
-    file lands in the ``failed`` list, not aborting startup) on a malformed matrix
-    or colliding ids.
+    directory, used to resolve a ``from:`` data file. A matrix mapping may also carry
+    optional ``exclude:``/``include:`` filter lists that prune / append rows before id
+    derivation (see :func:`_matrix_rows`). Raises ``ValueError`` (so the file lands in
+    the ``failed`` list, not aborting startup) on a malformed matrix or colliding ids.
 
     When *prov* is a list it collects, in lock-step with the returned jobs, one
     ``{"key", "index", "vars"}`` record per generated job naming the matrix key, the
