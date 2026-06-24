@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.40.0 — 2026-06-24
 
 - **docs(sync): fix stale layer count in `examples/ingest-plan.yaml` and `docs/recipes/external-config-flow.md`.** The example comment said "same three additive layers" (showing only `defaults:`, `include:`, and `matrix:`); updated to "six additive layers (three demonstrated here)" with a pointer to the other three (`vars:`, `profiles:`, `${VAR}` env substitution) and the relevant examples/docs. The recipe intro said "five additive config layers" and its layers table omitted `${VAR}` env substitution; updated the count to "six additive resolution layers" and added a `${VAR}` row as the first entry in the table, with a corrected prose description of the full execution order. Both fixes bring these files into agreement with `docs/INGEST_PLAN.md` (fixed to "six" in 0.39.0) and the README. No production code changed.
 - **tests(external-config): assert warning messages surface both file name and offending key.** Added four tests to `tests/test_plan_validate_cli.py` verifying that `_key_problems` advisory warnings — emitted when a plan or workflow file contains an unrecognised top-level or per-job key — include the **plan file name** (not just the key name and job id) in both human-readable and `--json` output. Assertions use substring checks (`in`) rather than exact-string matching, so the tests confirm location is surfaced without coupling to exact wording. No production-code changes.
