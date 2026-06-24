@@ -317,6 +317,121 @@ _VAR_REF = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 _SLUG_STRIP = re.compile(r"[^A-Za-z0-9]+")
 
 
+# ── env-var requirements report (``ujin plan env``) ────────────────────────── #
+#
+# A strictly-additive, **read-only** introspection: walk a plan/workflow file and
+# every ``include:``/``use:`` fragment it pulls in, and report which ``${VAR}``
+# references the file needs — each variable's declared default (``${VAR:-default}``),
+# whether any occurrence is required (``${VAR:?message}``), and whether it is set in
+# the environment. It reuses the very same ``_ENV_REF`` regex ``_expand_env`` scans
+# with and the same fragment-path resolution ``include:`` uses, but it never expands
+# or mutates anything, so ``${VAR}`` substitution stays byte-for-byte unchanged.
+
+
+def _scan_env_refs(text: str, refs: "dict[str, dict]") -> None:
+    """Record every ``${VAR}`` reference in *text* into *refs* (reusing ``_ENV_REF``).
+
+    *refs* maps a variable name to ``{"default": str | None, "required": bool}``. The
+    **first** ``${VAR:-default}`` seen sets the variable's default; **any**
+    ``${VAR:?…}`` occurrence marks it required; a plain ``${VAR}`` just registers the
+    name. Mutates *refs* in place, preserving first-encounter insertion order, so the
+    same regex groups ``_expand_env`` reads drive the report without expanding.
+    """
+    for m in _ENV_REF.finditer(text):
+        name, op, operand = m.group(1), m.group(2), m.group(3)
+        info = refs.setdefault(name, {"default": None, "required": False})
+        if op == ":-":
+            if info["default"] is None:
+                info["default"] = operand
+        elif op == ":?":
+            info["required"] = True
+
+
+def _find_include_refs(node: Any) -> "list[str]":
+    """Every ``include:``/``use:`` fragment path referenced anywhere in *node*.
+
+    Mirrors :func:`_resolve_includes`'s traversal — recurses through mappings and
+    lists but **skips** ``matrix:``/``for_each:`` values (whose own ``include:``
+    filter lists are variable maps, not fragment paths) — collecting only the string
+    fragment refs. Used to discover the fragment files a plan pulls in so their
+    ``${VAR}`` references are reported too; it inlines nothing.
+    """
+    out: list[str] = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k in _INCLUDE_KEYS:
+                if isinstance(v, str):
+                    out.append(v)
+                elif isinstance(v, (list, tuple)):
+                    out.extend(r for r in v if isinstance(r, str))
+            elif k in _MATRIX_KEYS:
+                continue
+            else:
+                out.extend(_find_include_refs(v))
+    elif isinstance(node, list):
+        for item in node:
+            out.extend(_find_include_refs(item))
+    return out
+
+
+def _walk_plan_env_refs(
+    path: Path, refs: "dict[str, dict]", seen: "tuple[Path, ...]"
+) -> None:
+    """Scan one file's raw text for ``${VAR}`` refs, then recurse into its fragments.
+
+    Reads *path*'s raw (unexpanded) text — so the ``${VAR}`` references survive to be
+    scanned by :func:`_scan_env_refs` — then parses it to discover ``include:``/
+    ``use:`` fragments, resolving each path exactly as the loader does
+    (:func:`_resolve_fragment_path`: relative to this file's dir, then
+    ``$UJIN_WORKFLOWS_DIR``) and recursing into it. *seen* (resolved paths) guards
+    against include cycles. Lenient by design: an unparseable file, or a fragment that
+    can't be resolved, is skipped rather than raised — the report still lists every
+    reference found so far.
+    """
+    import yaml
+
+    rp = path.resolve()
+    if rp in seen:
+        return
+    seen = seen + (rp,)
+    text = path.read_text(encoding="utf-8")
+    _scan_env_refs(text, refs)
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return
+    for ref in _find_include_refs(data):
+        try:
+            frag = _resolve_fragment_path(ref, path.parent)
+        except WorkflowIncludeError:
+            continue
+        _walk_plan_env_refs(frag, refs, seen)
+
+
+def collect_plan_env_refs(path) -> "dict[str, dict]":
+    """Collect the ``${VAR}`` references a plan/workflow file (and its fragments) need.
+
+    *path* is a plan/workflow file or a directory of workflow files (scanned
+    non-recursively as ``*.y*ml``, like :func:`_load_workflows_dir`). Every file's
+    raw text and the raw text of each ``include:``/``use:`` fragment it pulls in are
+    scanned with the same ``_ENV_REF`` regex ``_expand_env`` uses, so a reference is
+    reported with the default declared by its ``${VAR:-default}`` form and whether any
+    occurrence is required (``${VAR:?message}``). Set-vs-unset is left to the caller
+    (it reads ``os.environ`` after any ``--env-file`` overlay).
+
+    Returns an insertion-ordered ``dict`` of variable name ->
+    ``{"default": str | None, "required": bool}``, in first-encounter order across the
+    file(s) then their fragments. A file with no ``${VAR}`` references yields ``{}``.
+    Strictly read-only: nothing is expanded, resolved into jobs, or mutated.
+    """
+    refs: dict[str, dict] = {}
+    root = Path(path)
+    files = sorted(root.glob("*.y*ml")) if root.is_dir() else [root]
+    for fp in files:
+        _walk_plan_env_refs(fp, refs, ())
+    return refs
+
+
 # ── file-level ``vars:`` defaults ──────────────────────────────────────────── #
 #
 # An optional top-level ``vars:`` mapping (variable-name -> default value) supplies

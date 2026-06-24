@@ -655,6 +655,78 @@ def _cmd_plan_schema(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_plan_env(args: argparse.Namespace) -> int:
+    """Report the environment variables a plan/workflow file references.
+
+    Reuses the same ``_ENV_REF`` regex and ``include:``/``use:`` fragment-resolution
+    machinery as the loaders (via :func:`ujin.jobs.app.collect_plan_env_refs`) to
+    walk *path* and every fragment it pulls in, then lists each ``${VAR}`` with the
+    default declared by its ``${VAR:-default}`` form, whether any occurrence is
+    required (``${VAR:?message}``), and whether it is currently set in the
+    environment. Strictly read-only — it never expands or alters resolution.
+
+    ``--env-file`` fills in variables not already in the process environment before
+    the set/unset check (process env wins), consistent with the other plan
+    subcommands. ``--json`` emits a machine-readable object instead of the table. A
+    plan with no ``${VAR}`` references succeeds (exit 0) and reports an empty set; a
+    missing/unreadable path exits non-zero with a clean ``ujin: …`` message.
+    """
+    import json as _json
+
+    from ujin.jobs.app import collect_plan_env_refs
+
+    env_file = getattr(args, "env_file", None)
+    if env_file:
+        rc = _apply_env_file(env_file)
+        if rc:
+            return rc
+
+    path = Path(args.path)
+    if not path.exists():
+        msg = f"ujin: path not found: {args.path}"
+        if args.json:
+            print(_json.dumps({"path": args.path, "vars": [], "error": msg}))
+        else:
+            print(msg, file=sys.stderr)
+        return 1
+
+    try:
+        refs = collect_plan_env_refs(path)
+    except OSError as exc:
+        print(f"ujin: cannot read {args.path}: {exc}", file=sys.stderr)
+        return 1
+
+    rows = [
+        {
+            "name": name,
+            "default": info["default"],
+            "required": info["required"],
+            "set": name in os.environ,
+        }
+        for name, info in refs.items()
+    ]
+
+    if args.json:
+        print(_json.dumps({"path": str(path), "vars": rows}, indent=2))
+        return 0
+
+    if not rows:
+        print("no environment variables referenced")
+        return 0
+
+    n = len(rows)
+    print(f"{n} variable{'s' if n != 1 else ''} referenced")
+    width = max(len(r["name"]) for r in rows)
+    for r in rows:
+        req = "required" if r["required"] else "optional"
+        state = "set" if r["set"] else "unset"
+        line = f"  {r['name']:<{width}}  {req}  {state}"
+        if r["default"] is not None:
+            line += f"  default={r['default']}"
+        print(line)
+    return 0
+
+
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
     from ujin.mcp import serve
 
@@ -1253,6 +1325,41 @@ def main(argv: list[str] | None = None) -> int:
         "--out", default=None, metavar="PATH",
         help="write the JSON Schema to PATH instead of stdout")
     p_plan_schema.set_defaults(func=_cmd_plan_schema)
+
+    p_plan_env = plan_sub.add_parser(
+        "env",
+        help="report the environment variables a plan/workflow file references",
+        description="Report the ${VAR} environment variables a plan file (or "
+                    "workflows directory) requires — resolving include:/use: "
+                    "fragments first, then collecting every ${VAR} reference. For "
+                    "each variable it shows the default declared by its "
+                    "${VAR:-default} form, whether any occurrence is required "
+                    "(${VAR:?message}), and whether it is currently set in the "
+                    "environment. Strictly read-only: it reuses the same _ENV_REF "
+                    "regex and fragment-resolution the loaders use but never expands "
+                    "${VAR} or alters resolution. A plan with no ${VAR} references "
+                    "succeeds and reports an empty set; --json emits machine-readable "
+                    "output and --env-file feeds the set/unset check (process env "
+                    "wins). A missing/unreadable path exits non-zero with a clean "
+                    "`ujin: …` message (no traceback).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="examples:\n"
+               "  ujin plan env ./ingest-plan.yaml\n"
+               "  ujin plan env ./workflows/\n"
+               "  ujin plan env ./ingest-plan.yaml --json\n"
+               "  ujin plan env ./ingest-plan.yaml --env-file .env",
+    )
+    p_plan_env.add_argument(
+        "path", help="INGEST-PLAN file or workflows directory to inspect")
+    p_plan_env.add_argument(
+        "--json", action="store_true",
+        help="emit machine-readable JSON instead of a human table")
+    p_plan_env.add_argument(
+        "--env-file", default=None, metavar="PATH",
+        help="load KEY=VALUE pairs from PATH and treat them as set when determining "
+             "which referenced variables are set (process env vars take precedence; "
+             "the file only fills in variables not already set)")
+    p_plan_env.set_defaults(func=_cmd_plan_env)
 
     p_watch = sub.add_parser(
         "watch", help="watch a URL's regions for change (adaptive, jittered)",

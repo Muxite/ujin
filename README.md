@@ -17,8 +17,9 @@ The **ultimate scraper-poller**. Three parts that share one toolkit:
    fan-out to turn one template into N jobs; or mount a single **INGEST-PLAN**
    file with `--plan` / `$UJIN_INGEST_PLAN` for one-file multi-job deploys.
    Validate and inspect offline with `ujin plan validate` / `ujin plan render`,
-   diff two plans by resolved job id with `ujin plan diff`, and export the
-   file-format JSON Schema with `ujin plan schema`, before committing to a deploy.
+   diff two plans by resolved job id with `ujin plan diff`, list the environment
+   variables a plan needs with `ujin plan env`, and export the file-format JSON
+   Schema with `ujin plan schema`, before committing to a deploy.
 
 It bundles the [obscura](https://github.com/Muxite/obscura) headless renderer as
 a submodule, and stays a **pure-python pip install** (the renderer is built
@@ -132,6 +133,11 @@ ujin plan diff    old-plan.yaml examples/ingest-plan.yaml --exit-code  # exit 1 
 # Export the file-format JSON Schema (draft 2020-12) — for editor linting or CI:
 ujin plan schema                                       # print the schema to stdout
 ujin plan schema --out ingest-plan.schema.json         # …or write it to a file
+
+# List the ${VAR} environment variables a plan needs (default / required / set):
+ujin plan env     examples/ingest-plan.yaml            # human table
+ujin plan env     examples/ingest-plan.yaml --json     # machine-readable (CI)
+ujin plan env     examples/ingest-plan.yaml --env-file .env  # count .env vars as set
 ```
 
 `--plan` (or `$UJIN_INGEST_PLAN`) mounts a single YAML file that declares many jobs
@@ -205,6 +211,16 @@ so it is deliberately permissive (a job may omit keys that `defaults:` or the
 filename stem supply) but still rejects a structurally-malformed plan (a scalar
 document, a non-list `jobs:`, a string `source:`). The command is read-only and
 resolves nothing; output is deterministic. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
+
+`ujin plan env` reports the **environment variables a plan needs** — it resolves
+`include:`/`use:` fragments, then collects every `${VAR}` reference and lists, per
+variable, the default declared by its `${VAR:-default}` form, whether any occurrence
+is required (`${VAR:?message}`), and whether it is currently set in the environment.
+It reuses the same `${VAR}`-scanning and fragment-resolution machinery as the
+loaders but never expands or alters anything (strictly read-only). `--json` emits a
+machine-readable object and `--env-file PATH` feeds the set/unset check (process env
+wins); a plan with no `${VAR}` references succeeds and reports an empty set. Use it
+to see, before deploying, which secrets/config a mounted plan still needs.
 
 Changed the plan file? `POST /plan/reload` re-reads it and upserts the resolved jobs
 in-process — no restart — sharing the startup loader (a single bad job is reported,
@@ -327,6 +343,7 @@ ujin plan validate <path>    # validate a plan file or workflows dir (--json/--s
 ujin plan render <path>      # resolve and print every expanded job (--json for CI; --summary for concise overview)
 ujin plan diff OLD NEW       # diff two plans/dirs by resolved job id (--json; --exit-code/--check exits non-zero on any diff)
 ujin plan schema             # print the INGEST-PLAN/workflow JSON Schema, draft 2020-12 (--out PATH to a file)
+ujin plan env <path>         # list the ${VAR} env vars a plan needs (default/required/set; --json; --env-file)
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
 ujin learned site_state.db   # inspect the durable per-host learned state (--json)
