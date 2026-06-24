@@ -277,7 +277,9 @@ With `--json` the response is a single JSON object on stdout:
   "resolved": ["papers"],
   "failed": [
     {"id": "feed-{{ slug }}", "error": "ujin: plan job feed-{{ slug }}: matrix must be a list, got str"}
-  ]
+  ],
+  "warnings": [],
+  "strict": false
 }
 ```
 
@@ -285,7 +287,7 @@ A missing or unreadable path exits non-zero immediately with a clean `ujin: …`
 and no traceback. The `--json` flag covers that case too:
 
 ```json
-{"ok": false, "error": "ujin: path not found: ./missing.yaml", "resolved": [], "failed": []}
+{"ok": false, "error": "ujin: path not found: ./missing.yaml", "resolved": [], "failed": [], "warnings": [], "strict": false}
 ```
 
 ### Validation & common mistakes — misspelled keys

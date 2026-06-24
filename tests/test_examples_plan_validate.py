@@ -16,6 +16,7 @@ from ujin.cli import main
 _ROOT = Path(__file__).resolve().parents[1]
 _EXAMPLES_PLAN = _ROOT / "examples" / "ingest-plan.yaml"
 _EXAMPLES_WORKFLOWS = _ROOT / "examples" / "workflows"
+_EXAMPLES_MATRIX_FROM_FILE = _ROOT / "examples" / "matrix-from-file.yaml"
 
 
 # ── examples/ingest-plan.yaml ─────────────────────────────────────────────── #
@@ -105,3 +106,72 @@ def test_workflows_dir_example_render_json(capsys):
     data = json.loads(capsys.readouterr().out)
     assert isinstance(data, list)
     assert len(data) == 7
+
+
+# ── examples/matrix-from-file.yaml (0.25: file-backed matrix) ─────────────── #
+
+def test_matrix_from_file_example_validates(capsys):
+    """examples/matrix-from-file.yaml must load three jobs from the external data file."""
+    rc = main(["plan", "validate", str(_EXAMPLES_MATRIX_FROM_FILE)])
+    assert rc == 0
+
+
+def test_matrix_from_file_example_expected_ids(capsys):
+    main(["plan", "validate", str(_EXAMPLES_MATRIX_FROM_FILE)])
+    out = capsys.readouterr().out
+    for job_id in ("search-laptop", "search-gpu", "search-monitor"):
+        assert f"ok  {job_id}" in out, f"expected id {job_id!r} in matrix-from-file output"
+
+
+def test_matrix_from_file_example_renders(capsys):
+    rc = main(["plan", "render", str(_EXAMPLES_MATRIX_FROM_FILE)])
+    assert rc == 0
+
+
+def test_matrix_from_file_example_render_json(capsys):
+    rc = main(["plan", "render", str(_EXAMPLES_MATRIX_FROM_FILE), "--json"])
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert isinstance(data, list)
+    assert len(data) == 3
+    assert {s["id"] for s in data} == {"search-laptop", "search-gpu", "search-monitor"}
+
+
+def test_matrix_from_file_example_json_validate(capsys):
+    rc = main(["plan", "validate", str(_EXAMPLES_MATRIX_FROM_FILE), "--json"])
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is True
+    assert set(data["resolved"]) == {"search-laptop", "search-gpu", "search-monitor"}
+    assert data["failed"] == []
+    assert "warnings" in data
+    assert "strict" in data
+
+
+# ── --json output schema (guards recipe/docs examples) ───────────────────── #
+
+def test_json_validate_schema_has_warnings_and_strict(capsys):
+    """--json output must include warnings and strict fields (recipe examples depend on this)."""
+    rc = main(["plan", "validate", str(_EXAMPLES_PLAN), "--json"])
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert set(data.keys()) >= {"ok", "resolved", "failed", "warnings", "strict"}, (
+        "--json output missing expected fields; docs/recipes/external-config-flow.md "
+        "and docs/INGEST_PLAN.md examples depend on this schema"
+    )
+    assert isinstance(data["warnings"], list)
+    assert isinstance(data["strict"], bool)
+
+
+def test_json_validate_strict_false_flag_value(capsys):
+    """--json output has strict=false when --strict is not passed."""
+    main(["plan", "validate", str(_EXAMPLES_PLAN), "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert data["strict"] is False
+
+
+def test_json_validate_strict_true_flag_value(capsys):
+    """--json output has strict=true when --strict is passed."""
+    main(["plan", "validate", str(_EXAMPLES_PLAN), "--json", "--strict"])
+    data = json.loads(capsys.readouterr().out)
+    assert data["strict"] is True

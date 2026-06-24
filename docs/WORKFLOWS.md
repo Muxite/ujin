@@ -319,7 +319,9 @@ The `--json` flag emits a single JSON object to stdout:
 {
   "ok": true,
   "resolved": ["crossref-papers", "example-page"],
-  "failed": []
+  "failed": [],
+  "warnings": [],
+  "strict": false
 }
 ```
 
