@@ -331,9 +331,12 @@ Output when a job fails (exit non-zero):
 
 ```
 ok  papers
-FAIL  feed-{{ slug }}: ujin: plan job feed-{{ slug }}: matrix must be a list, got str
+FAIL  feed-bad: ujin: plan job feed-bad in ingest-plan.yaml: `matrix:` must be a non-empty list of variable maps
 ujin: 1 failure(s); 1 job(s) resolved
 ```
+
+Every failure message names the offending source file (and job id for per-job
+errors) so you can locate the problem without guessing which file triggered it.
 
 With `--json` the response is a single JSON object on stdout:
 
@@ -342,7 +345,7 @@ With `--json` the response is a single JSON object on stdout:
   "ok": false,
   "resolved": ["papers"],
   "failed": [
-    {"id": "feed-{{ slug }}", "error": "ujin: plan job feed-{{ slug }}: matrix must be a list, got str"}
+    {"id": "feed-bad", "error": "ujin: plan job feed-bad in ingest-plan.yaml: `matrix:` must be a non-empty list of variable maps"}
   ],
   "warnings": [],
   "strict": false
