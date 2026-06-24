@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **Coverage hardening.** Added 21 offline tests closing gaps in `ujin/adapt/interval.py`, `ujin/adapt/jitter.py`, `ujin/jobs/__init__.py`, `ujin/plugins/loader.py`, and `ujin/registry.py`; all five files now reach 100% line+branch coverage, lifting overall suite coverage from 95.56% to 95.99%.
+
 ## 0.20.0 — 2026-06-23
 
 ### Added
