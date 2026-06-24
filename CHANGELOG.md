@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.22.0 — 2026-06-24
+
+- **`ujin plan render` — offline plan inspection.** New `ujin plan render <path>` subcommand resolves and prints every fully-expanded `JobSpec` for an INGEST-PLAN file or a workflows directory — after `defaults:` deep-merge, `include:`/`use:` fragment resolution, `matrix:`/`for_each:` fan-out, and `${VAR}`/`${VAR:-default}` substitution — in human-readable YAML. `--json` emits the resolved specs as a JSON array using the same shape as the REST `/jobs` endpoint. Exits zero when all jobs resolve; non-zero with a clean `ujin: …` message (no traceback) on a missing/unreadable path or any failed job. Reuses the identical loaders as `jobs-serve` and `plan validate`. Strictly additive: `ujin plan validate` and all existing CLI behaviour unchanged.
+- **test(coverage): close line/branch gaps in `jobs/app.py`, `scrape/routes_social.py`, and `mcp/__init__.py`.** Added targeted offline tests to cover the `_load_ingest_plan` branches where `failed=None` (file-level and per-job error paths), the `scrape_close()` exception swallow in the jobs lifespan shutdown, the three empty-input 400 guards in the social routes, the corroboration `breaking_score_floor` boundary values (floor=1.0 and floor=0.0), and the `__getattr__` AttributeError in `ujin.mcp`. All additions are tests-only with no behaviour change; overall coverage lifted from 96.00% to 96.16%.
+
 ## 0.21.0 — 2026-06-24
 
 - **docs(sync): audit external-config surface; fix INGEST_PLAN.md stable-id rule;

@@ -229,6 +229,53 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _cmd_plan_render(args: argparse.Namespace) -> int:
+    """Resolve and print every fully-expanded JobSpec for a plan or workflows directory.
+
+    Reuses the same loaders as ``jobs-serve`` and ``plan validate`` so resolved ids
+    and failures are identical to what the server would produce. Exits zero when all
+    jobs resolve; non-zero with a clean ``ujin: …`` message (no traceback) on a
+    missing/unreadable path or any failed job.
+    """
+    import json as _json
+
+    import yaml as _yaml
+
+    from ujin.jobs.app import _load_ingest_plan, _load_workflows_dir
+
+    path = Path(args.path)
+
+    if not path.exists():
+        print(f"ujin: path not found: {args.path}", file=sys.stderr)
+        return 1
+
+    failed: list = []
+    if path.is_dir():
+        specs = _load_workflows_dir(str(path), failed=failed)
+    else:
+        specs = _load_ingest_plan(path, failed=failed)
+
+    if failed:
+        for entry in failed:
+            print(entry["error"], file=sys.stderr)
+        print(
+            f"ujin: {len(failed)} failure(s); {len(specs)} job(s) resolved",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.json:
+        print(_json.dumps([s.to_dict() for s in specs], indent=2))
+    else:
+        for i, spec in enumerate(specs):
+            if i:
+                print()
+            print(f"--- # {spec.id}")
+            print(_yaml.dump(spec.to_dict(), default_flow_style=False, sort_keys=False), end="")
+
+    return 0
+
+
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
     from ujin.mcp import serve
 
@@ -624,7 +671,7 @@ def main(argv: list[str] | None = None) -> int:
     p_jobs.set_defaults(func=_cmd_jobs_serve)
 
     p_plan = sub.add_parser(
-        "plan", help="plan-level utilities (validate a plan file or workflows directory)",
+        "plan", help="plan-level utilities (validate or render a plan file or workflows directory)",
         description="Subcommands for working with INGEST-PLAN files and workflows "
                     "directories without starting the server.",
     )
@@ -648,6 +695,29 @@ def main(argv: list[str] | None = None) -> int:
     p_plan_validate.add_argument("--json", action="store_true",
                                  help="emit machine-readable JSON instead of a human table")
     p_plan_validate.set_defaults(func=_cmd_plan_validate)
+
+    p_plan_render = plan_sub.add_parser(
+        "render",
+        help="resolve and print every fully-expanded job in a plan or workflows dir",
+        description="Load an INGEST-PLAN file or a workflows directory using the same "
+                    "loaders as `jobs-serve` and `plan validate`, then print each "
+                    "fully-expanded JobSpec — after defaults: deep-merge, "
+                    "include:/use: fragment resolution, matrix:/for_each: fan-out, "
+                    "and ${VAR}/${VAR:-default} substitution — in human-readable YAML. "
+                    "--json emits the resolved specs as a JSON array (same shape as "
+                    "the REST /jobs endpoint). "
+                    "Exits zero when all jobs resolve; non-zero on any failure.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="examples:\n"
+               "  ujin plan render ./ingest-plan.yaml\n"
+               "  ujin plan render ./workflows/\n"
+               "  ujin plan render ./ingest-plan.yaml --json",
+    )
+    p_plan_render.add_argument("path",
+                               help="INGEST-PLAN file or workflows directory to render")
+    p_plan_render.add_argument("--json", action="store_true",
+                               help="emit resolved specs as a JSON array instead of YAML")
+    p_plan_render.set_defaults(func=_cmd_plan_render)
 
     p_watch = sub.add_parser(
         "watch", help="watch a URL's regions for change (adaptive, jittered)",

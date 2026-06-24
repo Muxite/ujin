@@ -210,6 +210,55 @@ and no traceback. The `--json` flag covers that case too:
 {"ok": false, "error": "ujin: path not found: ./missing.yaml", "resolved": [], "failed": []}
 ```
 
+## Inspecting fully-resolved jobs
+
+Use `ujin plan render` to print every fully-expanded `JobSpec` — after all five
+resolution layers (`defaults:` deep-merge, `include:`/`use:` fragments,
+`matrix:`/`for_each:` fan-out, `${VAR}` substitution) — in human-readable YAML,
+using the **same loaders** as `jobs-serve` and `plan validate`:
+
+```bash
+ujin plan render ./ingest-plan.yaml          # YAML, one document per job
+ujin plan render ./workflows/               # also works for a workflows directory
+ujin plan render ./ingest-plan.yaml --json  # JSON array (same shape as GET /jobs)
+```
+
+Human-readable output (each job is a YAML document prefixed with `--- # <id>`):
+
+```
+--- # crossref
+id: crossref
+name: crossref
+source:
+  kind: api
+  config:
+    url: https://api.crossref.org/works?rows=50
+...
+
+--- # feed-tech
+id: feed-tech
+name: feed-tech
+source:
+  kind: api
+  config:
+    url: https://feeds.example.com/tech?rows=50
+...
+```
+
+A matrix-bearing template prints one document per matrix row — you can see exactly
+what variables were substituted and which defaults were merged in.
+
+The `--json` flag emits a JSON array whose length equals the number of resolved jobs,
+with each element using the same spec shape as `GET /jobs/{id}` on the running server:
+
+```bash
+ujin plan render ./ingest-plan.yaml --json | python3 -c \
+  "import sys,json; specs=json.load(sys.stdin); print(len(specs), 'jobs')"
+```
+
+`ujin plan render` exits zero when all jobs resolve and non-zero with a clean
+`ujin: …` message (no traceback) on a missing/unreadable path or any failed job.
+
 ## Example
 
 A ready-to-mount plan demonstrating `defaults:` + a shared `include:` + a
