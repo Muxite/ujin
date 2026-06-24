@@ -183,6 +183,30 @@ non-empty list of variable maps, fails *that* job (see [errors](#reporting-and-e
 rather than aborting the plan. The shipped `examples/matrix-from-file.yaml`
 (+ `examples/data/marketplace-searches.yaml`) is a runnable file-backed plan.
 
+The matrix value may instead be a **mapping of axis-name → list-of-values**, fanned
+into the **cartesian product** — one job per *combination* of axis values. Two axes
+of sizes M and N produce M·N jobs:
+
+```yaml
+jobs:
+  - id: "status-{{ region }}-{{ tier }}"
+    matrix:
+      region: [us-east, us-west, eu-central]   # 3 values
+      tier:   [free, pro]                       # 2 values   -> 6 jobs
+    source:
+      kind: api
+      config: { url: "https://api.example.com/{{ region }}/status?tier={{ tier }}" }
+```
+
+A matrix mapping is read as cross-product axes **unless it carries a `from:` key**
+(which selects the file-backed form), so `from` is reserved as an axis name. Each
+combination gets a stable id derived from its values — with the axis names sorted, so
+it is independent of the order the axes are written and identical across repeated
+`ujin plan render` runs (see [Stable ids](#stable-ids)). An empty axes mapping, an
+empty or non-list axis value, or a colliding generated id fails *that* job (see
+[errors](#reporting-and-errors)) without aborting the rest of the plan. The shipped
+`examples/matrix-cross-product.yaml` is a runnable cross-product plan.
+
 ## Stable ids
 
 Every resulting job gets a **stable id**, so re-loading the same plan **upserts**
@@ -194,8 +218,10 @@ the same jobs rather than duplicating them:
   and a **multi-entry plan** gets `<plan-stem>-<index>` (`ingest-plan-0`,
   `ingest-plan-1`, …) — the same single-vs-multi asymmetry as a single-file
   workflow vs a `jobs:` list;
-- a matrix entry without an explicit `id:` template appends a per-entry suffix
-  (`<base>-<n>`).
+- a matrix entry without an explicit `id:` template appends a per-row suffix — the
+  row index for an inline/file-backed list (`<base>-<n>`), or the combination's
+  slugified values for a cross-product axes mapping (`<base>-<value>-<value>…`, axis
+  names sorted), so the id is deterministic and order-independent.
 
 A derived id that collides with another job in the same plan fails *that* job (see
 below) — give the entry an explicit unique `id:`.
@@ -390,6 +416,45 @@ A malformed job still surfaces in `failed`, and the same guards apply: a file-le
 read error reports no removals, and `--only` matching nothing is reported rather than
 fatal. With **no plan configured** the dry run is a non-error no-op returning
 `{"reloaded": false, "dry_run": true, "detail": "no plan configured", "loaded": [], "failed": []}`.
+
+### Auto-reloading on file change (`--watch-plan`)
+
+Instead of calling `POST /plan/reload` by hand after every edit, you can have
+`jobs-serve` watch the plan file and reload it for you. It is **off by default** —
+without the flag/env no watcher runs and startup is byte-identical to today.
+
+```bash
+# enable via flag (default poll interval: 2.0s)
+ujin jobs-serve --plan ./ingest-plan.yaml --watch-plan
+
+# tune the poll interval (seconds)
+ujin jobs-serve --plan ./ingest-plan.yaml --watch-plan --watch-interval 5
+
+# or via env (flag wins over env if both are set)
+UJIN_WATCH_PLAN=1 UJIN_WATCH_INTERVAL=5 ujin jobs-serve --plan ./ingest-plan.yaml
+```
+
+When enabled, a single background task stats the plan file every interval and, on a
+change, re-runs the **identical** resolution as `POST /plan/reload?prune=true` (same
+`defaults:`/`include:`/`matrix:`/`${VAR}` loader, the same `--only`/`--exclude`
+filters, and the manager's provenance-aware upsert/prune). So a saved edit takes
+effect with **no restart and no manual POST**: a newly-added job id appears in
+`GET /jobs` and the `/health` plan block, a changed job is re-registered, and a job
+removed from the file is pruned.
+
+The same safety guarantees as the manual prune apply:
+
+- **Plan-owned only** — jobs created via `POST /jobs` or the positional `jobs.yaml`
+  preload are never pruned, even when absent from the plan.
+- **A bad save never wipes jobs** — a malformed or transiently-unreadable file is
+  skipped: the running job set is kept and the parse error surfaces in the `/health`
+  plan block's `failed` list (and the logs). The next valid save reloads normally.
+- **Race-free with the manual endpoint** — the reload is applied atomically, and
+  re-applying the same ids is idempotent, so the watcher and a concurrent
+  `POST /plan/reload` never conflict or double-apply harmfully.
+
+The watcher mirrors `POST /plan/reload`, which is plan-only: `--watch-plan` with no
+`--plan`/`$UJIN_INGEST_PLAN` configured is inactive (logged once at startup).
 
 ## Validating a plan without starting the server
 

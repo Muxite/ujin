@@ -264,18 +264,31 @@ def _resolve_includes(node: Any, root: Path, seen: "tuple[Path, ...]" = ()) -> A
 #
 # A self-contained, additive step that runs *after* defaults/include resolution
 # (Track 1) and *before* id derivation: a job mapping carrying ``matrix:`` (alias
-# ``for_each:``) — a list of variable maps, or a ``{from: <path>}`` mapping naming
-# an external data file that supplies that list — is fanned into one job per map,
-# with each map's variables substituted into every ``{{ var }}`` placeholder across
-# the template (source/transforms/sinks/schedule/name/id/...). Kept in its own code
-# path so it neither entangles with, nor conflicts much with, the includes work.
-# A file carrying neither key passes through structurally unchanged.
+# ``for_each:``) is fanned into one job per row, with each row's variables
+# substituted into every ``{{ var }}`` placeholder across the template
+# (source/transforms/sinks/schedule/name/id/...). The matrix value takes one of
+# three shapes, all yielding the same downstream fan-out:
+#
+#   * an inline **list** of variable maps (one job per map);
+#   * a **``{from: <path>}``** mapping naming an external data file holding that list;
+#   * a **cross-product axes** mapping of axis-name -> value-list — any mapping with
+#     no ``from:`` key — fanned into one job per cartesian-product combination.
+#
+# The ``from:`` key is the disambiguator between the two mapping shapes (so ``from``
+# is reserved as an axis name). Kept in its own code path so it neither entangles
+# with, nor conflicts much with, the includes work. A file carrying no matrix key
+# passes through structurally unchanged.
 
 _MATRIX_KEYS = ("matrix", "for_each")
 
 # ``{{ var }}`` placeholder (whitespace-tolerant). Distinct from the ``${VAR}``
 # env syntax (already expanded at file-read time), so the two never collide.
 _VAR_REF = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+
+# Runs of non-alphanumerics collapse to a single ``-`` when slugifying a
+# cross-product axis value into the default job-id fragment (e.g. ``"4k monitor"``
+# -> ``"4k-monitor"``).
+_SLUG_STRIP = re.compile(r"[^A-Za-z0-9]+")
 
 
 def _has_matrix(node: Any) -> bool:
@@ -353,48 +366,128 @@ def _load_matrix_file(value: dict, key: str, root: "Path | None") -> list:
     return rows
 
 
-def _expand_matrix(
-    entry: dict, base_id: str, root: "Path | None" = None, prov: "list | None" = None
-) -> list:
-    """Fan one job mapping out over its ``matrix:``/``for_each:`` rows.
+def _slug(value: Any) -> str:
+    """A compact, id-safe token derived from a scalar axis value.
 
-    The matrix value is either an **inline list** of variable maps, or a mapping
-    ``{from: <path>}`` naming an external data file that supplies that list (see
-    :func:`_load_matrix_file`); both yield the same rows. Returns one dict per
-    variable map, each a copy of *entry* (minus the matrix key) with the map's
-    variables substituted in. A stable, distinct id/name is derived per generated
-    job: an explicit ``id`` template (e.g. ``id: feed-{{ slug }}``) is honored after
-    substitution, otherwise ``<base_id>-<index>``. *root* is the containing file's
-    directory, used to resolve a ``from:`` data file. Raises ``ValueError`` (so the
-    file lands in the ``failed`` list, not aborting startup) on a malformed matrix
-    or colliding ids.
-
-    When *prov* is a list it collects, in lock-step with the returned jobs, one
-    ``{"key", "index", "vars"}`` record per generated job naming the matrix key, the
-    0-based entry index, and the variable map that produced it — the provenance
-    surfaced by ``plan render --explain``. Default ``None`` collects nothing, so the
-    expansion is byte-for-byte unchanged.
+    Runs of non-alphanumerics collapse to a single ``-`` and the ends are trimmed,
+    so ``"4k monitor"`` -> ``"4k-monitor"``; an all-symbol value yields ``"x"``.
+    Used to build the default id of a cross-product combination — two values that
+    slug to the same token are caught by ``_expand_matrix``'s duplicate-id check.
     """
-    present = [k for k in _MATRIX_KEYS if k in entry]
-    if len(present) > 1:
-        raise ValueError(f"use only one of {present}, not both")
-    key = present[0]
-    value = entry[key]
-    rows = _load_matrix_file(value, key, root) if isinstance(value, dict) else value
+    return _SLUG_STRIP.sub("-", str(value)).strip("-") or "x"
+
+
+def _cross_product_rows(axes: dict, key: str) -> list:
+    """Fan a mapping of *axis-name -> value-list* into cartesian-product rows.
+
+    ``{size: [s, m], region: [us, eu]}`` yields the four ``{size, region}``
+    combinations — one variable map per combination. Returns ``(vars, suffix)``
+    pairs where *vars* is the combination's per-axis map and *suffix* is a stable
+    id fragment built from the combination's values.
+
+    Both the row order and each *suffix* are derived with the **axis names sorted**,
+    so they are independent of the order the axes were written: reordering the axes
+    in the file leaves every combination with the same default id. Raises
+    ``ValueError`` (routing the file into the loader's ``failed`` list) on an empty
+    axes map, or an axis whose value is not a non-empty list.
+    """
+    import itertools
+
+    if not axes:
+        raise ValueError(
+            f"`{key}:` cross-product needs at least one axis "
+            "(a mapping of axis-name -> list of values)"
+        )
+    names = sorted(axes)
+    value_lists = []
+    for name in names:
+        vals = axes[name]
+        if not isinstance(vals, list) or not vals:
+            raise ValueError(
+                f"`{key}:` axis {name!r} must be a non-empty list of values, got "
+                f"{type(vals).__name__}"
+            )
+        value_lists.append(vals)
+    return [
+        (dict(zip(names, combo)), "-".join(_slug(v) for v in combo))
+        for combo in itertools.product(*value_lists)
+    ]
+
+
+def _matrix_rows(value: Any, key: str, root: "Path | None") -> list:
+    """Resolve a ``matrix:``/``for_each:`` value into ``(vars, default_suffix)`` rows.
+
+    Three input shapes, all producing the same downstream fan-out (one job per row):
+
+    * an **inline list** of variable maps — suffixed by each row's 0-based index;
+    * a **``{from: <path>}``** mapping naming an external data file holding that list
+      (see :func:`_load_matrix_file`) — identical to inline once loaded;
+    * a **cross-product axes** mapping of axis-name -> value-list (any mapping with no
+      ``from:`` key) — one row per cartesian-product combination, suffixed by the
+      combination's slugified values (see :func:`_cross_product_rows`).
+
+    The ``from:`` key disambiguates the two mapping shapes, so it is reserved (an
+    axes mapping cannot name an axis ``from``). Raises ``ValueError`` on a malformed
+    value so the containing file lands in the loader's ``failed`` list.
+    """
+    if isinstance(value, dict):
+        if "from" in value:
+            rows = _load_matrix_file(value, key, root)
+        else:
+            return _cross_product_rows(value, key)
+    else:
+        rows = value
     if not isinstance(rows, list) or not rows:
         raise ValueError(f"`{key}:` must be a non-empty list of variable maps")
-    template = {k: v for k, v in entry.items() if k not in _MATRIX_KEYS}
-
     out: list = []
-    seen: set = set()
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             raise ValueError(
                 f"`{key}:` entry {i} must be a variable map, got "
                 f"{type(row).__name__}"
             )
+        out.append((row, str(i)))
+    return out
+
+
+def _expand_matrix(
+    entry: dict, base_id: str, root: "Path | None" = None, prov: "list | None" = None
+) -> list:
+    """Fan one job mapping out over its ``matrix:``/``for_each:`` rows.
+
+    The matrix value is an **inline list** of variable maps, a ``{from: <path>}``
+    mapping naming an external data file that supplies that list (see
+    :func:`_load_matrix_file`), or a **cross-product axes** mapping of
+    axis-name -> value-list fanned into one row per combination (see
+    :func:`_matrix_rows`/:func:`_cross_product_rows`). Returns one dict per row, each
+    a copy of *entry* (minus the matrix key) with the row's variables substituted in.
+    A stable, distinct id/name is derived per generated job: an explicit ``id``
+    template (e.g. ``id: feed-{{ slug }}``) is honored after substitution, otherwise
+    ``<base_id>-<suffix>`` — the suffix being the row index (inline/file forms) or the
+    combination's slugified values (cross-product form), so the id is deterministic
+    and, for cross-product, independent of axis order. *root* is the containing file's
+    directory, used to resolve a ``from:`` data file. Raises ``ValueError`` (so the
+    file lands in the ``failed`` list, not aborting startup) on a malformed matrix
+    or colliding ids.
+
+    When *prov* is a list it collects, in lock-step with the returned jobs, one
+    ``{"key", "index", "vars"}`` record per generated job naming the matrix key, the
+    0-based row index, and the variable map that produced it (for cross-product, the
+    per-axis combination map) — the provenance surfaced by ``plan render --explain``.
+    Default ``None`` collects nothing, so the expansion is byte-for-byte unchanged.
+    """
+    present = [k for k in _MATRIX_KEYS if k in entry]
+    if len(present) > 1:
+        raise ValueError(f"use only one of {present}, not both")
+    key = present[0]
+    rows = _matrix_rows(entry[key], key, root)
+    template = {k: v for k, v in entry.items() if k not in _MATRIX_KEYS}
+
+    out: list = []
+    seen: set = set()
+    for i, (row, suffix) in enumerate(rows):
         d = _subst_vars(template, row)
-        d.setdefault("id", f"{base_id}-{i}")
+        d.setdefault("id", f"{base_id}-{suffix}")
         d.setdefault("name", d["id"])
         if d["id"] in seen:
             raise ValueError(
@@ -1058,6 +1151,158 @@ def _introspect_active_plan(
     }
 
 
+# ── opt-in plan-file watcher (--watch-plan / $UJIN_WATCH_PLAN) ──────────────── #
+#
+# Off by default: without the flag/env no watcher task is created and a no-config
+# deploy does zero extra I/O. When enabled (and a plan IS configured) a single
+# background task stats the plan file every `interval` seconds and, on a changed
+# signature, re-runs the *identical* resolution as ``POST /plan/reload?prune=true``
+# — the same :func:`_apply_ingest_plan` (defaults/include/matrix/``${VAR}`` plus
+# ``--only``/``--exclude``) and the manager's provenance-aware upsert/prune — so
+# added/changed jobs appear and removed plan-owned jobs are pruned with no restart
+# and no manual POST.
+#
+# Safety properties (all inherited from _apply_ingest_plan, so they match the
+# manual reload byte-for-byte):
+#   * Plan-only: the prune set is ``manager.plan_owned_ids()``, so API-created and
+#     positional-preload jobs are never pruned even when absent from the plan.
+#   * Non-destructive on a bad save: a file-level read/parse error is reported in
+#     ``failed`` and prune is skipped, so a malformed plan never wipes the running
+#     job set — the last good jobs stay put.
+#   * Race-free with the manual endpoint: ``_apply_ingest_plan`` contains no
+#     ``await``, so a watcher tick and a concurrent ``POST /plan/reload`` can never
+#     interleave mid-apply; and because re-applying the same ids is idempotent, even
+#     a redundant double-apply is harmless.
+
+WATCH_PLAN_ENV = "UJIN_WATCH_PLAN"
+WATCH_INTERVAL_ENV = "UJIN_WATCH_INTERVAL"
+#: Default seconds between plan-file change checks. A stat-only poll, so cheap.
+DEFAULT_WATCH_INTERVAL = 2.0
+
+
+def _env_truthy(raw: "str | None") -> bool:
+    """Shell-ish truthiness for a boolean env var (matches ``ScrapeConfig``)."""
+    return bool(raw) and raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_watch(
+    watch_plan: bool, watch_interval: "float | None"
+) -> "tuple[bool, float]":
+    """Fold the flag and env into ``(enabled, interval)``.
+
+    The watcher is enabled by ``--watch-plan`` (``watch_plan=True``) **or** a truthy
+    ``$UJIN_WATCH_PLAN``. The interval is the ``--watch-interval`` value when given,
+    else ``$UJIN_WATCH_INTERVAL``, else :data:`DEFAULT_WATCH_INTERVAL`; a
+    non-positive or unparseable value falls back to the default so a typo can never
+    busy-loop or stall the watcher.
+    """
+    enabled = bool(watch_plan) or _env_truthy(os.environ.get(WATCH_PLAN_ENV))
+    interval = watch_interval
+    if interval is None:
+        raw = os.environ.get(WATCH_INTERVAL_ENV)
+        if raw:
+            try:
+                interval = float(raw)
+            except ValueError:
+                log.warning("ignoring non-numeric %s=%r", WATCH_INTERVAL_ENV, raw)
+                interval = None
+    if interval is None or interval <= 0:
+        interval = DEFAULT_WATCH_INTERVAL
+    return enabled, interval
+
+
+class _PlanWatcher:
+    """Background poller that re-applies the INGEST-PLAN when its file changes.
+
+    Stats *plan_src* every *interval* seconds; on a changed signature (mtime + size)
+    re-runs :func:`_apply_ingest_plan` with ``prune=True`` and refreshes
+    ``app.state.plan`` — the same effect as ``POST /plan/reload?prune=true`` with no
+    restart. Construction snapshots the current file signature, so only edits made
+    *after* startup trigger a reload. Drive :meth:`poll_once` directly for a
+    deterministic, offline test, or schedule :meth:`run` as a background task.
+    """
+
+    def __init__(
+        self, app, manager, plan_src, only, exclude, interval, *, sleep=None
+    ):
+        self.app = app
+        self.manager = manager
+        self.plan_src = plan_src
+        self.only = only
+        self.exclude = exclude
+        self.interval = interval
+        self._sleep = sleep or asyncio.sleep
+        self._sig = self._signature()
+
+    def _signature(self):
+        """``(mtime_ns, size)`` of the plan file, or ``None`` if it can't be stat-ed.
+
+        ``None`` (a missing/unreadable file) is treated as "no actionable change":
+        a transiently-absent plan must never trigger a reload that wipes jobs.
+        """
+        try:
+            st = os.stat(self.plan_src)
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def poll_once(self) -> bool:
+        """One change check; reload (with prune) iff the file changed.
+
+        Returns ``True`` when a reload ran, ``False`` when the file was unchanged,
+        unreadable, or an ``--only`` pattern now matches nothing. Synchronous and
+        free of ``await`` (it only calls :func:`_apply_ingest_plan`), so it can't
+        interleave with a concurrent ``POST /plan/reload``. A reload that resolves to
+        a malformed/transient plan is non-destructive: the failure is reported in
+        ``app.state.plan['failed']`` and the running jobs are kept.
+        """
+        sig = self._signature()
+        if sig is None or sig == self._sig:
+            return False
+        # Record the new signature up front so a persistently-broken file is not
+        # re-applied (and re-logged) every tick; the next real edit changes it again.
+        self._sig = sig
+        try:
+            status = _apply_ingest_plan(
+                self.manager, self.plan_src, only=self.only, exclude=self.exclude,
+                prune=True,
+            )
+        except ValueError as exc:
+            # --only now matches nothing: surface it, keep the last good job set.
+            log.warning("plan watch: %s", exc)
+            return False
+        self.app.state.plan = status
+        if status["failed"]:
+            log.warning(
+                "plan watch: reloaded %s with %d failure(s); kept last good jobs",
+                self.plan_src, len(status["failed"]),
+            )
+        else:
+            log.info(
+                "plan watch: reloaded %s (%d job(s), %d pruned)",
+                self.plan_src, len(status["loaded"]), len(status.get("pruned", [])),
+            )
+        return True
+
+    async def run(self, stop=None, *, max_ticks=None) -> None:
+        """Poll until *stop* is set (or *max_ticks* reached), surviving tick errors.
+
+        Mirrors :meth:`JobManager.cron_loop`'s shape: sleep *interval*, check once,
+        repeat. An unexpected error in a tick is logged and the loop continues — the
+        watcher must never take the server down.
+        """
+        ticks = 0
+        while stop is None or not stop.is_set():
+            await self._sleep(self.interval)
+            try:
+                self.poll_once()
+            except Exception:  # noqa: BLE001 - a tick must never crash the loop
+                log.exception("plan watch: unexpected error; continuing")
+            ticks += 1
+            if max_ticks is not None and ticks >= max_ticks:
+                return
+
+
 def create_jobs_app(
     config_path: str | None = None,
     *,
@@ -1067,6 +1312,8 @@ def create_jobs_app(
     run_engine: bool = True,
     only: list | None = None,
     exclude: list | None = None,
+    watch_plan: bool = False,
+    watch_interval: float | None = None,
 ) -> Any:
     try:
         from fastapi import (
@@ -1092,6 +1339,10 @@ def create_jobs_app(
     # The `--plan` flag (passed as plan_path) overrides $UJIN_INGEST_PLAN; unset ->
     # no plan is loaded and /health stays byte-identical to a no-plan deploy.
     plan_src = plan_path or os.environ.get(INGEST_PLAN_ENV)
+    # Opt-in plan-file watcher. Resolved once here (flag wins over env); off by
+    # default, so without it the lifespan creates no watcher task and does no extra
+    # I/O — a no-config deploy is byte-identical to today.
+    watch_enabled, watch_secs = _resolve_watch(watch_plan, watch_interval)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -1164,6 +1415,27 @@ def create_jobs_app(
         if run_engine:
             tasks.append(asyncio.create_task(engine.run()))
             tasks.append(asyncio.create_task(manager.cron_loop()))
+
+        # Opt-in: a single background task that auto-reloads the plan on file change
+        # (prune semantics), exactly as POST /plan/reload?prune=true would. Only
+        # started when enabled AND a plan is configured (the reload it mirrors is
+        # plan-only); attached to app.state for deterministic testing and cancelled
+        # with the others on shutdown. Unset -> app.state.plan_watcher is None and
+        # no task/I/O is added.
+        app.state.plan_watcher = None
+        if watch_enabled and plan_src:
+            watcher = _PlanWatcher(
+                app, manager, plan_src, only, exclude, watch_secs
+            )
+            app.state.plan_watcher = watcher
+            tasks.append(asyncio.create_task(watcher.run()))
+            log.info("ujin jobs: watching plan %s every %gs", plan_src, watch_secs)
+        elif watch_enabled:
+            log.warning(
+                "ujin jobs: plan watch requested but no plan configured; "
+                "watcher inactive"
+            )
+
         log.info("ujin jobs service ready (%d job(s))", len(manager.jobs))
         try:
             yield
@@ -1443,11 +1715,14 @@ def serve(  # pragma: no cover -- launches uvicorn; not testable without a live 
     plan_path: str | None = None,
     only: list | None = None,
     exclude: list | None = None,
+    watch_plan: bool = False,
+    watch_interval: float | None = None,
 ) -> None:
     import uvicorn
 
     uvicorn.run(
         create_jobs_app(config_path, workflows_dir=workflows_dir, plan_path=plan_path,
-                        only=only, exclude=exclude),
+                        only=only, exclude=exclude, watch_plan=watch_plan,
+                        watch_interval=watch_interval),
         host=host, port=port,
     )

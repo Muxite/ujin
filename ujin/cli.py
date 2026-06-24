@@ -236,7 +236,9 @@ def _cmd_jobs_serve(args: argparse.Namespace) -> int:
 
     serve(host=args.host, port=args.port, config_path=args.jobs,
           workflows_dir=args.workflows, plan_path=args.plan,
-          only=only or None, exclude=exclude or None)
+          only=only or None, exclude=exclude or None,
+          watch_plan=getattr(args, "watch_plan", False),
+          watch_interval=getattr(args, "watch_interval", None))
     return 0
 
 
@@ -956,6 +958,14 @@ def main(argv: list[str] | None = None) -> int:
         help="load KEY=VALUE pairs from PATH and use them for ${VAR} substitution "
              "when resolving the plan/workflows directory (process env vars take "
              "precedence; the file only fills in variables not already set)")
+    p_jobs.add_argument(
+        "--watch-plan", action="store_true",
+        help="watch the --plan file and auto-reload (with prune) on change, no "
+             "restart needed (off by default; also enabled by $UJIN_WATCH_PLAN)")
+    p_jobs.add_argument(
+        "--watch-interval", type=float, default=None, metavar="SECONDS",
+        help="poll interval for --watch-plan, in seconds (default: 2.0; also "
+             "$UJIN_WATCH_INTERVAL)")
     p_jobs.add_argument("--host", default="0.0.0.0", help="bind address (default: 0.0.0.0)")
     p_jobs.add_argument("--port", type=int, default=8902, help="port (default: 8902)")
     p_jobs.set_defaults(func=_cmd_jobs_serve)
