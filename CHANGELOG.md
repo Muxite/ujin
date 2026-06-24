@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **docs(sync):** Repaired CHANGELOG.md — collapsed three duplicate `0.15.0` version headers and the interleaved `0.16.0` header into a single correctly-ordered history; also fixed a duplicate `0.6.0` header and the misplaced `0.8.0` section (which was listed after `0.7.0` rather than before it). Audited `README.md`, `docs/INGEST_PLAN.md`, `docs/WORKFLOWS.md`, and `docs/JOBS.md` against the full shipped external-config surface (`defaults:` deep-merge, `include:`/`use:` fragments, `matrix:`/`for_each:` fan-out, `$UJIN_INGEST_PLAN`/`--plan`, `--env-file`, `--only`/`--exclude` selectors, `--explain` provenance, `POST /plan/reload` with `?prune` and `?dry_run`, and `ujin plan validate`/`render`/`diff`). All surfaces were already in sync. Verified that the example snippets in `docs/INGEST_PLAN.md`, `docs/WORKFLOWS.md`, and `docs/JOBS.md` resolve and run as written against the shipped loaders. No runtime behaviour changed; test suite unaffected.
+
 ## 0.29.0 — 2026-06-24
 
 - **`POST /plan/reload?dry_run=true` — opt-in preview of a reload without mutating anything.** The reload endpoint gains a dry-run mode — `?dry_run=true` query param or a `{"dry_run": true}` JSON body, accepted exactly like `prune` — that resolves the configured plan through the **identical** `_load_ingest_plan` resolution (`defaults:`/`include:`/`matrix:`/`${VAR}`) and `--only`/`--exclude` selection as a real reload, then reports the effect **without** touching the job manager: which plan job ids would be `added`, `updated` (resolved spec differs), or `unchanged`, plus — when combined with `prune` — which plan-owned ids would be `removed`. `reloaded` stays `false`, no job is upserted or pruned, and `GET /jobs` / the `/health` plan block are identical immediately before and after the call. Strictly additive: the default (no `dry_run`) reload, with or without `prune`, is byte-for-byte the 0.28 behaviour. With no plan configured the dry run is a non-error no-op. Still behind the optional `UJIN_API_KEY` auth like every mutating route. Added offline tests covering added/updated/unchanged, dry-run + prune, the JSON-body form, and the no-plan no-op; documented in `README.md`, `docs/INGEST_PLAN.md`, and `docs/JOBS.md` with runnable examples.
@@ -162,14 +166,6 @@
 - **docs(api)**: Reconciled `docs/API.md` against the shipped 0.16.0 surface: added `render`, `actions`, `page_size`, and `cursor` to the `POST /scrape` request-field table (all four are accepted by `ScrapeRequest` and referenced in prose, but were absent from the reference table); added `UJIN_LEARN_STRATEGY` and `UJIN_STRATEGY_DB` to the configuration table (both ship via `ScrapeConfig.from_env()` and were mentioned in `README.md` but missing from the API config reference).
 - **docs(sync)**: Comprehensive audit of `README.md` and all `docs/` pages against the shipped 0.16.0 surface. Added "GraphQL endpoints" and "browser-driven interaction recipes" to the README intro feature list — both `GraphQLPollable` and `BrowserPollable` have shipped in `ujin.poll` (since 0.15.0 and 0.5.0 respectively) but were absent from the top-level feature pitch. Added `BrowserPollable` to the README "How it works → Roles" list alongside the other pollable classes.
 
-## 0.15.0 — 2026-06-22
-
-### Added
-- **HTML image extraction** — new `ujin.extract.extract_images(html, base_url=None) -> list[dict]` parses every `<img>` on a page into one normalized dict with an absolute `src`, an `alt` string, and an optional integer `width`/`height` and `title` when present. Relative srcs are resolved against `base_url`; lazy-load `data-src`/`data-original` and the first `srcset` candidate are honored (a `data:` placeholder is skipped whenever a real src exists for the same image); identical srcs are de-duplicated in document order; and empty/malformed input returns `[]` rather than raising. A new additive `images` scrape mode surfaces it: `POST /scrape {"mode":"images"}` (or `images` inside a `modes` multi-extract list) returns the dicts in the new `ScrapeResponse.images` field — under the `extracts` map for multi-extract requests. Strictly additive — every existing mode, field, and default is byte-for-byte unchanged. Documented in `README.md` and `docs/API.md`.
-## 0.15.0 — 2026-06-22
-
-### Added
-- **`unique` and `fill` transforms** — `unique` drops duplicate items from a list payload by a dotted `key` (or whole-item identity when key omitted), preserving first-occurrence order and passing non-list payloads through unchanged; `fill` ensures named dotted fields exist on a dict payload or each dict in a list-of-dicts, setting a per-path or shared default without overwriting existing non-None values and passing non-dict items through unchanged. Both are discoverable at `GET /kinds` and documented in `docs/LIST_TRANSFORMS.md`.
 ## 0.16.0 — 2026-06-22
 
 - **docs-sync** — audited all docs against the 0.15.0 shipped set; added `graphql` to the poller-control `kind` list in `docs/API.md`; added `unique`/`fill` to the `LIST_TRANSFORMS` reference in `README.md`; and added `aggregate`, `unique`, and `fill` rows to the transforms table in `docs/JOBS.md` so every built-in transform kind is discoverable from the job reference.
@@ -177,6 +173,9 @@
 
 ## 0.15.0 — 2026-06-22
 
+### Added
+- **HTML image extraction** — new `ujin.extract.extract_images(html, base_url=None) -> list[dict]` parses every `<img>` on a page into one normalized dict with an absolute `src`, an `alt` string, and an optional integer `width`/`height` and `title` when present. Relative srcs are resolved against `base_url`; lazy-load `data-src`/`data-original` and the first `srcset` candidate are honored (a `data:` placeholder is skipped whenever a real src exists for the same image); identical srcs are de-duplicated in document order; and empty/malformed input returns `[]` rather than raising. A new additive `images` scrape mode surfaces it: `POST /scrape {"mode":"images"}` (or `images` inside a `modes` multi-extract list) returns the dicts in the new `ScrapeResponse.images` field — under the `extracts` map for multi-extract requests. Strictly additive — every existing mode, field, and default is byte-for-byte unchanged. Documented in `README.md` and `docs/API.md`.
+- **`unique` and `fill` transforms** — `unique` drops duplicate items from a list payload by a dotted `key` (or whole-item identity when key omitted), preserving first-occurrence order and passing non-list payloads through unchanged; `fill` ensures named dotted fields exist on a dict payload or each dict in a list-of-dicts, setting a per-path or shared default without overwriting existing non-None values and passing non-dict items through unchanged. Both are discoverable at `GET /kinds` and documented in `docs/LIST_TRANSFORMS.md`.
 - **`graphql` source kind** — new `GraphQLPollable` POSTs a configured `query` (plus optional `variables`, `headers`) to a `url` and fingerprints events narrowed from a dotted `data_path` in the JSON response, reusing the same aiohttp client/timeout path as `ApiPollable`. A GraphQL `errors` array, non-200 status codes, and network exceptions are all surfaced as poll failures without crashing the poll loop. Registered as `kind: graphql` in YAML targets and the jobs control plane.
 
 ## 0.14.0 — 2026-06-22
@@ -246,32 +245,6 @@
   explicitly used. `crawl_delay` and the host-policy signals now drive this governor.
 - **scrape multi-extract**: `POST /scrape` now accepts an optional `modes` list (`links`/`article`/`auto`/`structured`/`html`) so one request fetches the page once and returns a result per mode under a new additive `extracts` map (keyed by mode); the top-level fields mirror the first listed mode. Backed by `ScrapeService.scrape_multi()`, which runs each mode over the already-fetched body and isolates per-mode failures as `kind='error'` entries so one failing mode never sinks the others. The `html` mode returns the raw fetched HTML in the new `html` response field. Omitting `modes` keeps the classic single-`mode` behaviour byte-for-byte unchanged.
 
-## 0.7.0 — 2026-06-22
-
-- **tests**: Added `tests/test_cov_trends_mcp.py` (35 offline tests) raising per-file coverage of `ujin/trends/corroboration.py`, `ujin/trends/scorer.py`, `ujin/mcp/server.py`, `ujin/service.py`, and `ujin/sources/social/x.py` to ≥99% each, lifting TOTAL coverage from ~89% to 90.7%.
-
-## 0.6.0
-
-Additive only — no public symbol, CLI subcommand, flag, env var, response field,
-or Docker target was renamed or removed, so the three consumer-contract surfaces
-(awork / hct-site / wordle-max) stay frozen and green.
-
-### Added
-- **`SiteStore` / `HostRecord`** (`ujin/adapt/site_store.py`, pure stdlib) — a
-  durable per-host observed-state store on SQLite. Persists last status,
-  p50/last latency, error count, 429 count, observed `Crawl-delay`, the adaptive
-  interval, and `last_seen` so a fresh process resumes calibrated, polite
-  polling. `SiteStore(path=':memory:', clock=time.time)`; `get(host)` returns a
-  zero-valued `HostRecord` for unknown hosts; `record(host, **signals)` is an
-  atomic serialized upsert (counters accumulate, gauges overwrite, `last_seen`
-  stamped from the injectable clock); `close()` runs a truncating
-  `wal_checkpoint`. Reuses the disk cache's WAL-mode / `synchronous=NORMAL`
-  durability pattern. Both names are exported from `ujin.adapt`. This is the
-  foundation other Track-1 adaptive units consume.
-## 0.6.0 — 2026-06-22
-
-### Added
-- **`ujin.robots`**: `RobotsPolicy` parses robots.txt into per-User-agent groups with Allow/Disallow longest-match precedence, `*` and `$` wildcard handling, `Crawl-delay` extraction, and `Sitemap:` directive collection; malformed/empty/missing file → allow-all. `RobotsPolicy.is_allowed(path, agent='*') -> bool` and `RobotsPolicy.crawl_delay(agent='*') -> float | None` are pure methods over already-parsed text. `RobotsCache(ttl, fetcher, clock)` adds a TTL fetch+cache layer with injectable fetcher and clock for deterministic tests; opt-in only — default scrape/poll behavior is unchanged unless `RobotsCache` is explicitly used. `crawl_delay()` values are a future input to the learned-rate-limit system (`ujin.adapt.concurrency`).
 ## 0.8.0 — 2026-06-22
 
 ### Added
@@ -294,6 +267,30 @@ or Docker target was renamed or removed, so the three consumer-contract surfaces
 - **Test coverage for social sources and jobs client** — fixture-driven offline unit tests for `mastodon.py` (47%→100%), `twitter.py` (44%→100%), `jobs/client.py` (67%→100%), and `sitemap.py` (79%→100%); total suite coverage rises to 88.9% (floor 85%).
 - **Coverage gap-fill** — offline tests for `poll/__init__` lazy imports, `_nitter.nitter_posts` (success/failure/cooldown paths), and `_syndication.syndication_posts` (JSON/HTML/error paths); closes the 87%→88% gap flagged in prior review.
 - **Scrape subsystem coverage** (`tests/test_cov_scrape.py`) — 49 offline fixture-driven tests raising `app.py` 67%→97%, `build.py` 75%→100%, `config.py` 76%→100%, `host_overrides.py` 78%→97%, `service.py` 83%→97%; total suite coverage rises to 91.4% (floor 89%).
+
+## 0.7.0 — 2026-06-22
+
+- **tests**: Added `tests/test_cov_trends_mcp.py` (35 offline tests) raising per-file coverage of `ujin/trends/corroboration.py`, `ujin/trends/scorer.py`, `ujin/mcp/server.py`, `ujin/service.py`, and `ujin/sources/social/x.py` to ≥99% each, lifting TOTAL coverage from ~89% to 90.7%.
+
+## 0.6.0 — 2026-06-22
+
+Additive only — no public symbol, CLI subcommand, flag, env var, response field,
+or Docker target was renamed or removed, so the three consumer-contract surfaces
+(awork / hct-site / wordle-max) stay frozen and green.
+
+### Added
+- **`SiteStore` / `HostRecord`** (`ujin/adapt/site_store.py`, pure stdlib) — a
+  durable per-host observed-state store on SQLite. Persists last status,
+  p50/last latency, error count, 429 count, observed `Crawl-delay`, the adaptive
+  interval, and `last_seen` so a fresh process resumes calibrated, polite
+  polling. `SiteStore(path=':memory:', clock=time.time)`; `get(host)` returns a
+  zero-valued `HostRecord` for unknown hosts; `record(host, **signals)` is an
+  atomic serialized upsert (counters accumulate, gauges overwrite, `last_seen`
+  stamped from the injectable clock); `close()` runs a truncating
+  `wal_checkpoint`. Reuses the disk cache's WAL-mode / `synchronous=NORMAL`
+  durability pattern. Both names are exported from `ujin.adapt`. This is the
+  foundation other Track-1 adaptive units consume.
+- **`ujin.robots`**: `RobotsPolicy` parses robots.txt into per-User-agent groups with Allow/Disallow longest-match precedence, `*` and `$` wildcard handling, `Crawl-delay` extraction, and `Sitemap:` directive collection; malformed/empty/missing file → allow-all. `RobotsPolicy.is_allowed(path, agent='*') -> bool` and `RobotsPolicy.crawl_delay(agent='*') -> float | None` are pure methods over already-parsed text. `RobotsCache(ttl, fetcher, clock)` adds a TTL fetch+cache layer with injectable fetcher and clock for deterministic tests; opt-in only — default scrape/poll behavior is unchanged unless `RobotsCache` is explicitly used. `crawl_delay()` values are a future input to the learned-rate-limit system (`ujin.adapt.concurrency`).
 
 ## 0.5.0 — 2026-06-17
 
