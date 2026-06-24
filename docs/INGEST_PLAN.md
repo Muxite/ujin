@@ -866,6 +866,51 @@ in the environment for both plans). An unreadable or schema-invalid `OLD`/`NEW`
 input exits non-zero with a clean `ujin: …` message and no traceback, regardless
 of `--exit-code`.
 
+## Exporting the file-format schema — `plan schema`
+
+Use `ujin plan schema` to print a machine-readable **JSON Schema** (draft 2020-12)
+describing the INGEST-PLAN / workflow file format itself — the per-job shape
+(`source` / `transforms` / `sinks` / `schedule`), the top-level `defaults:` block,
+`include:`/`use:` fragment references, `matrix:`/`for_each:` fan-out, `vars:`
+defaults, and `profiles:` overlays. Feed it to an editor for autocompletion and
+linting, or to a CI check that a plan is structurally well-formed *before*
+`plan validate` runs the loaders:
+
+```bash
+ujin plan schema                                   # print the schema to stdout
+ujin plan schema --out ingest-plan.schema.json     # …or write it to a file
+ujin plan schema | python3 -m json.tool >/dev/null && echo "valid JSON"
+```
+
+The document is a single deterministic JSON object with the usual JSON Schema keys
+(`$schema`, `$id`, `type`, `properties`, `$defs`); repeated runs are byte-for-byte
+identical, and `--out PATH` writes the same bytes to a file (a write error exits
+non-zero with a clean `ujin: …` message and leaves stdout empty). It describes the
+**unresolved** file — what you write on disk — so it is deliberately permissive: a
+job mapping may omit keys that `defaults:` or the filename stem supply, and
+`additionalProperties` stays open (the advisory unknown-key check in
+[`plan validate --strict`](#validation--common-mistakes--misspelled-keys) owns typo
+detection). It constrains the document shape and the *types* of recognized keys —
+enough to reject a structurally-malformed plan (a scalar document, a non-list
+`jobs:`, a string `source:`) while accepting every shipped example under
+`examples/`. `plan schema` is read-only: it resolves no plan, never touches
+`JobSpec.from_dict` or the loaders, and always exits 0 (apart from an `--out` write
+error).
+
+Validate a plan against the emitted schema with any draft-2020-12 validator —
+e.g. Python's [`jsonschema`](https://pypi.org/project/jsonschema/):
+
+```bash
+ujin plan schema --out ingest-plan.schema.json
+python3 - <<'PY'
+import json, yaml, jsonschema
+schema = json.load(open("ingest-plan.schema.json"))
+plan = yaml.safe_load(open("examples/ingest-plan.yaml"))
+jsonschema.Draft202012Validator(schema).validate(plan)   # raises on a malformed plan
+print("ingest-plan.yaml conforms")
+PY
+```
+
 ## Job-id selection — `--only` and `--exclude`
 
 All three plan-aware commands (`plan render`, `plan validate`, and `jobs-serve`)

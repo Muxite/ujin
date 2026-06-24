@@ -209,7 +209,7 @@ class ChunkTransform:
                         cur, cur_tok = [], 0
                     cur.append(item)
                     cur_tok += tok
-                if cur:
+                if cur:  # pragma: no cover — always true: target is non-empty (checked above)
                     out.append(cur)
                 return out
             size = max(1, int(self.size))

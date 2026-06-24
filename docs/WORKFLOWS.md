@@ -393,6 +393,57 @@ Run as-is and the job queries `us-east`; set the environment variable `region` t
 See `examples/vars-defaults.yaml` for a runnable `vars:` example (a matrix job whose
 `region`/`rows` fall back to the defaults while a per-entry var would override them).
 
+### `profiles:` — named overlays over `defaults:`
+
+A top-level **`profiles:`** mapping (profile name → overlay mapping) declares named
+variations of a file's base `defaults:`. Selecting one with `--profile NAME` (or
+`$UJIN_PLAN_PROFILE`; the flag wins) **deep-merges that overlay over `defaults:`**
+before the per-job merge, so every job inherits the overlaid value unless it pins
+the key itself. Per-job keys still win, and `matrix:`/`for_each:` fan-out,
+`${VAR}`, and `{{ var }}` substitution behave exactly as without a profile:
+
+```yaml
+# /workflows/feeds.yaml
+defaults:
+  schedule: { mode: poll, base: 60 }
+profiles:
+  fast:
+    schedule: { base: 5 }    # tighten every non-overriding job's poll to 5s
+  slow:
+    schedule: { base: 600 }  # back off to 10 minutes
+jobs:
+  - name: home
+    source: { kind: http, config: { url: "https://example.com/" } }
+  - name: status
+    schedule: { mode: poll, base: 9 }   # pins its own cadence; profile is ignored
+    source: { kind: http, config: { url: "https://example.com/status" } }
+```
+
+```bash
+ujin plan render  ./workflows/ --profile fast    # home polls every 5s; status keeps 9s
+UJIN_PLAN_PROFILE=slow ujin jobs-serve           # env fallback (a flag would override)
+```
+
+- **Merge order.** profile overlay over `defaults:` → that result deep-merged under
+  each job. Lists replace wholesale; nested mappings merge key-by-key. Per-job keys
+  always win over the profile, so the established precedence
+  (per-job > profile > `defaults:`) holds.
+- **Leniency in a directory.** A workflow file with no `profiles:` key is left
+  unchanged regardless of the selected profile, so you can roll out
+  `profiles:` one file at a time. Only a file that *declares* `profiles:` but
+  *omits* the selected name exits non-zero with a clean `ujin: …` message; other
+  files in the directory still load.
+- **Unknown name.** If every file in the directory omits `profiles:`, selecting any
+  profile name is a harmless no-op (no file fails). When at least one file declares
+  `profiles:` and the selected name is absent from that file, that file lands in the
+  `failed` list with an actionable `ujin: …` message listing the names it recognises.
+- **Additive.** A file with no `profiles:` key, and with no profile selected,
+  resolves byte-for-byte as before.
+
+See `examples/profiles.yaml` for a runnable `profiles:` example, and
+[INGEST_PLAN.md](INGEST_PLAN.md#profiles--named-overlays-over-defaults) for the
+full reference including selection flags, env fallback, and precedence rules.
+
 ## Collect — the container does the job
 
 Each workflow is driven by the same [adaptive engine](../README.md#how-it-works)
