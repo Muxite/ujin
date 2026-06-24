@@ -624,6 +624,37 @@ def _cmd_plan_diff(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_plan_schema(args: argparse.Namespace) -> int:
+    """Print the JSON Schema (draft 2020-12) for the INGEST-PLAN / workflow format.
+
+    Emits a single deterministic JSON document describing the file format the plan
+    and workflow loaders accept — the per-job shape (source/transforms/sinks/
+    schedule), the top-level ``defaults:`` block, ``include:``/``use:`` fragment
+    references, ``matrix:``/``for_each:`` fan-out, ``vars:`` defaults, and
+    ``profiles:`` overlays. With ``--out PATH`` the schema is written to that file
+    instead of stdout (a write error exits non-zero with a clean ``ujin: …``
+    message). Read-only: it resolves no plan and never touches ``JobSpec.from_dict``
+    or the loaders.
+    """
+    import json as _json
+
+    from ujin.jobs.schema import plan_schema
+
+    text = _json.dumps(plan_schema(), indent=2)
+
+    out = getattr(args, "out", None)
+    if out:
+        try:
+            Path(out).write_text(text + "\n", encoding="utf-8")
+        except OSError as exc:
+            print(f"ujin: cannot write schema to {out}: {exc}", file=sys.stderr)
+            return 1
+        print(f"ujin: wrote JSON Schema to {out}", file=sys.stderr)
+    else:
+        print(text)
+    return 0
+
+
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
     from ujin.mcp import serve
 
@@ -1195,6 +1226,33 @@ def main(argv: list[str] | None = None) -> int:
              "when resolving both plans (process env vars take precedence; the "
              "file only fills in variables not already set)")
     p_plan_diff.set_defaults(func=_cmd_plan_diff)
+
+    p_plan_schema = plan_sub.add_parser(
+        "schema",
+        help="print the JSON Schema for the INGEST-PLAN / workflow file format",
+        description="Print a machine-readable JSON Schema (draft 2020-12) describing "
+                    "the INGEST-PLAN / workflow file format ujin's plan and workflow "
+                    "loaders accept: the per-job shape (source/transforms/sinks/"
+                    "schedule), the top-level defaults: block, include:/use: fragment "
+                    "references, matrix:/for_each: fan-out, vars: defaults, and "
+                    "profiles: overlays. The schema is emitted to stdout as a single "
+                    "deterministic JSON document; --out PATH writes it to a file "
+                    "instead. It describes the unresolved file and is intentionally "
+                    "permissive (defaults:/include:/matrix: are resolved before a "
+                    "JobSpec is built), constraining the document shape and key types "
+                    "— enough to reject a structurally-malformed plan while accepting "
+                    "every shipped example. Read-only: it resolves nothing and never "
+                    "starts the server.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="examples:\n"
+               "  ujin plan schema\n"
+               "  ujin plan schema --out ingest-plan.schema.json\n"
+               "  ujin plan schema | python3 -m json.tool   # verify it parses as JSON",
+    )
+    p_plan_schema.add_argument(
+        "--out", default=None, metavar="PATH",
+        help="write the JSON Schema to PATH instead of stdout")
+    p_plan_schema.set_defaults(func=_cmd_plan_schema)
 
     p_watch = sub.add_parser(
         "watch", help="watch a URL's regions for change (adaptive, jittered)",
