@@ -103,6 +103,11 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
 ujin jobs-serve --plan examples/ingest-plan.yaml   # :8902 — many jobs from one file
 ujin plan validate examples/ingest-plan.yaml        # validate plan before deploying (exit 0 = ok)
 ujin plan render   examples/ingest-plan.yaml        # print fully-expanded job specs (--json for CI)
+
+# Job-id selectors — filter after full resolution (defaults, includes, matrix fan-out):
+ujin plan render  examples/ingest-plan.yaml --only 'feed-*'            # matching ids only
+ujin plan render  examples/ingest-plan.yaml --only 'feed-*' --exclude feed-tech
+ujin jobs-serve   --plan examples/ingest-plan.yaml --only 'feed-*'     # preload subset
 ```
 
 `--plan` (or `$UJIN_INGEST_PLAN`) mounts a single YAML file that declares many jobs
@@ -114,6 +119,12 @@ at once. Three additive layers keep large plans DRY:
 - **`matrix:`/`for_each:`** — a list of variable maps; ujin substitutes each into
   `{{ var }}` placeholders across the source/transforms/sinks/schedule, emitting one
   job per entry with a stable, deterministic id so reloads upsert rather than duplicate.
+
+`ujin plan validate` and `ujin plan render` accept `--only PATTERN[,PATTERN…]` and
+`--exclude PATTERN[,PATTERN…]` (fnmatch-style globs, comma-separated or repeatable)
+to filter the resolved jobs **after** all resolution layers. `jobs-serve --plan` also
+accepts both flags and reflects only the selected jobs in `GET /health`. A `--only`
+pattern that matches nothing exits non-zero with a clean `ujin: …` message.
 
 `ujin plan validate` checks a plan file **or** a workflows directory with the same
 loaders as `jobs-serve` — identical ids and error messages — without starting the

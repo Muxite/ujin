@@ -287,6 +287,44 @@ ujin plan render ./ingest-plan.yaml --json | python3 -c \
 `ujin plan render` exits zero when all jobs resolve and non-zero with a clean
 `ujin: …` message (no traceback) on a missing/unreadable path or any failed job.
 
+## Job-id selection — `--only` and `--exclude`
+
+All three plan-aware commands (`plan render`, `plan validate`, and `jobs-serve`)
+accept `--only` and `--exclude` to filter which jobs are actually processed.
+Selection runs **after full resolution** — after `defaults:` deep-merge,
+`include:`/`use:` fragment inlining, `matrix:`/`for_each:` fan-out, and `${VAR}`
+substitution — so patterns always match the **final expanded job id**.
+
+```bash
+# render only jobs whose id starts with "feed-"
+ujin plan render  ./ingest-plan.yaml --only 'feed-*'
+
+# comma-separated or repeatable patterns
+ujin plan render  ./ingest-plan.yaml --only 'feed-tech,feed-science'
+ujin plan render  ./ingest-plan.yaml --only 'feed-tech' --only 'feed-science'
+
+# --exclude subtracts from the --only set
+ujin plan render  ./ingest-plan.yaml --only 'feed-*' --exclude feed-tech
+
+# validate only the selected subset
+ujin plan validate ./ingest-plan.yaml --only 'feed-*' --json
+
+# preload only matching jobs; /health plan.loaded reflects the filtered set
+ujin jobs-serve   --plan ./ingest-plan.yaml --only 'feed-*'
+```
+
+Patterns are **fnmatch-style globs** (`*` matches any string, `?` matches one
+character, `[seq]` matches a character in the set) matched case-sensitively
+against each fully-expanded job id. When both flags are given, `--exclude`
+subtracts from the `--only` set. A `--only` pattern that matches no resolved
+job exits non-zero immediately with a clean `ujin: …` message and no traceback:
+
+```
+ujin: --only 'no-such-*': no job ids matched (5 job(s) resolved)
+```
+
+With no selector flags, all three commands are **byte-for-byte unchanged**.
+
 ## Example
 
 A ready-to-mount plan demonstrating `defaults:` + a shared `include:` + a

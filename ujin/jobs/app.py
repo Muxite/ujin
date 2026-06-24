@@ -28,6 +28,7 @@ import difflib
 import logging
 import os
 import re
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -370,6 +371,47 @@ def _report_warnings(messages: "list[str]", warnings: "list | None") -> None:
             warnings.append(msg)
 
 
+# ── job-id selection (--only / --exclude) ──────────────────────────────────── #
+#
+# Applied AFTER full resolution (includes, defaults, matrix fan-out, ${VAR})
+# so patterns always match the final expanded ids. Strictly additive: with no
+# patterns the loader and health output are byte-for-byte unchanged.
+
+
+def _select_jobs(specs, only=None, exclude=None):
+    """Filter *specs* by fnmatch job-id patterns.
+
+    ``only``    — keep jobs whose id matches ANY pattern; applied first.
+    ``exclude`` — remove jobs whose id matches ANY exclude pattern.
+    Both ``None`` and ``[]`` mean "no filter" — the list is returned unchanged.
+    Raises ``ValueError`` (clean ``ujin: …`` message) when ``only`` is given
+    but no job id matches, so callers can exit non-zero without a traceback.
+    """
+    from fnmatch import fnmatch
+
+    if not only and not exclude:
+        return specs
+
+    def _m(job_id, patterns):
+        return any(fnmatch(job_id, p) for p in patterns)
+
+    if only:
+        selected = [s for s in specs if _m(s.id, only)]
+        if not selected:
+            pats = ", ".join(repr(p) for p in only)
+            raise ValueError(
+                f"ujin: --only {pats}: no job ids matched "
+                f"({len(specs)} job(s) resolved)"
+            )
+    else:
+        selected = list(specs)
+
+    if exclude:
+        selected = [s for s in selected if not _m(s.id, exclude)]
+
+    return selected
+
+
 def _preload_specs(path: str) -> list:
     """Parse a jobs.yaml (top-level list, or {jobs: [...]}) into JobSpecs."""
     import yaml
@@ -642,6 +684,8 @@ def create_jobs_app(
     plan_path: str | None = None,
     scrape_config: Any = None,
     run_engine: bool = True,
+    only: list | None = None,
+    exclude: list | None = None,
 ) -> Any:
     try:
         from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -718,7 +762,14 @@ def create_jobs_app(
             plan_status: dict[str, list] = {
                 "path": str(plan_src), "loaded": [], "failed": [],
             }
-            for spec in _load_ingest_plan(plan_src, failed=plan_status["failed"]):
+            plan_specs = _load_ingest_plan(plan_src, failed=plan_status["failed"])
+            if only is not None or exclude is not None:
+                try:
+                    plan_specs = _select_jobs(plan_specs, only, exclude)
+                except ValueError as exc:
+                    print(str(exc), file=sys.stderr)
+                    sys.exit(1)
+            for spec in plan_specs:
                 try:
                     manager.create(spec)
                     plan_status["loaded"].append(spec.id)
@@ -927,10 +978,13 @@ def serve(  # pragma: no cover -- launches uvicorn; not testable without a live 
     config_path: str | None = None,
     workflows_dir: str | None = None,
     plan_path: str | None = None,
+    only: list | None = None,
+    exclude: list | None = None,
 ) -> None:
     import uvicorn
 
     uvicorn.run(
-        create_jobs_app(config_path, workflows_dir=workflows_dir, plan_path=plan_path),
+        create_jobs_app(config_path, workflows_dir=workflows_dir, plan_path=plan_path,
+                        only=only, exclude=exclude),
         host=host, port=port,
     )

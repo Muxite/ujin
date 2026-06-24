@@ -175,11 +175,37 @@ def _cmd_scrape_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_patterns(values: "list[str] | None") -> list:
+    """Flatten a list of possibly comma-separated glob-pattern strings."""
+    if not values:
+        return []
+    out: list[str] = []
+    for v in values:
+        out.extend(p.strip() for p in v.split(",") if p.strip())
+    return out
+
+
 def _cmd_jobs_serve(args: argparse.Namespace) -> int:
     from ujin.jobs.app import serve
 
+    only = _parse_patterns(getattr(args, "only", None))
+    exclude = _parse_patterns(getattr(args, "exclude", None))
+
+    # Pre-flight: if --only given with --plan, check for a match before launching
+    # uvicorn so the CLI exits non-zero with a clean message (no traceback).
+    if only and args.plan:
+        from ujin.jobs.app import _load_ingest_plan, _select_jobs
+        pre_failed: list = []
+        pre_specs = _load_ingest_plan(Path(args.plan), failed=pre_failed)
+        try:
+            _select_jobs(pre_specs, only, exclude)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
     serve(host=args.host, port=args.port, config_path=args.jobs,
-          workflows_dir=args.workflows, plan_path=args.plan)
+          workflows_dir=args.workflows, plan_path=args.plan,
+          only=only or None, exclude=exclude or None)
     return 0
 
 
@@ -197,10 +223,12 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
     """
     import json as _json
 
-    from ujin.jobs.app import _load_ingest_plan, _load_workflows_dir
+    from ujin.jobs.app import _load_ingest_plan, _load_workflows_dir, _select_jobs
 
     path = Path(args.path)
     strict = getattr(args, "strict", False)
+    only = _parse_patterns(getattr(args, "only", None))
+    exclude = _parse_patterns(getattr(args, "exclude", None))
 
     if not path.exists():
         msg = f"ujin: path not found: {args.path}"
@@ -217,6 +245,20 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
         specs = _load_workflows_dir(str(path), failed=failed, warnings=warnings)
     else:
         specs = _load_ingest_plan(path, failed=failed, warnings=warnings)
+
+    # Apply --only/--exclude selection after full resolution so patterns match
+    # the final expanded job ids (post defaults-merge, includes, matrix fan-out).
+    if only or exclude:
+        try:
+            specs = _select_jobs(specs, only or None, exclude or None)
+        except ValueError as exc:
+            msg = str(exc)
+            if args.json:
+                print(_json.dumps({"ok": False, "error": msg, "resolved": [],
+                                   "failed": [], "warnings": [], "strict": strict}))
+            else:
+                print(msg, file=sys.stderr)
+            return 1
 
     resolved = [s.id for s in specs]
     # Schema warnings only fail the run under --strict; otherwise they are reported
@@ -262,9 +304,11 @@ def _cmd_plan_render(args: argparse.Namespace) -> int:
 
     import yaml as _yaml
 
-    from ujin.jobs.app import _load_ingest_plan, _load_workflows_dir
+    from ujin.jobs.app import _load_ingest_plan, _load_workflows_dir, _select_jobs
 
     path = Path(args.path)
+    only = _parse_patterns(getattr(args, "only", None))
+    exclude = _parse_patterns(getattr(args, "exclude", None))
 
     if not path.exists():
         print(f"ujin: path not found: {args.path}", file=sys.stderr)
@@ -275,6 +319,15 @@ def _cmd_plan_render(args: argparse.Namespace) -> int:
         specs = _load_workflows_dir(str(path), failed=failed)
     else:
         specs = _load_ingest_plan(path, failed=failed)
+
+    # Apply --only/--exclude selection after full resolution so patterns match
+    # the final expanded job ids (post defaults-merge, includes, matrix fan-out).
+    if only or exclude:
+        try:
+            specs = _select_jobs(specs, only or None, exclude or None)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
 
     if failed:
         for entry in failed:
@@ -687,6 +740,14 @@ def main(argv: list[str] | None = None) -> int:
     p_jobs.add_argument("--plan", default=None,
                         help="INGEST-PLAN file declaring many jobs at once "
                              "(overrides $UJIN_INGEST_PLAN)")
+    p_jobs.add_argument(
+        "--only", action="append", default=None, metavar="PATTERN",
+        help="load only plan jobs whose id matches this fnmatch pattern "
+             "(comma-separated or repeatable; applied after full resolution)")
+    p_jobs.add_argument(
+        "--exclude", action="append", default=None, metavar="PATTERN",
+        help="exclude plan jobs whose id matches this fnmatch pattern "
+             "(comma-separated or repeatable; subtracts from --only)")
     p_jobs.add_argument("--host", default="0.0.0.0", help="bind address (default: 0.0.0.0)")
     p_jobs.add_argument("--port", type=int, default=8902, help="port (default: 8902)")
     p_jobs.set_defaults(func=_cmd_jobs_serve)
@@ -721,6 +782,14 @@ def main(argv: list[str] | None = None) -> int:
     p_plan_validate.add_argument("--strict", action="store_true",
                                  help="treat unrecognized/misspelled keys as failures "
                                       "(non-zero exit) instead of advisory warnings")
+    p_plan_validate.add_argument(
+        "--only", action="append", default=None, metavar="PATTERN",
+        help="validate only jobs whose id matches this fnmatch pattern "
+             "(comma-separated or repeatable; matched after full resolution)")
+    p_plan_validate.add_argument(
+        "--exclude", action="append", default=None, metavar="PATTERN",
+        help="exclude jobs whose id matches this fnmatch pattern "
+             "(comma-separated or repeatable; subtracts from --only)")
     p_plan_validate.set_defaults(func=_cmd_plan_validate)
 
     p_plan_render = plan_sub.add_parser(
@@ -744,6 +813,14 @@ def main(argv: list[str] | None = None) -> int:
                                help="INGEST-PLAN file or workflows directory to render")
     p_plan_render.add_argument("--json", action="store_true",
                                help="emit resolved specs as a JSON array instead of YAML")
+    p_plan_render.add_argument(
+        "--only", action="append", default=None, metavar="PATTERN",
+        help="render only jobs whose id matches this fnmatch pattern "
+             "(comma-separated or repeatable; matched after full resolution)")
+    p_plan_render.add_argument(
+        "--exclude", action="append", default=None, metavar="PATTERN",
+        help="exclude jobs whose id matches this fnmatch pattern "
+             "(comma-separated or repeatable; subtracts from --only)")
     p_plan_render.set_defaults(func=_cmd_plan_render)
 
     p_watch = sub.add_parser(
