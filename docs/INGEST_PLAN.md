@@ -207,6 +207,37 @@ empty or non-list axis value, or a colliding generated id fails *that* job (see
 [errors](#reporting-and-errors)) without aborting the rest of the plan. The shipped
 `examples/matrix-cross-product.yaml` is a runnable cross-product plan.
 
+When the matrix value is a **mapping** it may also carry two optional, strictly-additive
+filter keys (reserved, so never axis names):
+
+```yaml
+jobs:
+  - id: "status-{{ region }}-{{ tier }}"
+    matrix:
+      region: [us-east, us-west, eu-central]
+      tier:   [free, pro]
+      exclude:
+        - { region: eu-central, tier: pro }    # drop one combination -> 5 jobs
+      include:
+        - { region: ap-south, tier: canary }   # append one extra job  -> 6 jobs
+    source:
+      kind: api
+      config: { url: "https://api.example.com/{{ region }}/status?tier={{ tier }}" }
+```
+
+- **`exclude:`** is a list of **partial** variable maps; a generated row is dropped when
+  it agrees with an entry on **every key that entry specifies** (`{ tier: pro }` drops
+  every `*-pro` job, `{ region: eu-central, tier: pro }` drops just one). An entry naming
+  a key no row has matches nothing. Exclude runs over the whole fan-out — cross-product,
+  `{ from: <path> }` list, or inline list alike.
+- **`include:`** is a list of **full** variable maps appended to the fan-out, substituted
+  like any other row. To pair an explicit inline list with `exclude:`, write the rows
+  under `include:` in a mapping (`matrix: { include: [ … ], exclude: [ … ] }`).
+- A malformed `exclude:`/`include:` (not a list of variable maps), or filters that leave
+  zero jobs, fail *that* job (see [errors](#reporting-and-errors)) without aborting the
+  plan. A matrix block with neither key resolves byte-for-byte as before. The shipped
+  `examples/matrix-exclude.yaml` is a runnable pruned-and-extended plan.
+
 ### `vars:` — default values for `{{ var }}` placeholders
 
 A top-level **`vars:`** mapping (variable name → default value) backfills any
