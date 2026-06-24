@@ -146,3 +146,32 @@ def test_matrix_from_file_example_json_validate(capsys):
     assert data["failed"] == []
     assert "warnings" in data
     assert "strict" in data
+
+
+# ── --json output schema (guards recipe/docs examples) ───────────────────── #
+
+def test_json_validate_schema_has_warnings_and_strict(capsys):
+    """--json output must include warnings and strict fields (recipe examples depend on this)."""
+    rc = main(["plan", "validate", str(_EXAMPLES_PLAN), "--json"])
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert set(data.keys()) >= {"ok", "resolved", "failed", "warnings", "strict"}, (
+        "--json output missing expected fields; docs/recipes/external-config-flow.md "
+        "and docs/INGEST_PLAN.md examples depend on this schema"
+    )
+    assert isinstance(data["warnings"], list)
+    assert isinstance(data["strict"], bool)
+
+
+def test_json_validate_strict_false_flag_value(capsys):
+    """--json output has strict=false when --strict is not passed."""
+    main(["plan", "validate", str(_EXAMPLES_PLAN), "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert data["strict"] is False
+
+
+def test_json_validate_strict_true_flag_value(capsys):
+    """--json output has strict=true when --strict is passed."""
+    main(["plan", "validate", str(_EXAMPLES_PLAN), "--json", "--strict"])
+    data = json.loads(capsys.readouterr().out)
+    assert data["strict"] is True

@@ -137,12 +137,16 @@ ujin plan validate ./ingest-plan.yaml --json
 {
   "ok": true,
   "resolved": ["crossref", "feed-tech", "feed-science", "feed-business"],
-  "failed": []
+  "failed": [],
+  "warnings": [],
+  "strict": false
 }
 ```
 
 A non-zero exit means at least one job failed — the `failed` list names it with
 an actionable `ujin: …` message. Other valid jobs still appear in `resolved`.
+Pass `--strict` to also fail on unrecognized/misspelled keys (they appear in
+`warnings` and `strict` is set to `true` in the JSON output).
 
 You can validate a whole workflows **directory** the same way:
 
