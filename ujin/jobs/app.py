@@ -694,7 +694,7 @@ def _load_workflows_dir(
         except Exception as exc:  # noqa: BLE001
             log.warning("skipping workflow file %s: %s", fp, exc)
             if failed is not None:
-                failed.append({"id": fp.stem, "error": str(exc)})
+                failed.append({"id": fp.stem, "error": f"ujin: workflow {fp.name}: {exc}"})
     return specs
 
 
@@ -806,7 +806,7 @@ def _load_ingest_plan(
     except (OSError, yaml.YAMLError, WorkflowIncludeError, ValueError) as exc:
         log.warning("skipping ingest plan %s: %s", path, exc)
         if failed is not None:
-            failed.append({"id": stem, "error": f"ujin: {exc}"})
+            failed.append({"id": stem, "error": f"ujin: {path.name}: {exc}"})
         return specs
 
     # Advisory top-level schema check: an unrecognized top-level key — e.g.
@@ -861,7 +861,7 @@ def _load_ingest_plan(
         except Exception as exc:  # noqa: BLE001
             log.warning("skipping plan job %s in %s: %s", base, path, exc)
             if failed is not None:
-                failed.append({"id": base, "error": f"ujin: plan job {base}: {exc}"})
+                failed.append({"id": base, "error": f"ujin: plan job {base} in {path.name}: {exc}"})
             # The entry still names a job the plan declares; record its id so prune
             # keeps it (a transient build error must not drop a still-present job).
             if present is not None:

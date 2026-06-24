@@ -190,7 +190,7 @@ def test_bad_matrix_fails_one_job_others_load(tmp_path):
     specs = _load_ingest_plan(tmp_path / "plan.yaml", failed=failed)
     assert [s.id for s in specs] == ["good"]            # valid job still loaded
     assert [f["id"] for f in failed] == ["bad"]         # bad one reported, named
-    assert failed[0]["error"].startswith("ujin: plan job bad:")
+    assert failed[0]["error"].startswith("ujin: plan job bad in")
 
 
 def test_colliding_ids_fail_the_duplicate(tmp_path):
