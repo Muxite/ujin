@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **`ujin plan validate` — offline plan/workflows validation.** New `ujin plan validate <path>` subcommand validates an INGEST-PLAN file or a workflows directory using the identical loaders as `jobs-serve` (so resolved ids and failures match exactly what the server would produce) without starting the server. Prints each resolved job id (`ok  <id>`) and each failure with an actionable `ujin: …` error message; exits zero when all jobs resolve and non-zero when any fail. A `--json` flag emits `{"ok", "resolved", "failed"}` for CI. A missing or unreadable path exits non-zero immediately with a clean `ujin: …` message (no traceback). Strictly additive: no existing behavior changed.
+
 ## 0.20.0 — 2026-06-23
 
 ### Added

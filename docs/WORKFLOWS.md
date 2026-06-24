@@ -227,6 +227,35 @@ the registry. Two ways to extend the menu:
   sink` and `pip install -e .`. Sibling projects in active development are
   expected to grow ujin this way; see [CAPABILITIES.md](CAPABILITIES.md).
 
+## Validating a workflows directory without starting the server
+
+Use `ujin plan validate` to load and resolve a workflows directory (or a single
+plan file) using the **same loaders** as `jobs-serve` — identical ids, identical
+errors — without starting the server:
+
+```bash
+ujin plan validate ./workflows/                # human-readable; exit 0 = all ok
+ujin plan validate ./workflows/ --json         # machine-readable (CI)
+```
+
+Resolved workflows are printed as `ok  <id>`; files that fail to parse land in
+`FAIL  <id>: <error>` with an actionable `ujin: …` message. Exit code is 0 when
+all workflows resolve and non-zero when any fail.
+
+The `--json` flag emits a single JSON object to stdout:
+
+```json
+{
+  "ok": true,
+  "resolved": ["crossref-papers", "example-page"],
+  "failed": []
+}
+```
+
+A missing or unreadable path exits non-zero with a clean `ujin: …` message (no
+traceback). Works equally for an INGEST-PLAN file — `ujin plan validate` accepts
+either a file or a directory. See [INGEST_PLAN.md](INGEST_PLAN.md) for details.
+
 ## Examples
 
 `examples/workflows/` ships runnable workflow files:
