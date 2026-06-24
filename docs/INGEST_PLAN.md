@@ -118,7 +118,10 @@ the same jobs rather than duplicating them:
 
 - an explicit `id:` wins (for a matrix entry, an `id:` *template* such as
   `feed-{{ slug }}` yields a distinct id per entry);
-- otherwise the id is `<plan-stem>-<index>` (`ingest-plan-0`, `ingest-plan-1`, …);
+- otherwise a **single-entry plan** gets just `<plan-stem>` (e.g. `ingest-plan`),
+  and a **multi-entry plan** gets `<plan-stem>-<index>` (`ingest-plan-0`,
+  `ingest-plan-1`, …) — the same single-vs-multi asymmetry as a single-file
+  workflow vs a `jobs:` list;
 - a matrix entry without an explicit `id:` template appends a per-entry suffix
   (`<base>-<n>`).
 
@@ -159,6 +162,53 @@ Errors **never abort startup**:
 - A **per-job** problem (a bad `matrix:`, a colliding id, a spec that won't build)
   fails *just that job* — the remaining valid jobs still load — and is reported in
   `plan.failed` naming the offending job.
+
+## Validating a plan without starting the server
+
+Use `ujin plan validate` to check a plan file (or a workflows directory) with the
+**identical loaders** as `jobs-serve` — so the resolved ids and error messages match
+exactly what the server would produce — without binding a port or starting the engine:
+
+```bash
+ujin plan validate ./ingest-plan.yaml          # human-readable
+ujin plan validate ./ingest-plan.yaml --json   # machine-readable (CI)
+```
+
+Output on success (exit 0):
+
+```
+ok  papers
+ok  prices
+ok  feed-tech
+ok  feed-science
+```
+
+Output when a job fails (exit non-zero):
+
+```
+ok  papers
+FAIL  feed-{{ slug }}: ujin: plan job feed-{{ slug }}: matrix must be a list, got str
+ujin: 1 failure(s); 1 job(s) resolved
+```
+
+With `--json` the response is a single JSON object on stdout:
+
+```json
+{
+  "ok": false,
+  "resolved": ["papers"],
+  "failed": [
+    {"id": "feed-{{ slug }}", "error": "ujin: plan job feed-{{ slug }}: matrix must be a list, got str"}
+  ]
+}
+```
+
+A missing or unreadable path exits non-zero immediately with a clean `ujin: …` error
+and no traceback. The `--json` flag covers that case too:
+
+```json
+{"ok": false, "error": "ujin: path not found: ./missing.yaml", "resolved": [], "failed": []}
+```
 
 ## Example
 

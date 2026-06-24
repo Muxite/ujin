@@ -88,7 +88,7 @@ in-memory `POST /targets` left open.
 ## REST surface (`:8902`)
 
 ```
-GET    /health                  {ok, jobs, plugins, workflows}
+GET    /health                  {ok, jobs, plugins, workflows[, plan]}
 GET    /kinds                   available source/transform/sink kinds
 GET    /metrics                 engine stats + per-job + plugin status
 GET    /jobs                    list job summaries
@@ -105,8 +105,15 @@ WS     /jobs/events             live change stream (all jobs)
 POST   /plugins/reload          re-import plugins -> {loaded, failed}
 ```
 
-File-driven jobs (**workflows**) also load from `UJIN_WORKFLOWS_DIR` on startup
-(id = filename stem). See [WORKFLOWS.md](WORKFLOWS.md).
+The `plan` field in `/health` is only present when `--plan`/`$UJIN_INGEST_PLAN` is
+configured; it lists `loaded` and `failed` job ids, mirroring `workflows`. Omitted
+entirely on no-plan deploys so `/health` stays byte-identical.
+
+File-driven jobs (**workflows**) load from `UJIN_WORKFLOWS_DIR` on startup (id =
+filename stem), with optional `defaults:` deep-merge, `include:`/`use:` fragments,
+and `matrix:`/`for_each:` fan-out — see [WORKFLOWS.md](WORKFLOWS.md). A single
+**INGEST-PLAN** file (many jobs at once) also loads via `--plan`/`$UJIN_INGEST_PLAN`
+— see [INGEST_PLAN.md](INGEST_PLAN.md).
 
 Every change also emits a compact `{"event":"change","job_id",...}` on
 `WS /jobs/events`, independent of whether the job has a `ws` sink.

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.21.0 — 2026-06-24
+
+- **docs(sync): audit external-config surface; fix INGEST_PLAN.md stable-id rule;
+  add `$UJIN_WORKFLOWS_DIR`/`--workflows` to README jobs paragraph; document
+  `failed`-entry shape in WORKFLOWS.md.** Corrected the stable-ids section of
+  `docs/INGEST_PLAN.md`: a single-entry plan derives id `<plan-stem>` (no index),
+  not `<plan-stem>-0` — matching the single-file-vs-jobs-list asymmetry already
+  documented in WORKFLOWS.md. Added `$UJIN_WORKFLOWS_DIR` and `--workflows`
+  references to README's workflows paragraph so both directory-driven and
+  single-file (`--plan`/`$UJIN_INGEST_PLAN`) paths are named alongside each other.
+  Added the `{"id","error"}` failed-entry shape to the WORKFLOWS.md health-response
+  example so the per-file error-reporting behaviour is fully described.
+- **docs(jobs): sync JOBS.md REST surface with shipped ingest-plan loader.** Added
+  the optional `plan` field to the `/health` response description and expanded the
+  file-driven-jobs cross-reference to name the four external-config capabilities
+  (`defaults:` deep-merge, `include:`/`use:` fragments, `matrix:`/`for_each:`
+  fan-out, and `--plan`/`$UJIN_INGEST_PLAN` single-file ingest-plan) with links to
+  WORKFLOWS.md and the new INGEST_PLAN.md.
+### Added
+- **`ujin plan validate` — offline plan/workflows validation.** New `ujin plan validate <path>` subcommand validates an INGEST-PLAN file or a workflows directory using the identical loaders as `jobs-serve` (so resolved ids and failures match exactly what the server would produce) without starting the server. Prints each resolved job id (`ok  <id>`) and each failure with an actionable `ujin: …` error message; exits zero when all jobs resolve and non-zero when any fail. A `--json` flag emits `{"ok", "resolved", "failed"}` for CI. A missing or unreadable path exits non-zero immediately with a clean `ujin: …` message (no traceback). Strictly additive: no existing behavior changed.
+- **Coverage hardening.** Added 21 offline tests closing gaps in `ujin/adapt/interval.py`, `ujin/adapt/jitter.py`, `ujin/jobs/__init__.py`, `ujin/plugins/loader.py`, and `ujin/registry.py`; all five files now reach 100% line+branch coverage, lifting overall suite coverage from 95.56% to 95.99%.
+
 ## 0.20.0 — 2026-06-23
 
 ### Added

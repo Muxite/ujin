@@ -125,15 +125,16 @@ curl -X POST localhost:8902/jobs -H 'content-type: application/json' -d '{
 ```
 
 Prefer files over API calls? Drop workflow definitions into the mounted
-`./workflows` directory — each file is one workflow, the **filename stem is its
-id**, and ujin sets it up on startup, runs it, and hands back what it obtained at
+workflows directory (`$UJIN_WORKFLOWS_DIR`, default `/workflows`; override per run
+with `--workflows`) — each file is one workflow, the **filename stem is its id**,
+and ujin sets it up on startup, runs it, and hands back what it obtained at
 `GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). Keep
 many similar workflows DRY with an optional top-level `defaults:` block (deep-merged
-into each job) and `include:`/`use:` fragment files for shared sinks, schedules, or
-transform pipelines; or fan one template into many with a `matrix:`/`for_each:` key
-— a list of variable maps, each substituted into the `source`/`transforms`/`sinks`/
-`schedule`, with a stable per-entry id so reloads upsert rather than duplicate. See
-[docs/WORKFLOWS.md](docs/WORKFLOWS.md).
+under each job, per-job keys win) and `include:`/`use:` fragment files for shared
+sinks, schedules, or transform pipelines; or fan one template into many with a
+`matrix:`/`for_each:` key — a list of variable maps, each substituted into the
+`source`/`transforms`/`sinks`/`schedule`, with a stable per-entry id so reloads
+upsert rather than duplicate. See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
 Prefer one file over a directory? Mount a single **INGEST-PLAN** declaring many
 jobs at once — a top-level list of jobs, or a mapping with `jobs:` plus a shared
@@ -185,6 +186,7 @@ ujin serve targets.yaml      # run the poll engine as a daemon
 ujin api [targets.yaml]      # poller control service (REST + WS) on :8900
 ujin scrape-serve            # rich scrape HTTP service on :8901
 ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
+ujin plan validate <path>    # validate a plan file or workflows dir (--json for CI)
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
 ujin learned site_state.db   # inspect the durable per-host learned state (--json)
