@@ -24,6 +24,7 @@ Needs the ``jobs`` extra (fastapi, uvicorn, websockets, pydantic, scrape stack).
 from __future__ import annotations
 
 import asyncio
+import difflib
 import logging
 import os
 import re
@@ -306,6 +307,69 @@ def _expand_matrix_entries(entries: list, stem: str) -> list:
     return out
 
 
+# ── schema validation: flag misspelled / unrecognized keys ─────────────────── #
+#
+# Strictly additive and advisory by default: an unrecognized key (e.g. a `defaluts:`
+# typo for `defaults:`) is *reported* — a log warning, and, for `ujin plan validate`,
+# collected into a `warnings` list — but never changes which jobs load, so a file
+# that was valid before stays valid. `ujin plan validate --strict` turns these
+# warnings into failures for CI use. The checks run *after* include+defaults
+# resolution, so only keys the loader would otherwise ignore are flagged.
+
+# Recognized keys of a single job mapping. Mirrors JobSpec.from_dict's fields plus
+# the additive compose/fan-out keys consumed before the spec is built (`include:`/
+# `use:` splice, `matrix:`/`for_each:` fan-out).
+_JOB_KEYS = frozenset({
+    "name", "id", "source", "transforms", "sinks", "schedule", "enabled",
+    "created_at", "matrix", "for_each", "include", "use",
+})
+
+# Top-level keys of an INGEST-PLAN *mapping* (a top-level list has no keys to check).
+_PLAN_TOP_KEYS = frozenset({"jobs", "defaults", "include", "use"})
+
+# Top-level keys of a WORKFLOW file: it may be a container (`jobs:`/`defaults:`) OR a
+# single job written directly at the top level, so both key sets are accepted there.
+_WORKFLOW_TOP_KEYS = _JOB_KEYS | {"jobs", "defaults"}
+
+
+def _suggest(unknown: str, allowed: "frozenset[str]") -> "str | None":
+    """Closest valid key to *unknown* for a 'did you mean …?' hint, or None."""
+    matches = difflib.get_close_matches(unknown, sorted(allowed), n=1, cutoff=0.6)
+    return matches[0] if matches else None
+
+
+def _key_problems(
+    mapping: Any, allowed: "frozenset[str]", context: str, *, top: bool = False
+) -> "list[str]":
+    """Actionable message for each key in *mapping* not in *allowed* (``[]`` if none).
+
+    Each message names *context* (the file, plus the job id when applicable) and the
+    offending key, with a ``did you mean <closest>?`` hint when a near match exists.
+    A *mapping* that is not a dict yields nothing.
+    """
+    if not isinstance(mapping, dict):
+        return []
+    noun = "top-level key" if top else "key"
+    out: list[str] = []
+    for key in mapping:
+        if key in allowed:
+            continue
+        hint = _suggest(str(key), allowed)
+        msg = f"ujin: {context}: unrecognized {noun} {key!r}"
+        if hint:
+            msg += f"; did you mean {hint!r}?"
+        out.append(msg)
+    return out
+
+
+def _report_warnings(messages: "list[str]", warnings: "list | None") -> None:
+    """Log each schema warning; also collect into *warnings* when a list is given."""
+    for msg in messages:
+        log.warning(msg)
+        if warnings is not None:
+            warnings.append(msg)
+
+
 def _preload_specs(path: str) -> list:
     """Parse a jobs.yaml (top-level list, or {jobs: [...]}) into JobSpecs."""
     import yaml
@@ -318,7 +382,7 @@ def _preload_specs(path: str) -> list:
     return [JobSpec.from_dict(d) for d in (raw or [])]
 
 
-def _specs_from_workflow_file(path) -> list:
+def _specs_from_workflow_file(path, warnings: list | None = None) -> list:
     """Parse one workflow file into JobSpecs, deriving stable ids from the stem.
 
     A workflow file is the same declarative shape as a job. The filename stem is
@@ -346,6 +410,17 @@ def _specs_from_workflow_file(path) -> list:
     # Inline reusable fragments, then peel off a top-level `defaults:` block. Both
     # are no-ops when absent, so the paths below stay identical to the old loader.
     data = _resolve_includes(data, path.parent)
+
+    # Advisory schema check on the resolved top level. A workflow file's top level
+    # may be a container (`jobs:`/`defaults:`) OR a single job written directly, so
+    # both key sets are valid here; an unrecognized key (a typo) is reported, never
+    # silently dropped. Single-job files validate fully here; `jobs:` lists also get
+    # a per-entry check below.
+    _report_warnings(
+        _key_problems(data, _WORKFLOW_TOP_KEYS, f"workflow {path.name}", top=True),
+        warnings,
+    )
+
     defaults = data.pop("defaults", None) or {} if isinstance(data, dict) else {}
 
     # Single-job mapping (no top-level `jobs:` list) -> the whole file is one job.
@@ -364,6 +439,15 @@ def _specs_from_workflow_file(path) -> list:
             (_deep_merge(defaults, entry) if defaults else dict(entry))
             for entry in (raw or [])
         ]
+        # Per-entry schema check (each merged job mapping in a `jobs:` list).
+        for i, merged in enumerate(raw):
+            base = (merged.get("id") if isinstance(merged, dict) else None) or (
+                stem if len(raw) == 1 else f"{stem}-{i}"
+            )
+            _report_warnings(
+                _key_problems(merged, _JOB_KEYS, f"workflow {path.name} job {base}"),
+                warnings,
+            )
 
     # Matrix expansion is a distinct, additive step that runs *after* the
     # defaults/include merge above, so each entry's variables substitute into the
@@ -379,7 +463,9 @@ def _specs_from_workflow_file(path) -> list:
     return specs
 
 
-def _load_workflows_dir(path: str, failed: list | None = None) -> list:
+def _load_workflows_dir(
+    path: str, failed: list | None = None, warnings: list | None = None
+) -> list:
     """Load every top-level ``*.yaml``/``*.yml`` workflow file in *path* (sorted).
 
     The scan is **non-recursive** (``*.y*ml``, not ``**/*.y*ml``): only files
@@ -391,6 +477,10 @@ def _load_workflows_dir(path: str, failed: list | None = None) -> list:
     A file that fails to parse or resolve (bad YAML, missing/cyclic ``include:``)
     is logged and skipped so other workflows still load; when *failed* is given,
     a ``{"id", "error"}`` record is appended to it for ``GET /health``.
+
+    Unrecognized/misspelled keys are *advisory*: each is logged and, when *warnings*
+    is given, its ``ujin: …`` message appended there (used by ``ujin plan validate``
+    ``--strict``). They never change which workflows load — additive by default.
     """
     root = Path(path)
     if not root.is_dir():
@@ -400,7 +490,7 @@ def _load_workflows_dir(path: str, failed: list | None = None) -> list:
     # the workflow set — see the docstring. The dir-scan tests guard this.
     for fp in sorted(root.glob("*.y*ml")):
         try:
-            specs.extend(_specs_from_workflow_file(fp))
+            specs.extend(_specs_from_workflow_file(fp, warnings=warnings))
         except Exception as exc:  # noqa: BLE001
             log.warning("skipping workflow file %s: %s", fp, exc)
             if failed is not None:
@@ -457,7 +547,9 @@ def _plan_entries(data: Any, name: str) -> "tuple[dict, list]":
     )
 
 
-def _load_ingest_plan(path, failed: list | None = None) -> list:
+def _load_ingest_plan(
+    path, failed: list | None = None, warnings: list | None = None
+) -> list:
     """Load an INGEST-PLAN file into JobSpecs, deriving stable per-job ids.
 
     Each resulting job gets a stable id (explicit ``id`` wins; otherwise
@@ -475,6 +567,10 @@ def _load_ingest_plan(path, failed: list | None = None) -> list:
     build) fails just that job; the remaining valid jobs still load. When *failed*
     is given the ``ujin: ...``-style message (naming the offending file/job) is
     appended to it for ``GET /health``.
+
+    Unrecognized/misspelled top-level or per-job keys are *advisory*: each is logged
+    and, when *warnings* is given, its ``ujin: …`` message appended there (used by
+    ``ujin plan validate --strict``). They never change which jobs load.
     """
     import yaml
 
@@ -495,6 +591,14 @@ def _load_ingest_plan(path, failed: list | None = None) -> list:
             failed.append({"id": stem, "error": f"ujin: {exc}"})
         return specs
 
+    # Advisory top-level schema check: an unrecognized top-level key — e.g.
+    # `defaluts:` for `defaults:` — is reported, not silently dropped. Only a
+    # mapping plan has top-level keys; a top-level list plan has none.
+    _report_warnings(
+        _key_problems(data, _PLAN_TOP_KEYS, f"plan {path.name}", top=True),
+        warnings,
+    )
+
     # ── per-job resolution: isolate matrix/build errors so one bad job is
     # reported while the rest still load. Ids stay stable across reloads. ──
     seen: set = set()
@@ -504,6 +608,12 @@ def _load_ingest_plan(path, failed: list | None = None) -> list:
         )
         try:
             merged = _deep_merge(defaults, entry) if defaults else dict(entry)
+            # Advisory per-job schema check on the merged mapping (names the file
+            # and job id); reported, never silently dropped, and the job still loads.
+            _report_warnings(
+                _key_problems(merged, _JOB_KEYS, f"plan job {base} in {path.name}"),
+                warnings,
+            )
             # Reuse the workflow matrix helper on this single entry so `matrix:`/
             # `for_each:` behaves byte-for-byte as it does for workflow files.
             fanned = _expand_matrix_entries([merged], base)

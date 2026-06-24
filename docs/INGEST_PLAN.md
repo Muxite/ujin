@@ -210,6 +210,34 @@ and no traceback. The `--json` flag covers that case too:
 {"ok": false, "error": "ujin: path not found: ./missing.yaml", "resolved": [], "failed": []}
 ```
 
+### Validation & common mistakes — misspelled keys
+
+After `include:`/`defaults:` resolution the loader checks every mapping against the
+set of recognized keys: at the top level `jobs` / `defaults` (plus `include:`/`use:`,
+which are resolved away), and per job `source`, `transforms`, `sinks`, `schedule`,
+`id`, `name`, `enabled` plus the additive `matrix:`/`for_each:` and `include:`/`use:`.
+A key outside that set — a typo such as `defaluts:` for `defaults:`, or `shedule:` for
+`schedule:` — would otherwise be **silently ignored** (YAML happily keeps it; the job
+loads with that setting missing). The validator surfaces it instead, naming the file,
+the job id when applicable, and the unknown key, with a `did you mean …?` hint:
+
+```
+ok  crossref
+WARN  ujin: plan ingest-plan.yaml: unrecognized top-level key 'defaluts'; did you mean 'defaults'?
+WARN  ujin: plan job feed-tech in ingest-plan.yaml: unrecognized key 'shedule'; did you mean 'schedule'?
+```
+
+These are **advisory by default**: the warning is printed (and logged on the server),
+but the job still loads and the exit code is unaffected — so the change is additive and
+no previously-valid plan becomes invalid. Pass `--strict` to promote every such warning
+to a failure (printed as `FAIL`, non-zero exit) for a CI gate; with `--json`, warnings
+appear in a `warnings` array and `--strict` is reflected in `ok` and a `strict` field:
+
+```bash
+ujin plan validate ./ingest-plan.yaml --strict        # CI: unknown keys fail the build
+ujin plan validate ./ingest-plan.yaml --strict --json
+```
+
 ## Inspecting fully-resolved jobs
 
 Use `ujin plan render` to print every fully-expanded `JobSpec` — after all five
