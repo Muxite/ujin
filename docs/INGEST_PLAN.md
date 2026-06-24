@@ -59,7 +59,7 @@ traceback.
 ## Schema
 
 The top level is **either** a list of job mappings **or** a mapping with a
-`jobs:` list plus an optional `defaults:` mapping:
+`jobs:` list plus optional `defaults:` and `vars:` mappings:
 
 ```yaml
 # list form — the simplest plan
@@ -206,6 +206,44 @@ it is independent of the order the axes are written and identical across repeate
 empty or non-list axis value, or a colliding generated id fails *that* job (see
 [errors](#reporting-and-errors)) without aborting the rest of the plan. The shipped
 `examples/matrix-cross-product.yaml` is a runnable cross-product plan.
+
+### `vars:` — default values for `{{ var }}` placeholders
+
+A top-level **`vars:`** mapping (variable name → default value) backfills any
+`{{ var }}` placeholder the environment and matrix leave unset, so a plan stays
+runnable with zero configuration while a deploy can override one value from the
+environment without editing the file:
+
+```yaml
+vars:
+  region: us-east          # fallback for every {{ region }} left unset
+  rows: 50                 # an exact-placeholder value keeps its int type
+jobs:
+  - id: "feed-{{ region }}-{{ slug }}"
+    matrix:
+      - { slug: news }
+      - { slug: jobs }
+    source:
+      kind: api
+      config: { url: "https://feeds.example.com/{{ region }}/{{ slug }}?rows={{ rows }}" }
+```
+
+Both jobs query `us-east`; set the environment variable `region` to `eu-west` and
+both switch with no file edit, while a matrix entry that set its own `region` would
+win for that job.
+
+- **Precedence** for a `{{ NAME }}` placeholder: a `matrix:`/`for_each:` per-entry
+  value wins, then the process environment (variable `NAME`, if set), then the
+  file-level `vars: NAME` default; an otherwise-unset placeholder is left verbatim. A
+  `vars:` default therefore only fills a variable nothing else provides.
+- A string that is *exactly* one placeholder keeps the default's native type
+  (`rows: "{{ rows }}"` → the integer `50`), like matrix substitution. The `${VAR}` /
+  `${VAR:-default}` env syntax is unrelated and still expands first, at read time.
+- **Additive.** A plan with no `vars:` key (or an empty one) resolves byte-for-byte as
+  before, and `ujin plan validate` rejects a non-mapping `vars:` with a clean
+  `ujin: …` error (see [errors](#reporting-and-errors)).
+
+The shipped `examples/vars-defaults.yaml` is a runnable `vars:` plan.
 
 ## Stable ids
 
