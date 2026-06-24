@@ -1151,6 +1151,158 @@ def _introspect_active_plan(
     }
 
 
+# ── opt-in plan-file watcher (--watch-plan / $UJIN_WATCH_PLAN) ──────────────── #
+#
+# Off by default: without the flag/env no watcher task is created and a no-config
+# deploy does zero extra I/O. When enabled (and a plan IS configured) a single
+# background task stats the plan file every `interval` seconds and, on a changed
+# signature, re-runs the *identical* resolution as ``POST /plan/reload?prune=true``
+# — the same :func:`_apply_ingest_plan` (defaults/include/matrix/``${VAR}`` plus
+# ``--only``/``--exclude``) and the manager's provenance-aware upsert/prune — so
+# added/changed jobs appear and removed plan-owned jobs are pruned with no restart
+# and no manual POST.
+#
+# Safety properties (all inherited from _apply_ingest_plan, so they match the
+# manual reload byte-for-byte):
+#   * Plan-only: the prune set is ``manager.plan_owned_ids()``, so API-created and
+#     positional-preload jobs are never pruned even when absent from the plan.
+#   * Non-destructive on a bad save: a file-level read/parse error is reported in
+#     ``failed`` and prune is skipped, so a malformed plan never wipes the running
+#     job set — the last good jobs stay put.
+#   * Race-free with the manual endpoint: ``_apply_ingest_plan`` contains no
+#     ``await``, so a watcher tick and a concurrent ``POST /plan/reload`` can never
+#     interleave mid-apply; and because re-applying the same ids is idempotent, even
+#     a redundant double-apply is harmless.
+
+WATCH_PLAN_ENV = "UJIN_WATCH_PLAN"
+WATCH_INTERVAL_ENV = "UJIN_WATCH_INTERVAL"
+#: Default seconds between plan-file change checks. A stat-only poll, so cheap.
+DEFAULT_WATCH_INTERVAL = 2.0
+
+
+def _env_truthy(raw: "str | None") -> bool:
+    """Shell-ish truthiness for a boolean env var (matches ``ScrapeConfig``)."""
+    return bool(raw) and raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_watch(
+    watch_plan: bool, watch_interval: "float | None"
+) -> "tuple[bool, float]":
+    """Fold the flag and env into ``(enabled, interval)``.
+
+    The watcher is enabled by ``--watch-plan`` (``watch_plan=True``) **or** a truthy
+    ``$UJIN_WATCH_PLAN``. The interval is the ``--watch-interval`` value when given,
+    else ``$UJIN_WATCH_INTERVAL``, else :data:`DEFAULT_WATCH_INTERVAL`; a
+    non-positive or unparseable value falls back to the default so a typo can never
+    busy-loop or stall the watcher.
+    """
+    enabled = bool(watch_plan) or _env_truthy(os.environ.get(WATCH_PLAN_ENV))
+    interval = watch_interval
+    if interval is None:
+        raw = os.environ.get(WATCH_INTERVAL_ENV)
+        if raw:
+            try:
+                interval = float(raw)
+            except ValueError:
+                log.warning("ignoring non-numeric %s=%r", WATCH_INTERVAL_ENV, raw)
+                interval = None
+    if interval is None or interval <= 0:
+        interval = DEFAULT_WATCH_INTERVAL
+    return enabled, interval
+
+
+class _PlanWatcher:
+    """Background poller that re-applies the INGEST-PLAN when its file changes.
+
+    Stats *plan_src* every *interval* seconds; on a changed signature (mtime + size)
+    re-runs :func:`_apply_ingest_plan` with ``prune=True`` and refreshes
+    ``app.state.plan`` — the same effect as ``POST /plan/reload?prune=true`` with no
+    restart. Construction snapshots the current file signature, so only edits made
+    *after* startup trigger a reload. Drive :meth:`poll_once` directly for a
+    deterministic, offline test, or schedule :meth:`run` as a background task.
+    """
+
+    def __init__(
+        self, app, manager, plan_src, only, exclude, interval, *, sleep=None
+    ):
+        self.app = app
+        self.manager = manager
+        self.plan_src = plan_src
+        self.only = only
+        self.exclude = exclude
+        self.interval = interval
+        self._sleep = sleep or asyncio.sleep
+        self._sig = self._signature()
+
+    def _signature(self):
+        """``(mtime_ns, size)`` of the plan file, or ``None`` if it can't be stat-ed.
+
+        ``None`` (a missing/unreadable file) is treated as "no actionable change":
+        a transiently-absent plan must never trigger a reload that wipes jobs.
+        """
+        try:
+            st = os.stat(self.plan_src)
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def poll_once(self) -> bool:
+        """One change check; reload (with prune) iff the file changed.
+
+        Returns ``True`` when a reload ran, ``False`` when the file was unchanged,
+        unreadable, or an ``--only`` pattern now matches nothing. Synchronous and
+        free of ``await`` (it only calls :func:`_apply_ingest_plan`), so it can't
+        interleave with a concurrent ``POST /plan/reload``. A reload that resolves to
+        a malformed/transient plan is non-destructive: the failure is reported in
+        ``app.state.plan['failed']`` and the running jobs are kept.
+        """
+        sig = self._signature()
+        if sig is None or sig == self._sig:
+            return False
+        # Record the new signature up front so a persistently-broken file is not
+        # re-applied (and re-logged) every tick; the next real edit changes it again.
+        self._sig = sig
+        try:
+            status = _apply_ingest_plan(
+                self.manager, self.plan_src, only=self.only, exclude=self.exclude,
+                prune=True,
+            )
+        except ValueError as exc:
+            # --only now matches nothing: surface it, keep the last good job set.
+            log.warning("plan watch: %s", exc)
+            return False
+        self.app.state.plan = status
+        if status["failed"]:
+            log.warning(
+                "plan watch: reloaded %s with %d failure(s); kept last good jobs",
+                self.plan_src, len(status["failed"]),
+            )
+        else:
+            log.info(
+                "plan watch: reloaded %s (%d job(s), %d pruned)",
+                self.plan_src, len(status["loaded"]), len(status.get("pruned", [])),
+            )
+        return True
+
+    async def run(self, stop=None, *, max_ticks=None) -> None:
+        """Poll until *stop* is set (or *max_ticks* reached), surviving tick errors.
+
+        Mirrors :meth:`JobManager.cron_loop`'s shape: sleep *interval*, check once,
+        repeat. An unexpected error in a tick is logged and the loop continues — the
+        watcher must never take the server down.
+        """
+        ticks = 0
+        while stop is None or not stop.is_set():
+            await self._sleep(self.interval)
+            try:
+                self.poll_once()
+            except Exception:  # noqa: BLE001 - a tick must never crash the loop
+                log.exception("plan watch: unexpected error; continuing")
+            ticks += 1
+            if max_ticks is not None and ticks >= max_ticks:
+                return
+
+
 def create_jobs_app(
     config_path: str | None = None,
     *,
@@ -1160,6 +1312,8 @@ def create_jobs_app(
     run_engine: bool = True,
     only: list | None = None,
     exclude: list | None = None,
+    watch_plan: bool = False,
+    watch_interval: float | None = None,
 ) -> Any:
     try:
         from fastapi import (
@@ -1185,6 +1339,10 @@ def create_jobs_app(
     # The `--plan` flag (passed as plan_path) overrides $UJIN_INGEST_PLAN; unset ->
     # no plan is loaded and /health stays byte-identical to a no-plan deploy.
     plan_src = plan_path or os.environ.get(INGEST_PLAN_ENV)
+    # Opt-in plan-file watcher. Resolved once here (flag wins over env); off by
+    # default, so without it the lifespan creates no watcher task and does no extra
+    # I/O — a no-config deploy is byte-identical to today.
+    watch_enabled, watch_secs = _resolve_watch(watch_plan, watch_interval)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -1257,6 +1415,27 @@ def create_jobs_app(
         if run_engine:
             tasks.append(asyncio.create_task(engine.run()))
             tasks.append(asyncio.create_task(manager.cron_loop()))
+
+        # Opt-in: a single background task that auto-reloads the plan on file change
+        # (prune semantics), exactly as POST /plan/reload?prune=true would. Only
+        # started when enabled AND a plan is configured (the reload it mirrors is
+        # plan-only); attached to app.state for deterministic testing and cancelled
+        # with the others on shutdown. Unset -> app.state.plan_watcher is None and
+        # no task/I/O is added.
+        app.state.plan_watcher = None
+        if watch_enabled and plan_src:
+            watcher = _PlanWatcher(
+                app, manager, plan_src, only, exclude, watch_secs
+            )
+            app.state.plan_watcher = watcher
+            tasks.append(asyncio.create_task(watcher.run()))
+            log.info("ujin jobs: watching plan %s every %gs", plan_src, watch_secs)
+        elif watch_enabled:
+            log.warning(
+                "ujin jobs: plan watch requested but no plan configured; "
+                "watcher inactive"
+            )
+
         log.info("ujin jobs service ready (%d job(s))", len(manager.jobs))
         try:
             yield
@@ -1536,11 +1715,14 @@ def serve(  # pragma: no cover -- launches uvicorn; not testable without a live 
     plan_path: str | None = None,
     only: list | None = None,
     exclude: list | None = None,
+    watch_plan: bool = False,
+    watch_interval: float | None = None,
 ) -> None:
     import uvicorn
 
     uvicorn.run(
         create_jobs_app(config_path, workflows_dir=workflows_dir, plan_path=plan_path,
-                        only=only, exclude=exclude),
+                        only=only, exclude=exclude, watch_plan=watch_plan,
+                        watch_interval=watch_interval),
         host=host, port=port,
     )
