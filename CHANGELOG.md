@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **`${VAR:?message}` required-variable substitution.** The env-var expander now recognises a third form alongside `${VAR}` and `${VAR:-default}`: `${VAR:?message}` expands to the value of `VAR` when it is set and non-empty, and raises a clear actionable error (naming `VAR` and including the optional `message`) when `VAR` is unset or empty. The error surfaces as a `ujin: …` message in `ujin plan validate` (non-zero exit, no traceback) and as a `failed` entry in `GET /health` at serve time, rather than crashing startup for other jobs. `${VAR}` and `${VAR:-default}` behaviour is byte-for-byte unchanged.
+
 ## 0.23.0 — 2026-06-24
 
 - **Plan/workflow schema validation — catch misspelled keys.** The plan and workflow loaders now check every resolved mapping (the INGEST-PLAN top level, each plan/workflow job, and each workflow file's top level) against an allowlist of recognized keys — `source`/`transforms`/`sinks`/`schedule`/`id`/`name`/`enabled` plus the additive `defaults`/`include`/`use`/`matrix`/`for_each` — *after* `include:`/`defaults:` resolution. An unrecognized key (e.g. `defaluts:` for `defaults:`) is reported with an actionable message naming the file, the job id when applicable, and the offending key, plus a `did you mean <closest>?` hint when a near match exists. Strictly additive and advisory by default: warnings are logged (and surfaced as `WARN` lines / a `warnings` array by `ujin plan validate`) but never change which jobs load, so a previously-valid plan/workflow is byte-for-byte unchanged. New `ujin plan validate --strict` flag promotes these warnings to failures (non-zero exit) for CI use.

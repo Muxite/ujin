@@ -114,6 +114,10 @@ at once. Three additive layers keep large plans DRY:
 - **`matrix:`/`for_each:`** — a list of variable maps; ujin substitutes each into
   `{{ var }}` placeholders across the source/transforms/sinks/schedule, emitting one
   job per entry with a stable, deterministic id so reloads upsert rather than duplicate.
+- **`${VAR}` / `${VAR:-default}` / `${VAR:?message}`** — environment substitution
+  expanded at file-read time. `${VAR:?message}` raises a clear error (naming the
+  variable and including `message`) when `VAR` is unset or empty, so missing secrets
+  are caught early rather than silently expanding to an empty string.
 
 `ujin plan validate` checks a plan file **or** a workflows directory with the same
 loaders as `jobs-serve` — identical ids and error messages — without starting the
