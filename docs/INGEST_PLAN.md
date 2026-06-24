@@ -26,6 +26,36 @@ The plan's jobs are created on startup and are visible like any other job — vi
 `GET /jobs`, `GET /jobs/{id}`, and reflected in `GET /health` (see
 [Reporting](#reporting-and-errors)).
 
+### `--env-file PATH` — inject secrets without committing them
+
+All three plan commands accept `--env-file PATH` to load `KEY=VALUE` pairs from a
+dotenv-style file and feed them into `${VAR}` / `${VAR:-default}` / `${VAR:?message}`
+substitution when the plan is resolved:
+
+```bash
+# .env file (keep out of source control)
+# API_TOKEN=secret123
+# BACKEND_URL=https://api.example.com
+
+ujin plan validate ./ingest-plan.yaml --env-file .env
+ujin plan render   ./ingest-plan.yaml --env-file .env
+ujin jobs-serve    --plan ./ingest-plan.yaml --env-file .env
+```
+
+**Precedence rule: process environment variables always win.** The file only supplies
+values for variables that are *not* already set in the environment, so exporting a
+variable before running the command overrides whatever is in the file:
+
+```bash
+API_TOKEN=override ujin plan render ./ingest-plan.yaml --env-file .env
+# → API_TOKEN resolves to "override", not the value from .env
+```
+
+**File format:** one `KEY=VALUE` per line; blank lines and lines starting with `#`
+are skipped; keys must be valid identifiers (`[A-Za-z_][A-Za-z0-9_]*`). A missing
+or unparseable file exits immediately with a clean `ujin: …` message and no
+traceback.
+
 ## Schema
 
 The top level is **either** a list of job mappings **or** a mapping with a

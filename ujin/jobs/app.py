@@ -96,6 +96,34 @@ def _expand_env(text: str) -> str:
     return _ENV_REF.sub(_sub, text)
 
 
+def _load_env_file(path: Path) -> "dict[str, str]":
+    """Parse a KEY=VALUE env-file into a dict.
+
+    Blank lines and lines whose first non-whitespace character is ``#`` are
+    skipped. A line missing ``=`` or carrying an invalid identifier key raises
+    ``ValueError`` naming the line number so the CLI can emit a clean
+    ``ujin: …`` error without a traceback.
+    """
+    result: dict[str, str] = {}
+    text = path.read_text(encoding="utf-8")
+    for i, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ValueError(
+                f"env-file {path}: line {i}: expected KEY=VALUE, got {line!r}"
+            )
+        key, _, value = line.partition("=")
+        key = key.rstrip()
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            raise ValueError(
+                f"env-file {path}: line {i}: invalid variable name {key!r}"
+            )
+        result[key] = value
+    return result
+
+
 # ── deep-merge + reusable fragments (``defaults:`` / ``include:``) ─────────── #
 #
 # Both features are strictly additive: a workflow file that uses neither resolves

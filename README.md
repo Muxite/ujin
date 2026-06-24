@@ -104,6 +104,11 @@ ujin jobs-serve --plan examples/ingest-plan.yaml   # :8902 — many jobs from on
 ujin plan validate examples/ingest-plan.yaml        # validate plan before deploying (exit 0 = ok)
 ujin plan render   examples/ingest-plan.yaml        # print fully-expanded job specs (--json for CI)
 
+# Inject secrets without committing them — file supplies vars not already in the environment:
+ujin plan validate examples/ingest-plan.yaml --env-file .env
+ujin plan render   examples/ingest-plan.yaml --env-file .env
+ujin jobs-serve    --plan examples/ingest-plan.yaml --env-file .env
+
 # Job-id selectors — filter after full resolution (defaults, includes, matrix fan-out):
 ujin plan render  examples/ingest-plan.yaml --only 'feed-*'            # matching ids only
 ujin plan render  examples/ingest-plan.yaml --only 'feed-*' --exclude feed-tech
