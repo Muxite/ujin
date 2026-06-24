@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **test(coverage): close line/branch gaps in `jobs/app.py`, `scrape/routes_social.py`, and `mcp/__init__.py`.** Added targeted offline tests to cover the `_load_ingest_plan` branches where `failed=None` (file-level and per-job error paths), the `scrape_close()` exception swallow in the jobs lifespan shutdown, the three empty-input 400 guards in the social routes, the corroboration `breaking_score_floor` boundary values (floor=1.0 and floor=0.0), and the `__getattr__` AttributeError in `ujin.mcp`. All additions are tests-only with no behaviour change; overall coverage lifted from 96.00% to 96.16%.
+
 ## 0.21.0 — 2026-06-24
 
 - **docs(sync): audit external-config surface; fix INGEST_PLAN.md stable-id rule;

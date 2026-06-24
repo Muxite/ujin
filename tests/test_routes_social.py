@@ -157,3 +157,47 @@ def test_corroborated_with_store_scoring(client):
     solo = body["clusters"][-1]
     if len(solo["hosts"]) == 1:
         assert solo["breaking_score_floor"] == 0.0
+
+
+def test_mastodon_empty_account_400(client):
+    assert client.post("/social/mastodon", json={"account": ""}).status_code == 400
+
+
+def test_x_empty_username_400(client):
+    assert client.post("/social/x", json={"username": ""}).status_code == 400
+
+
+def test_truth_empty_username_400(client):
+    assert client.post("/social/truth", json={"username": ""}).status_code == 400
+
+
+def test_corroborated_floor_scores_at_boundaries(client):
+    import time
+
+    from ujin.trends import CorroborationStore
+
+    now = time.time()
+    # min_hosts=1 so even single-host clusters pass the store's own filter and
+    # appear in clusters(); the route then re-scores using the app config thresholds
+    # (corroboration_min_hosts=3, corroboration_max_hosts_for_full_score=5 by default).
+    store = CorroborationStore(
+        window_secs=1800,
+        max_entries=100,
+        min_hosts_for_corroboration=1,
+        max_hosts_for_full_score=5,
+    )
+    # 5 hosts → n=5 >= max_h=5 from config → floor=1.0  (routes_social.py line 137)
+    for h in ("a.test", "b.test", "c.test", "d.test", "e.test"):
+        store.add("major senate vote passes spending bill tonight", host=h, ts=now)
+    # 1 host → n=1 < min_h=3 from config → floor=0.0  (routes_social.py line 141)
+    store.add("completely unique local story not reported elsewhere", host="solo.test", ts=now)
+
+    client.app.state.corroboration = store
+    body = client.get("/trends/corroborated").json()
+    clusters_by_size = sorted(body["clusters"], key=lambda c: -len(c["hosts"]))
+    big = clusters_by_size[0]
+    small = clusters_by_size[-1]
+    assert len(big["hosts"]) == 5
+    assert big["breaking_score_floor"] == 1.0
+    assert len(small["hosts"]) == 1
+    assert small["breaking_score_floor"] == 0.0
