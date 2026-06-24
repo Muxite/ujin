@@ -1148,6 +1148,14 @@ def _specs_from_workflow_file(
         raw = [merged]
     else:
         raw = data.get("jobs", data) if isinstance(data, dict) else data
+        # Validate before merging so a non-mapping entry raises a clear error
+        # (naming the file and position) rather than a cryptic TypeError.
+        for _j, _e in enumerate(raw or []):
+            if not isinstance(_e, dict):
+                raise ValueError(
+                    f"workflow {path.name}: jobs entry {_j} must be a mapping, "
+                    f"got {type(_e).__name__}"
+                )
         raw = [
             (_deep_merge(defaults, entry) if defaults else dict(entry))
             for entry in (raw or [])
@@ -1395,6 +1403,11 @@ def _load_ingest_plan(
             stem if len(entries) == 1 else f"{stem}-{i}"
         )
         try:
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"plan {path.name}: jobs entry {i} must be a mapping, "
+                    f"got {type(entry).__name__}"
+                )
             merged = _deep_merge(defaults, entry) if defaults else dict(entry)
             # Advisory per-job schema check on the merged mapping (names the file
             # and job id); reported, never silently dropped, and the job still loads.
