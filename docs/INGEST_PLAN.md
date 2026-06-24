@@ -712,6 +712,31 @@ ujin plan render ./ingest-plan.yaml --json | python3 -c \
 `ujin plan render` exits zero when all jobs resolve and non-zero with a clean
 `ujin: …` message (no traceback) on a missing/unreadable path or any failed job.
 
+### Concise overview — `--summary`
+
+Add `--summary` to print a compact human-readable overview instead of the full
+expanded specs — useful for a quick sanity-check before deploying:
+
+```bash
+ujin plan render ./ingest-plan.yaml --summary
+ujin plan render ./workflows/       --summary   # also works for a workflows directory
+```
+
+Output format: a job count on the first line, then one indented line per resolved
+job showing its id, source kind (and url if present), schedule, and number of sinks:
+
+```
+3 jobs
+  crossref    api:https://api.crossref.org/works?rows=50  adaptive/60s  0 sinks
+  feed-tech   api:https://feeds.example.com/tech?rows=50  adaptive/60s  1 sink
+  feed-science  api:https://feeds.example.com/science?rows=50  adaptive/60s  1 sink
+```
+
+`--summary` reuses the same loaders as the normal render path, so resolution
+(`defaults:`, `include:`/`use:`, `matrix:`/`for_each:`, profiles, `${VAR}`) is
+identical. It composes with `--only`/`--exclude`, `--env-file`, and `--profile`;
+the default `ujin plan render` output (no flag) is byte-for-byte unchanged.
+
 ### Provenance — `--explain`
 
 Add `--explain` to annotate each rendered job with **where it came from**: the

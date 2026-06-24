@@ -355,6 +355,39 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _render_summary(specs: list) -> str:
+    """Return a concise human-readable overview of a resolved plan.
+
+    First line: ``N jobs`` (or ``1 job``).  Then one indented line per job::
+
+        <id>  <source-kind>[:<url>]  <schedule>  <N> sink[s]
+
+    The schedule column is ``adaptive/<base>s``, ``poll/<base>s``,
+    ``cron/<expr>``, or ``once``.  ``url`` is omitted when the source config
+    carries no ``url`` key (e.g. command sources).
+    """
+    n = len(specs)
+    lines = [f"{n} job{'s' if n != 1 else ''}"]
+    for spec in specs:
+        src = spec.source
+        url = src.config.get("url", "")
+        src_col = f"{src.kind}:{url}" if url else src.kind
+
+        sched = spec.schedule
+        if sched.mode == "cron":
+            sched_col = f"cron/{sched.cron}"
+        elif sched.mode == "once":
+            sched_col = "once"
+        else:
+            sched_col = f"{sched.mode}/{sched.base}s"
+
+        ns = len(spec.sinks)
+        sink_col = f"{ns} sink{'s' if ns != 1 else ''}"
+
+        lines.append(f"  {spec.id}  {src_col}  {sched_col}  {sink_col}")
+    return "\n".join(lines)
+
+
 def _cmd_plan_render(args: argparse.Namespace) -> int:
     """Resolve and print every fully-expanded JobSpec for a plan or workflows directory.
 
@@ -369,6 +402,12 @@ def _cmd_plan_render(args: argparse.Namespace) -> int:
     threaded through the loaders only when ``--explain`` is set, so the default render
     path is byte-for-byte unchanged. ``--explain`` composes with ``--json`` (the
     machine-readable form), ``--only``/``--exclude``, and ``--env-file``.
+
+    With ``--summary`` a concise human-readable overview is printed instead of the
+    full expanded specs: a job count followed by one line per job (id, source
+    kind/url, schedule, and number of sinks). ``--summary`` composes with
+    ``--only``/``--exclude``, ``--env-file``, and ``--profile`` but is mutually
+    exclusive with ``--json`` and ``--explain`` (those flags require the full output).
     """
     import json as _json
 
@@ -386,6 +425,7 @@ def _cmd_plan_render(args: argparse.Namespace) -> int:
     only = _parse_patterns(getattr(args, "only", None))
     exclude = _parse_patterns(getattr(args, "exclude", None))
     explain = getattr(args, "explain", False)
+    summary = getattr(args, "summary", False)
     profile = _resolve_profile(getattr(args, "profile", None))
 
     if not path.exists():
@@ -429,7 +469,9 @@ def _cmd_plan_render(args: argparse.Namespace) -> int:
         p = prov_by_id.get(spec.id, {})
         return {k: v for k, v in p.items() if k != "id"}
 
-    if args.json:
+    if summary:
+        print(_render_summary(specs))
+    elif args.json:
         if explain:
             print(_json.dumps(
                 [{"spec": s.to_dict(), "provenance": _prov(s)} for s in specs],
@@ -1070,6 +1112,7 @@ def main(argv: list[str] | None = None) -> int:
         epilog="examples:\n"
                "  ujin plan render ./ingest-plan.yaml\n"
                "  ujin plan render ./workflows/\n"
+               "  ujin plan render ./ingest-plan.yaml --summary\n"
                "  ujin plan render ./ingest-plan.yaml --json\n"
                "  ujin plan render ./ingest-plan.yaml --explain\n"
                "  ujin plan render ./ingest-plan.yaml --explain --json",
@@ -1078,6 +1121,11 @@ def main(argv: list[str] | None = None) -> int:
                                help="INGEST-PLAN file or workflows directory to render")
     p_plan_render.add_argument("--json", action="store_true",
                                help="emit resolved specs as a JSON array instead of YAML")
+    p_plan_render.add_argument(
+        "--summary", action="store_true",
+        help="print a concise overview — total job count and one line per job "
+             "(id, source kind/url, schedule, number of sinks) — instead of the "
+             "full expanded specs; composes with --only/--exclude and --profile")
     p_plan_render.add_argument(
         "--explain", action="store_true",
         help="annotate each rendered job with its provenance (source file, and the "

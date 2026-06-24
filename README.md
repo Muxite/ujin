@@ -104,6 +104,7 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
 ujin jobs-serve --plan examples/ingest-plan.yaml   # :8902 — many jobs from one file
 ujin plan validate examples/ingest-plan.yaml        # validate plan before deploying (exit 0 = ok)
 ujin plan render   examples/ingest-plan.yaml        # print fully-expanded job specs (--json for CI)
+ujin plan render   examples/ingest-plan.yaml --summary  # concise overview: job count + one line per job
 
 # Inject secrets without committing them — file supplies vars not already in the environment:
 ujin plan validate examples/ingest-plan.yaml --env-file .env
@@ -308,7 +309,7 @@ ujin api [targets.yaml]      # poller control service (REST + WS) on :8900
 ujin scrape-serve            # rich scrape HTTP service on :8901
 ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
 ujin plan validate <path>    # validate a plan file or workflows dir (--json/--strict for CI)
-ujin plan render <path>      # resolve and print every expanded job (--json for CI)
+ujin plan render <path>      # resolve and print every expanded job (--json for CI; --summary for concise overview)
 ujin plan diff OLD NEW       # diff two plans/dirs by resolved job id (--json; --exit-code/--check exits non-zero on any diff)
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
