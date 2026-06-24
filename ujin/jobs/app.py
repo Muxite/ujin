@@ -233,7 +233,17 @@ def _resolve_includes(node: Any, root: Path, seen: "tuple[Path, ...]" = ()) -> A
     """
     if isinstance(node, dict):
         refs, rest = _split_include(node)
-        resolved = {k: _resolve_includes(v, root, seen) for k, v in rest.items()}
+        # The ``matrix:``/``for_each:`` value is opaque to fragment resolution: it
+        # holds rows/axes plus the additive ``include:``/``exclude:`` filter lists
+        # (handled later by ``_matrix_rows``), never ``include:``/``use:``
+        # *fragments*. Recursing would misread a matrix ``include:`` list of
+        # variable maps as a fragment path; the other matrix forms (inline list,
+        # ``{from: ...}``, cross-product axes) carry no fragments either, so passing
+        # the value through unchanged stays byte-for-byte equivalent for them.
+        resolved = {
+            k: (v if k in _MATRIX_KEYS else _resolve_includes(v, root, seen))
+            for k, v in rest.items()
+        }
         if not refs:
             return resolved
         merged: Any = None
@@ -278,6 +288,22 @@ def _resolve_includes(node: Any, root: Path, seen: "tuple[Path, ...]" = ()) -> A
 # is reserved as an axis name). Kept in its own code path so it neither entangles
 # with, nor conflicts much with, the includes work. A file carrying no matrix key
 # passes through structurally unchanged.
+#
+# Two optional, strictly additive filters may ride along when the matrix value is a
+# **mapping** (they are reserved keys, so ``exclude``/``include`` cannot be axis
+# names):
+#
+#   * ``include:`` — a list of *full* variable maps appended to the base rows. With
+#     no axes and no ``from:``, ``include:`` alone is the whole fan-out — the
+#     inline-list form written as a mapping so it too can carry an ``exclude:``.
+#   * ``exclude:`` — a list of *partial* variable maps; a row (base or include) is
+#     dropped when it agrees with an exclude entry on every key that entry specifies
+#     (an entry naming a key the row lacks never matches). Exclude runs over the whole
+#     fan-out, so it prunes a cross-product, a ``{from: ...}`` list, or an inline list
+#     alike, down to the wanted subset.
+#
+# Both default to absent: a matrix block with neither resolves byte-for-byte as
+# before.
 
 _MATRIX_KEYS = ("matrix", "for_each")
 
@@ -445,29 +471,20 @@ def _cross_product_rows(axes: dict, key: str) -> list:
     ]
 
 
-def _matrix_rows(value: Any, key: str, root: "Path | None") -> list:
-    """Resolve a ``matrix:``/``for_each:`` value into ``(vars, default_suffix)`` rows.
+# Reserved keys of a matrix *mapping* that are not cross-product axes: the
+# ``from:`` data-file disambiguator plus the additive ``exclude:``/``include:``
+# filters. Pulled out before the remaining keys are read as axes.
+_MATRIX_FILTER_KEYS = ("exclude", "include")
 
-    Three input shapes, all producing the same downstream fan-out (one job per row):
 
-    * an **inline list** of variable maps — suffixed by each row's 0-based index;
-    * a **``{from: <path>}``** mapping naming an external data file holding that list
-      (see :func:`_load_matrix_file`) — identical to inline once loaded;
-    * a **cross-product axes** mapping of axis-name -> value-list (any mapping with no
-      ``from:`` key) — one row per cartesian-product combination, suffixed by the
-      combination's slugified values (see :func:`_cross_product_rows`).
+def _index_rows(rows: Any, key: str) -> list:
+    """Validate a plain list of variable maps into ``(vars, str(index))`` rows.
 
-    The ``from:`` key disambiguates the two mapping shapes, so it is reserved (an
-    axes mapping cannot name an axis ``from``). Raises ``ValueError`` on a malformed
-    value so the containing file lands in the loader's ``failed`` list.
+    Shared by the inline-list and ``{from: <path>}`` forms — both supply an explicit
+    list whose rows are suffixed by their 0-based position. Raises ``ValueError`` (so
+    the file lands in the loader's ``failed`` list) on a non-list / empty list, or a
+    row that is not a mapping.
     """
-    if isinstance(value, dict):
-        if "from" in value:
-            rows = _load_matrix_file(value, key, root)
-        else:
-            return _cross_product_rows(value, key)
-    else:
-        rows = value
     if not isinstance(rows, list) or not rows:
         raise ValueError(f"`{key}:` must be a non-empty list of variable maps")
     out: list = []
@@ -479,6 +496,106 @@ def _matrix_rows(value: Any, key: str, root: "Path | None") -> list:
             )
         out.append((row, str(i)))
     return out
+
+
+def _matrix_filters(
+    exclude: Any, include: Any, key: str
+) -> "tuple[list, list]":
+    """Validate the optional ``exclude:``/``include:`` lists into ``(exclude, include)``.
+
+    Each, when present, must be a **list of variable maps**; ``None`` (absent) becomes
+    ``[]`` so callers treat it as a no-op. A malformed value (not a list, or a
+    non-mapping entry) raises ``ValueError`` with an actionable ``ujin: …``-style
+    message, routing the containing file/job through the normal ``failed`` path
+    instead of crashing the loader.
+    """
+    def _check(val: Any, name: str) -> list:
+        if val is None:
+            return []
+        if not isinstance(val, list):
+            raise ValueError(
+                f"`{key}:` `{name}:` must be a list of variable maps, got "
+                f"{type(val).__name__}"
+            )
+        for i, entry in enumerate(val):
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"`{key}:` `{name}:` entry {i} must be a variable map, got "
+                    f"{type(entry).__name__}"
+                )
+        return val
+
+    return _check(exclude, "exclude"), _check(include, "include")
+
+
+def _row_excluded(row_vars: dict, exclude: list) -> bool:
+    """True if *row_vars* agrees with any *exclude* entry on every key it specifies.
+
+    A partial exclude entry matches when each key it names is present in *row_vars*
+    with an equal value; an entry naming a key the row lacks never matches (so an
+    exclude that references an absent key is a no-op, leaving the row in place).
+    """
+    return any(
+        all(k in row_vars and row_vars[k] == v for k, v in entry.items())
+        for entry in exclude
+    )
+
+
+def _matrix_rows(value: Any, key: str, root: "Path | None") -> list:
+    """Resolve a ``matrix:``/``for_each:`` value into ``(vars, default_suffix)`` rows.
+
+    Three base input shapes, all producing the same downstream fan-out (one job per
+    row):
+
+    * an **inline list** of variable maps — suffixed by each row's 0-based index;
+    * a **``{from: <path>}``** mapping naming an external data file holding that list
+      (see :func:`_load_matrix_file`) — identical to inline once loaded;
+    * a **cross-product axes** mapping of axis-name -> value-list (any mapping with no
+      ``from:`` key) — one row per cartesian-product combination, suffixed by the
+      combination's slugified values (see :func:`_cross_product_rows`).
+
+    When the value is a **mapping** it may also carry two optional, strictly additive
+    filters (reserved keys, never axis names): ``include:`` — a list of full variable
+    maps appended (index-suffixed) to the base rows — and ``exclude:`` — a list of
+    partial variable maps; a row (base *or* include) is dropped when it agrees with
+    any exclude entry on every key that entry specifies (see :func:`_row_excluded`).
+    Exclude runs over the whole fan-out, so it prunes a cross-product, a
+    ``{from: ...}`` list, or an inline list alike. With no axes and no ``from:``,
+    ``include:`` alone is the whole fan-out — the inline-list form written as a
+    mapping so it too can pair with an ``exclude:``.
+
+    The ``from:`` key disambiguates the two base mapping shapes, so it is reserved (an
+    axes mapping cannot name an axis ``from``). Raises ``ValueError`` on a malformed
+    value — including one whose filters prune the fan-out to zero jobs — so the
+    containing file lands in the loader's ``failed`` list.
+    """
+    exclude: list = []
+    include: list = []
+    if isinstance(value, dict):
+        exclude, include = _matrix_filters(
+            value.get("exclude"), value.get("include"), key
+        )
+        had_include = "include" in value
+        base_def = {k: v for k, v in value.items() if k not in _MATRIX_FILTER_KEYS}
+        if "from" in base_def:
+            base = _index_rows(_load_matrix_file(base_def, key, root), key)
+        elif base_def or not had_include:
+            # Cross-product axes — also the empty-mapping error path, which routes
+            # through :func:`_cross_product_rows` for its "at least one axis" message.
+            base = _cross_product_rows(base_def, key)
+        else:
+            base = []  # include-only: the inline list written as a mapping
+    else:
+        base = _index_rows(value, key)
+
+    rows = base + [(extra, str(j)) for j, extra in enumerate(include)]
+    rows = [(v, s) for (v, s) in rows if not _row_excluded(v, exclude)]
+    if not rows:
+        raise ValueError(
+            f"`{key}:` expanded to zero jobs after applying `exclude:`/`include:`; "
+            "loosen `exclude:` or supply rows"
+        )
+    return rows
 
 
 def _expand_matrix(
@@ -501,9 +618,10 @@ def _expand_matrix(
     ``<base_id>-<suffix>`` — the suffix being the row index (inline/file forms) or the
     combination's slugified values (cross-product form), so the id is deterministic
     and, for cross-product, independent of axis order. *root* is the containing file's
-    directory, used to resolve a ``from:`` data file. Raises ``ValueError`` (so the
-    file lands in the ``failed`` list, not aborting startup) on a malformed matrix
-    or colliding ids.
+    directory, used to resolve a ``from:`` data file. A matrix mapping may also carry
+    optional ``exclude:``/``include:`` filter lists that prune / append rows before id
+    derivation (see :func:`_matrix_rows`). Raises ``ValueError`` (so the file lands in
+    the ``failed`` list, not aborting startup) on a malformed matrix or colliding ids.
 
     When *prov* is a list it collects, in lock-step with the returned jobs, one
     ``{"key", "index", "vars"}`` record per generated job naming the matrix key, the
@@ -606,12 +724,14 @@ _JOB_KEYS = frozenset({
 })
 
 # Top-level keys of an INGEST-PLAN *mapping* (a top-level list has no keys to check).
-_PLAN_TOP_KEYS = frozenset({"jobs", "defaults", "include", "use", "vars"})
+# `profiles:` is a top-level-only key (a map of named overlays for `defaults:`).
+_PLAN_TOP_KEYS = frozenset({"jobs", "defaults", "include", "use", "vars", "profiles"})
 
 # Top-level keys of a WORKFLOW file: it may be a container (`jobs:`/`defaults:`) OR a
 # single job written directly at the top level, so both key sets are accepted there.
-# `vars:` is a top-level-only key (a default-value map), never a per-job key.
-_WORKFLOW_TOP_KEYS = _JOB_KEYS | {"jobs", "defaults", "vars"}
+# `vars:`/`profiles:` are top-level-only keys (a default-value map / overlay map),
+# never per-job keys.
+_WORKFLOW_TOP_KEYS = _JOB_KEYS | {"jobs", "defaults", "vars", "profiles"}
 
 
 def _suggest(unknown: str, allowed: "frozenset[str]") -> "str | None":
@@ -650,6 +770,102 @@ def _report_warnings(messages: "list[str]", warnings: "list | None") -> None:
         log.warning(msg)
         if warnings is not None:
             warnings.append(msg)
+
+
+# ── profile overlays (`profiles:` + --profile / $UJIN_PLAN_PROFILE) ─────────── #
+#
+# A top-level `profiles:` mapping declares named overlays — each one deep-merged
+# OVER the plan's base `defaults:` block when its name is selected (so a profile
+# key wins over the same key in `defaults:`). The resulting effective defaults are
+# then deep-merged UNDER each job exactly as before, so per-job keys still win and
+# the established `${VAR}` / `{{ var }}` / matrix substitution order is unchanged.
+# Selection is `--profile NAME` (flag) with a `$UJIN_PLAN_PROFILE` env fallback (the
+# flag wins); neither set means no profile, no `profiles:` lookup, and resolution is
+# byte-for-byte unchanged — strictly additive.
+
+PLAN_PROFILE_ENV = "UJIN_PLAN_PROFILE"
+
+
+class PlanProfileError(ValueError):
+    """A selected ``--profile`` / ``$UJIN_PLAN_PROFILE`` name can't be applied.
+
+    Raised when a profile is selected but the file declares no ``profiles:`` block
+    (in strict/plan mode), the name is absent from it, or the overlay is malformed.
+    A ``ValueError`` subclass so the loader's existing file-level handling records it
+    in ``failed`` with a clean ``ujin: …`` message; callers that must exit non-zero
+    (``plan validate``/``plan render``, ``jobs-serve`` startup) surface it as such.
+    """
+
+
+def _profile_overlay(
+    data: Any, profile: "str | None", name: str, *, strict: bool = True
+) -> dict:
+    """Return the deep-merge overlay for the selected *profile* (``{}`` if none).
+
+    *data* is the parsed top-level plan/workflow node (after include resolution).
+    With *profile* falsy this is a no-op returning ``{}`` so resolution is unchanged.
+    When a profile is selected it is looked up in *data*'s ``profiles:`` mapping and
+    the matching overlay returned for the caller to deep-merge over ``defaults:``.
+
+    Raises :class:`PlanProfileError` (clean, naming the available profiles) when the
+    profile cannot be applied. In *strict* mode (a single plan file) a missing
+    ``profiles:`` block is an error; in lenient mode (a workflow file in a directory
+    scan, where files legitimately may not declare profiles) a file with no
+    ``profiles:`` key is left unchanged so only a present-but-unknown name fails.
+    """
+    if not profile:
+        return {}
+    profiles = data.get("profiles") if isinstance(data, dict) else None
+    if profiles is None:
+        if strict:
+            raise PlanProfileError(
+                f"plan {name}: profile {profile!r} selected but the file declares "
+                "no `profiles:` block"
+            )
+        return {}
+    if not isinstance(profiles, dict):
+        raise PlanProfileError(
+            f"plan {name}: `profiles:` must be a mapping of name -> overlay, got "
+            f"{type(profiles).__name__}"
+        )
+    if profile not in profiles:
+        available = ", ".join(sorted(profiles)) if profiles else "(none defined)"
+        raise PlanProfileError(
+            f"plan {name}: profile {profile!r} not found; available profiles: "
+            f"{available}"
+        )
+    overlay = profiles[profile]
+    if overlay is None:
+        return {}
+    if not isinstance(overlay, dict):
+        raise PlanProfileError(
+            f"plan {name}: profile {profile!r} must be a mapping, got "
+            f"{type(overlay).__name__}"
+        )
+    return overlay
+
+
+def _check_plan_profile(plan_src, profile: "str | None") -> None:
+    """Validate the selected *profile* against *plan_src* without loading jobs.
+
+    Raises :class:`PlanProfileError` (clean message) when *profile* is selected but
+    cannot be applied to the plan. A falsy *profile* or *plan_src*, or a plan that
+    can't be read/parsed at all, is a no-op here — the normal loader reports any
+    file-level problem at load time. Used by ``jobs-serve`` as a pre-flight so a bad
+    ``--profile`` exits non-zero before the server binds a port (mirroring ``--only``).
+    """
+    if not profile or not plan_src:
+        return
+    import yaml
+
+    p = Path(plan_src)
+    try:
+        data = _resolve_includes(
+            yaml.safe_load(_expand_env(p.read_text(encoding="utf-8"))), p.parent
+        )
+    except Exception:  # noqa: BLE001 - a file-level problem is reported at load time
+        return
+    _profile_overlay(data, profile, p.name)
 
 
 # ── job-id selection (--only / --exclude) ──────────────────────────────────── #
@@ -706,7 +922,10 @@ def _preload_specs(path: str) -> list:
 
 
 def _specs_from_workflow_file(
-    path, warnings: list | None = None, provenance: list | None = None
+    path,
+    warnings: list | None = None,
+    provenance: list | None = None,
+    profile: "str | None" = None,
 ) -> list:
     """Parse one workflow file into JobSpecs, deriving stable ids from the stem.
 
@@ -769,7 +988,19 @@ def _specs_from_workflow_file(
         )
     var_defaults = _overlay_env_vars(raw_vars)
 
+    # Profile overlay (lenient for a workflow file: a file with no `profiles:` key is
+    # left unchanged, so a directory scan with a `--profile` set only fails files that
+    # declare profiles but not the selected name). Pop `profiles:` so a single-job
+    # mapping below doesn't carry it as a stray key. Merged OVER base defaults so the
+    # overlay wins over `defaults:` but a per-job key still wins over the overlay.
+    raw_profiles = data.pop("profiles", None) if isinstance(data, dict) else None
+    overlay = _profile_overlay(
+        {"profiles": raw_profiles}, profile, path.name, strict=False
+    )
+
     defaults = data.pop("defaults", None) or {} if isinstance(data, dict) else {}
+    if overlay:
+        defaults = _deep_merge(defaults, overlay)
 
     # Single-job mapping (no top-level `jobs:` list) -> the whole file is one job.
     # A `matrix:`/`for_each:` key turns that mapping into a *template* fanned into
@@ -829,6 +1060,7 @@ def _load_workflows_dir(
     failed: list | None = None,
     warnings: list | None = None,
     provenance: list | None = None,
+    profile: "str | None" = None,
 ) -> list:
     """Load every top-level ``*.yaml``/``*.yml`` workflow file in *path* (sorted).
 
@@ -861,7 +1093,7 @@ def _load_workflows_dir(
         try:
             specs.extend(
                 _specs_from_workflow_file(
-                    fp, warnings=warnings, provenance=provenance
+                    fp, warnings=warnings, provenance=provenance, profile=profile
                 )
             )
         except Exception as exc:  # noqa: BLE001
@@ -934,6 +1166,7 @@ def _load_ingest_plan(
     warnings: list | None = None,
     present: list | None = None,
     provenance: list | None = None,
+    profile: "str | None" = None,
 ) -> list:
     """Load an INGEST-PLAN file into JobSpecs, deriving stable per-job ids.
 
@@ -948,6 +1181,14 @@ def _load_ingest_plan(
     like an ``include:`` fragment). A top-level ``vars:`` mapping supplies default
     values for any ``{{ var }}`` placeholder the process environment and matrix leave
     unset (matrix per-entry var > env value > ``vars:`` default).
+
+    When *profile* names an entry of a top-level ``profiles:`` mapping, that overlay
+    is deep-merged *over* the base ``defaults:`` before the per-job merge, so each
+    job inherits the overlaid values unless it sets the key itself and the matrix/
+    env/var substitution order is unchanged. A selected profile absent from
+    ``profiles:`` fails the whole plan (one ``failed`` record) with a clean
+    ``ujin: …`` message. ``profile=None`` (the default) skips this step entirely so
+    resolution is byte-for-byte unchanged.
 
     Errors never abort startup. A **file-level** problem (missing/unreadable file,
     invalid YAML, a shape that is neither a mapping nor a list, an unresolvable or
@@ -986,6 +1227,14 @@ def _load_ingest_plan(
         data = yaml.safe_load(_expand_env(path.read_text(encoding="utf-8")))
         data = _resolve_includes(data, path.parent)
         defaults, entries = _plan_entries(data, path.name)
+        # Profile overlay: deep-merge the selected `profiles:` entry OVER the base
+        # `defaults:` before the per-job merge below, so each job inherits the
+        # overlaid values unless it sets the key itself. A selected-but-absent
+        # profile raises PlanProfileError (a ValueError), failing the whole plan
+        # here with a clean message; profile=None is a no-op (unchanged).
+        overlay = _profile_overlay(data, profile, path.name)
+        if overlay:
+            defaults = _deep_merge(defaults, overlay)
     except (OSError, yaml.YAMLError, WorkflowIncludeError, ValueError) as exc:
         log.warning("skipping ingest plan %s: %s", path, exc)
         if failed is not None:
@@ -1062,7 +1311,7 @@ def _load_ingest_plan(
 
 
 def _apply_ingest_plan(
-    manager, plan_src, only=None, exclude=None, *, prune=False
+    manager, plan_src, only=None, exclude=None, *, prune=False, profile=None
 ) -> "dict[str, list]":
     """Resolve *plan_src*, apply ``--only``/``--exclude``, upsert into *manager*.
 
@@ -1095,7 +1344,7 @@ def _apply_ingest_plan(
     # stays empty on a file-level read failure, which gates prune below.
     present: list[str] = []
     plan_specs = _load_ingest_plan(
-        plan_src, failed=plan_status["failed"], present=present
+        plan_src, failed=plan_status["failed"], present=present, profile=profile
     )
     if only is not None or exclude is not None:
         plan_specs = _select_jobs(plan_specs, only, exclude)
@@ -1137,7 +1386,7 @@ def _spec_differs(current: "JobSpec", resolved: "JobSpec") -> bool:
 
 
 def _dryrun_ingest_plan(
-    manager, plan_src, only=None, exclude=None, *, prune=False
+    manager, plan_src, only=None, exclude=None, *, prune=False, profile=None
 ) -> "dict[str, list]":
     """Preview a reload of *plan_src* WITHOUT mutating *manager*.
 
@@ -1165,7 +1414,7 @@ def _dryrun_ingest_plan(
     }
     present: list[str] = []
     plan_specs = _load_ingest_plan(
-        plan_src, failed=plan_status["failed"], present=present
+        plan_src, failed=plan_status["failed"], present=present, profile=profile
     )
     if only is not None or exclude is not None:
         plan_specs = _select_jobs(plan_specs, only, exclude)
@@ -1197,7 +1446,7 @@ def _dryrun_ingest_plan(
 
 
 def _introspect_active_plan(
-    plan_src, wf_dir, only=None, exclude=None
+    plan_src, wf_dir, only=None, exclude=None, profile=None
 ) -> "dict[str, Any]":
     """Resolve the active workflows dir + INGEST-PLAN into a read-only payload.
 
@@ -1221,12 +1470,14 @@ def _introspect_active_plan(
     # Workflows directory: scanned unfiltered, matching the startup load order
     # (only the plan applies --only/--exclude). A non-existent dir yields nothing.
     if wf_dir:
-        _load_workflows_dir(wf_dir, failed=failed, provenance=prov)
+        _load_workflows_dir(wf_dir, failed=failed, provenance=prov, profile=profile)
     # INGEST-PLAN: resolve with provenance, then apply the same selection startup
     # would. A no-match --only is reported as zero selected, never raised (read-only).
     if plan_src:
         plan_prov: list = []
-        plan_specs = _load_ingest_plan(plan_src, failed=failed, provenance=plan_prov)
+        plan_specs = _load_ingest_plan(
+            plan_src, failed=failed, provenance=plan_prov, profile=profile
+        )
         if only is not None or exclude is not None:
             try:
                 keep = {s.id for s in _select_jobs(plan_specs, only, exclude)}
@@ -1318,7 +1569,8 @@ class _PlanWatcher:
     """
 
     def __init__(
-        self, app, manager, plan_src, only, exclude, interval, *, sleep=None
+        self, app, manager, plan_src, only, exclude, interval, *, sleep=None,
+        profile=None,
     ):
         self.app = app
         self.manager = manager
@@ -1326,6 +1578,7 @@ class _PlanWatcher:
         self.only = only
         self.exclude = exclude
         self.interval = interval
+        self.profile = profile
         self._sleep = sleep or asyncio.sleep
         self._sig = self._signature()
 
@@ -1360,7 +1613,7 @@ class _PlanWatcher:
         try:
             status = _apply_ingest_plan(
                 self.manager, self.plan_src, only=self.only, exclude=self.exclude,
-                prune=True,
+                prune=True, profile=self.profile,
             )
         except ValueError as exc:
             # --only now matches nothing: surface it, keep the last good job set.
@@ -1409,6 +1662,7 @@ def create_jobs_app(
     exclude: list | None = None,
     watch_plan: bool = False,
     watch_interval: float | None = None,
+    profile: str | None = None,
 ) -> Any:
     try:
         from fastapi import (
@@ -1434,6 +1688,11 @@ def create_jobs_app(
     # The `--plan` flag (passed as plan_path) overrides $UJIN_INGEST_PLAN; unset ->
     # no plan is loaded and /health stays byte-identical to a no-plan deploy.
     plan_src = plan_path or os.environ.get(INGEST_PLAN_ENV)
+    # Active profile overlay: the `--profile` flag (passed as profile) wins over
+    # $UJIN_PLAN_PROFILE; neither set -> None -> no overlay (byte-identical to today).
+    # Resolved once here so startup, reload, the watcher, and GET /plan all apply the
+    # same profile, exactly as plan_src/only/exclude are shared.
+    profile_name = profile or os.environ.get(PLAN_PROFILE_ENV) or None
     # Opt-in plan-file watcher. Resolved once here (flag wins over env); off by
     # default, so without it the lifespan creates no watcher task and does no extra
     # I/O — a no-config deploy is byte-identical to today.
@@ -1494,7 +1753,8 @@ def create_jobs_app(
         if plan_src:
             try:
                 app.state.plan = _apply_ingest_plan(
-                    manager, plan_src, only=only, exclude=exclude
+                    manager, plan_src, only=only, exclude=exclude,
+                    profile=profile_name,
                 )
             except ValueError as exc:
                 # A --only pattern matched no resolved job: fatal at startup.
@@ -1520,7 +1780,8 @@ def create_jobs_app(
         app.state.plan_watcher = None
         if watch_enabled and plan_src:
             watcher = _PlanWatcher(
-                app, manager, plan_src, only, exclude, watch_secs
+                app, manager, plan_src, only, exclude, watch_secs,
+                profile=profile_name,
             )
             app.state.plan_watcher = watcher
             tasks.append(asyncio.create_task(watcher.run()))
@@ -1619,7 +1880,9 @@ def create_jobs_app(
         plan nor a populated workflows dir configured, ``jobs`` is empty.
         """
         return PlanIntrospection(
-            **_introspect_active_plan(plan_src, wf_dir, only=only, exclude=exclude)
+            **_introspect_active_plan(
+                plan_src, wf_dir, only=only, exclude=exclude, profile=profile_name
+            )
         )
 
     @app.post("/plan/reload")
@@ -1675,7 +1938,7 @@ def create_jobs_app(
             try:
                 preview = _dryrun_ingest_plan(
                     app.state.manager, plan_src, only=only, exclude=exclude,
-                    prune=prune,
+                    prune=prune, profile=profile_name,
                 )
             except ValueError as exc:
                 return {"reloaded": False, "dry_run": True, "detail": str(exc),
@@ -1683,7 +1946,8 @@ def create_jobs_app(
             return {"reloaded": False, "dry_run": True, **preview}
         try:
             plan_status = _apply_ingest_plan(
-                app.state.manager, plan_src, only=only, exclude=exclude, prune=prune
+                app.state.manager, plan_src, only=only, exclude=exclude, prune=prune,
+                profile=profile_name,
             )
         except ValueError as exc:
             # --only matched no job on reload: report, don't kill the server.
@@ -1812,12 +2076,13 @@ def serve(  # pragma: no cover -- launches uvicorn; not testable without a live 
     exclude: list | None = None,
     watch_plan: bool = False,
     watch_interval: float | None = None,
+    profile: str | None = None,
 ) -> None:
     import uvicorn
 
     uvicorn.run(
         create_jobs_app(config_path, workflows_dir=workflows_dir, plan_path=plan_path,
                         only=only, exclude=exclude, watch_plan=watch_plan,
-                        watch_interval=watch_interval),
+                        watch_interval=watch_interval, profile=profile),
         host=host, port=port,
     )

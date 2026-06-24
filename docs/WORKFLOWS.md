@@ -300,6 +300,56 @@ This resolves to six jobs — `status-us-east-free`, `status-us-east-pro`,
 
 See `examples/matrix-cross-product.yaml` for a runnable cross-product plan.
 
+#### Pruning and extending — `exclude:` / `include:`
+
+When the matrix value is a **mapping** (cross-product axes or `{ from: <path> }`) it
+may carry two optional, strictly-additive filter keys — `exclude:` and `include:` —
+that refine the generated fan-out. They are reserved keys, so you cannot name an axis
+`exclude` or `include`.
+
+```yaml
+# /workflows/region-status.yaml
+matrix:
+  region: [us-east, us-west, eu-central]   # 3 values
+  tier:   [free, pro]                      # 2 values   -> 6 base combinations
+  exclude:
+    - { region: eu-central, tier: pro }    # drop this ONE combination -> 5 jobs
+  include:
+    - { region: ap-south, tier: canary }   # append one explicit extra -> 6 jobs
+
+id: "status-{{ region }}-{{ tier }}"
+source:
+  kind: api
+  config: { url: "https://api.example.com/{{ region }}/status?tier={{ tier }}" }
+```
+
+- **`exclude:`** is a list of **partial** variable maps. A generated row is dropped
+  when it agrees with an exclude entry on **every key that entry specifies** — so the
+  full `{ region: eu-central, tier: pro }` above removes a single combination, while a
+  partial `{ tier: pro }` would remove **every** `*-pro` combination. An entry that
+  names a key no row has (or a value none holds) matches nothing and is a harmless
+  no-op. Exclude runs over the whole fan-out, so it prunes a cross-product, a
+  `{ from: <path> }` list, or an inline list alike.
+- **`include:`** is a list of **full** variable maps appended to the fan-out — extra
+  jobs the axes (or data file) don't generate, substituted exactly like any other row.
+- **Pruning an inline list.** A bare `matrix: [ … ]` list cannot carry sibling keys,
+  so to pair an explicit list with `exclude:` write the rows under `include:` in a
+  mapping form — `matrix: { include: [ … ], exclude: [ … ] }` resolves to the same
+  jobs as the inline list, minus the excluded rows.
+- **Stable ids.** Surviving cross-product/file rows keep their usual slug/index
+  suffixes; appended `include:` rows are index-suffixed. As always, give `id:` a
+  template referencing the per-row variables so each job gets a deterministic id and
+  reloads upsert rather than duplicate (especially when combining `include:` with a
+  base form, whose default `<stem>-<index>` ids can otherwise collide).
+- **Errors are contained.** A malformed `exclude:`/`include:` (not a list of variable
+  maps), or filters that prune the fan-out to zero jobs, fail *that* workflow with an
+  actionable `ujin: …` error in the `failed` list (`GET /health`); other workflows
+  still load.
+- **Additive.** A matrix block with neither key resolves byte-for-byte as before.
+
+See `examples/matrix-exclude.yaml` for a runnable plan that prunes with `exclude:`
+and extends with `include:`.
+
 ### `vars:` — default values for `{{ var }}` placeholders
 
 A top-level **`vars:`** mapping (variable name → default value) supplies a fallback
