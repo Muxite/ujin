@@ -491,9 +491,11 @@ def _cmd_plan_diff(args: argparse.Namespace) -> int:
     render`` (defaults/include/matrix/${VAR} fully expanded), then reports, by
     job id, the jobs **added** in NEW, **removed** in NEW, and **changed**
     (present in both with a differing resolved spec). Exits zero whenever both
-    inputs resolve — including when there is no difference. An unreadable or
-    schema-invalid OLD/NEW input exits non-zero with a clean ``ujin: …`` message
-    and no traceback.
+    inputs resolve — including when there is no difference — unless
+    ``--exit-code`` (``--check``) is given, in which case it exits non-zero
+    when there are any added/removed/changed jobs and zero when they are
+    identical. An unreadable or schema-invalid OLD/NEW input exits non-zero with
+    a clean ``ujin: …`` message and no traceback.
 
     ``--json`` emits the same information as a structured object with distinct
     ``added``/``removed``/``changed`` groupings. ``--env-file`` is accepted
@@ -545,6 +547,9 @@ def _cmd_plan_diff(args: argparse.Namespace) -> int:
         else:
             print("no changes")
 
+    exit_code = getattr(args, "exit_code", False)
+    if exit_code and (added or removed or changed):
+        return 1
     return 0
 
 
@@ -1056,15 +1061,20 @@ def main(argv: list[str] | None = None) -> int:
                     "id, the jobs added in NEW, removed in NEW, and changed "
                     "(present in both but with a differing resolved spec). Exits "
                     "zero whenever both inputs resolve (including no difference). "
+                    "--exit-code (alias --check) changes the exit convention: "
+                    "exits non-zero when there are any differences, zero when "
+                    "the plans are identical — useful for CI gates. "
                     "--json emits the same information as a structured object "
-                    "with distinct added/removed/changed groupings. An unreadable "
-                    "or schema-invalid input exits non-zero with a clean "
-                    "`ujin: …` message (no traceback).",
+                    "with distinct added/removed/changed groupings (unaffected "
+                    "by --exit-code). An unreadable or schema-invalid input "
+                    "exits non-zero with a clean `ujin: …` message (no traceback).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="examples:\n"
                "  ujin plan diff ./old-plan.yaml ./new-plan.yaml\n"
                "  ujin plan diff ./workflows/ ./new-workflows/\n"
-               "  ujin plan diff ./old-plan.yaml ./new-plan.yaml --json",
+               "  ujin plan diff ./old-plan.yaml ./new-plan.yaml --json\n"
+               "  ujin plan diff ./old-plan.yaml ./new-plan.yaml --exit-code  "
+               "# exit 1 if any diff",
     )
     p_plan_diff.add_argument("old", metavar="OLD",
                              help="baseline plan file or workflows directory")
@@ -1073,6 +1083,12 @@ def main(argv: list[str] | None = None) -> int:
     p_plan_diff.add_argument("--json", action="store_true",
                              help="emit the diff as machine-readable JSON with "
                                   "distinct added/removed/changed groupings")
+    p_plan_diff.add_argument(
+        "--exit-code", "--check", dest="exit_code", action="store_true",
+        help="exit non-zero when the two resolved plans differ in any "
+             "added/removed/changed job id; exit zero when they are identical "
+             "(without this flag, plan diff always exits zero on a successful "
+             "resolve regardless of differences)")
     p_plan_diff.add_argument(
         "--env-file", default=None, metavar="PATH",
         help="load KEY=VALUE pairs from PATH and use them for ${VAR} substitution "

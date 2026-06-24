@@ -532,9 +532,11 @@ with the same loaders as `plan validate`/`plan render` — `defaults:` deep-merg
 substitution all expanded — then compared keyed by **final job id**:
 
 ```bash
-ujin plan diff ./old-plan.yaml ./ingest-plan.yaml          # human-readable
-ujin plan diff ./old-workflows/ ./workflows/               # also works for dirs
-ujin plan diff ./old-plan.yaml ./ingest-plan.yaml --json   # machine-readable (CI)
+ujin plan diff ./old-plan.yaml ./ingest-plan.yaml                    # human-readable
+ujin plan diff ./old-workflows/ ./workflows/                         # also works for dirs
+ujin plan diff ./old-plan.yaml ./ingest-plan.yaml --json             # machine-readable (CI)
+ujin plan diff ./old-plan.yaml ./ingest-plan.yaml --exit-code        # exit 1 if any diff
+ujin plan diff ./old-plan.yaml ./ingest-plan.yaml --check            # alias for --exit-code
 ```
 
 The human form prints one line per affected job — `+` added in `NEW`, `-` removed
@@ -572,10 +574,14 @@ ujin plan diff ./old-plan.yaml ./ingest-plan.yaml --json | python3 -c \
 ```
 
 `plan diff` exits **zero** whenever both inputs resolve — including when there is
-no difference. `--env-file` is accepted consistently with the other plan
-subcommands (it fills in `${VAR}`s not already in the environment for both plans).
-An unreadable or schema-invalid `OLD`/`NEW` input exits non-zero with a clean
-`ujin: …` message and no traceback.
+no difference. Pass `--exit-code` (alias `--check`) to flip this for CI: the
+command then exits **non-zero** when there are any added/removed/changed jobs and
+zero when the plans are identical. `--exit-code` does not affect `--json` output —
+the structure is identical with or without the flag. `--env-file` is accepted
+consistently with the other plan subcommands (it fills in `${VAR}`s not already
+in the environment for both plans). An unreadable or schema-invalid `OLD`/`NEW`
+input exits non-zero with a clean `ujin: …` message and no traceback, regardless
+of `--exit-code`.
 
 ## Job-id selection — `--only` and `--exclude`
 
