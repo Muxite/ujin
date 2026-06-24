@@ -307,6 +307,50 @@ malformed file), so a transient read error never wipes plan jobs — that reload
 the failure and `pruned` is `[]`. Without the option the response omits `pruned` entirely
 and nothing is removed, byte-for-byte the upsert-only behaviour.
 
+### Previewing a reload (dry run)
+
+To see what a reload *would* do before committing to it, add `?dry_run=true` (or a
+`{"dry_run": true}` JSON body, accepted exactly like `prune`):
+
+```bash
+curl -X POST 'localhost:8902/plan/reload?dry_run=true'
+# combine with prune to also preview removals:
+curl -X POST 'localhost:8902/plan/reload?prune=true&dry_run=true'
+# or, equivalently, via a JSON body:
+curl -X POST localhost:8902/plan/reload -H 'content-type: application/json' \
+     -d '{"dry_run": true, "prune": true}'
+```
+
+A dry run resolves the plan through the **identical** loader as a real reload
+(`defaults:`/`include:`/`matrix:`/`${VAR}`) and the same `--only`/`--exclude` filters,
+but **mutates nothing** — the job manager is untouched, so `GET /jobs` and the
+`/health` plan block are identical immediately before and after the call. Instead of
+upserting, the response classifies each resolved job id:
+
+```json
+{
+  "reloaded": false,
+  "dry_run": true,
+  "path": "/data/ingest-plan.yaml",
+  "added": ["feed-business"],
+  "updated": ["feed-tech"],
+  "unchanged": ["crossref", "feed-science"],
+  "loaded": [],
+  "failed": [],
+  "removed": ["feed-defunct"]
+}
+```
+
+`added` are ids not currently running (a real reload would create them), `updated`
+are running jobs whose resolved spec differs (would be re-registered), and
+`unchanged` are running jobs the re-read plan leaves identical (a no-op upsert).
+`removed` is present only with `prune` and lists the plan-owned ids a real prune
+would delete — but no job is removed. `reloaded` stays `false`; nothing was applied.
+A malformed job still surfaces in `failed`, and the same guards apply: a file-level
+read error reports no removals, and `--only` matching nothing is reported rather than
+fatal. With **no plan configured** the dry run is a non-error no-op returning
+`{"reloaded": false, "dry_run": true, "detail": "no plan configured", "loaded": [], "failed": []}`.
+
 ## Validating a plan without starting the server
 
 Use `ujin plan validate` to check a plan file (or a workflows directory) with the
