@@ -293,7 +293,7 @@ ujin scrape-serve            # rich scrape HTTP service on :8901
 ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
 ujin plan validate <path>    # validate a plan file or workflows dir (--json/--strict for CI)
 ujin plan render <path>      # resolve and print every expanded job (--json for CI)
-ujin plan diff OLD NEW       # diff two plans by resolved job id: added/removed/changed (--json)
+ujin plan diff OLD NEW       # diff two plans/dirs by resolved job id (--json; --exit-code/--check exits non-zero on any diff)
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
 ujin learned site_state.db   # inspect the durable per-host learned state (--json)
