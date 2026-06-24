@@ -17,6 +17,7 @@ Endpoints::
   POST   /jobs/{id}/resume
   GET    /jobs/{id}/runs        recent run history
   GET    /jobs/{id}/events      recent persisted events (sqlite sink)
+  POST   /plan/reload           re-read the configured INGEST-PLAN and upsert jobs
   WS     /jobs/events           live stream of change events
 
 Needs the ``jobs`` extra (fastapi, uvicorn, websockets, pydantic, scrape stack).
@@ -677,6 +678,37 @@ def _load_ingest_plan(
     return specs
 
 
+def _apply_ingest_plan(manager, plan_src, only=None, exclude=None) -> "dict[str, list]":
+    """Resolve *plan_src*, apply ``--only``/``--exclude``, upsert into *manager*.
+
+    Shared by startup and ``POST /plan/reload`` so both go through the identical
+    :func:`_load_ingest_plan` resolution (defaults/include/matrix/``${VAR}``),
+    :func:`_select_jobs` selection, and error handling. Returns the same
+    ``{"path", "loaded", "failed"}`` summary that ``GET /health`` exposes: a
+    loader/file-level or per-job problem fails only that record (with a
+    ``ujin: …`` message) while the remaining jobs upsert by their stable ids.
+    Re-applying is idempotent — same ids upsert the same jobs.
+
+    Raises ``ValueError`` (clean ``ujin: …`` message) when an ``--only`` pattern
+    matches no resolved job, so the caller decides whether that is fatal (startup
+    exits non-zero) or merely reported (reload keeps the server running).
+    """
+    plan_status: dict[str, list] = {
+        "path": str(plan_src), "loaded": [], "failed": [],
+    }
+    plan_specs = _load_ingest_plan(plan_src, failed=plan_status["failed"])
+    if only is not None or exclude is not None:
+        plan_specs = _select_jobs(plan_specs, only, exclude)
+    for spec in plan_specs:
+        try:
+            manager.create(spec)
+            plan_status["loaded"].append(spec.id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("plan job %s failed: %s", spec.id, exc)
+            plan_status["failed"].append({"id": spec.id, "error": f"ujin: {exc}"})
+    return plan_status
+
+
 def create_jobs_app(
     config_path: str | None = None,
     *,
@@ -759,26 +791,14 @@ def create_jobs_app(
         # a bad job within it) is reported, not fatal. Only attached to app.state
         # when a plan is configured, so /health is unchanged without one.
         if plan_src:
-            plan_status: dict[str, list] = {
-                "path": str(plan_src), "loaded": [], "failed": [],
-            }
-            plan_specs = _load_ingest_plan(plan_src, failed=plan_status["failed"])
-            if only is not None or exclude is not None:
-                try:
-                    plan_specs = _select_jobs(plan_specs, only, exclude)
-                except ValueError as exc:
-                    print(str(exc), file=sys.stderr)
-                    sys.exit(1)
-            for spec in plan_specs:
-                try:
-                    manager.create(spec)
-                    plan_status["loaded"].append(spec.id)
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("plan job %s failed: %s", spec.id, exc)
-                    plan_status["failed"].append(
-                        {"id": spec.id, "error": f"ujin: {exc}"}
-                    )
-            app.state.plan = plan_status
+            try:
+                app.state.plan = _apply_ingest_plan(
+                    manager, plan_src, only=only, exclude=exclude
+                )
+            except ValueError as exc:
+                # A --only pattern matched no resolved job: fatal at startup.
+                print(str(exc), file=sys.stderr)
+                sys.exit(1)
 
         app.state.engine = engine
         app.state.store = store
@@ -861,6 +881,34 @@ def create_jobs_app(
         status = load_plugins()
         app.state.plugins = status
         return status
+
+    @app.post("/plan/reload")
+    def plan_reload() -> dict[str, Any]:
+        """Re-read the configured INGEST-PLAN and upsert its jobs, no restart.
+
+        Goes through the same loader and ``--only``/``--exclude`` selection as
+        startup, so resolution and error handling are identical: a per-job error
+        fails only that job (reported in ``failed``) while the rest reload. Refreshes
+        the ``/health`` plan status and returns the same ``{"path", "loaded",
+        "failed"}`` summary. When no plan is configured it is a safe no-op: nothing
+        changes and ``reloaded`` is ``false``. Unlike startup, a ``--only`` pattern
+        that now matches nothing is reported rather than fatal — the server keeps
+        running. The route is gated by the optional API-key auth like every other
+        mutating endpoint.
+        """
+        if not plan_src:
+            return {"reloaded": False, "detail": "no plan configured",
+                    "loaded": [], "failed": []}
+        try:
+            plan_status = _apply_ingest_plan(
+                app.state.manager, plan_src, only=only, exclude=exclude
+            )
+        except ValueError as exc:
+            # --only matched no job on reload: report, don't kill the server.
+            return {"reloaded": False, "detail": str(exc),
+                    "loaded": [], "failed": []}
+        app.state.plan = plan_status
+        return {"reloaded": True, **plan_status}
 
     @app.get("/jobs")
     def list_jobs() -> list[dict[str, Any]]:

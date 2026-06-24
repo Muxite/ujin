@@ -103,11 +103,20 @@ GET    /jobs/{id}/content       latest obtained payload (the data ujin last got)
 GET    /jobs/{id}/results?limit=N  recent buffer of obtained results (per change)
 WS     /jobs/events             live change stream (all jobs)
 POST   /plugins/reload          re-import plugins -> {loaded, failed}
+POST   /plan/reload             re-read the INGEST-PLAN -> {reloaded, path, loaded, failed}
 ```
 
 The `plan` field in `/health` is only present when `--plan`/`$UJIN_INGEST_PLAN` is
 configured; it lists `loaded` and `failed` job ids, mirroring `workflows`. Omitted
 entirely on no-plan deploys so `/health` stays byte-identical.
+
+`POST /plan/reload` re-reads the configured plan file and upserts its jobs by their
+stable ids — picking up added/changed jobs without restarting the server — then
+refreshes the `/health` plan status. It shares the startup loader, so a single
+malformed job is reported in `failed` while the rest reload. With no plan configured
+it is a safe no-op (`{"reloaded": false, "detail": "no plan configured", …}`). Like
+every mutating route it sits behind the optional API-key auth — see
+[INGEST_PLAN.md](INGEST_PLAN.md#reloading-a-plan-without-restarting).
 
 File-driven jobs (**workflows**) load from `UJIN_WORKFLOWS_DIR` on startup (id =
 filename stem), with optional `defaults:` deep-merge, `include:`/`use:` fragments,

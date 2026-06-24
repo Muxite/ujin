@@ -163,6 +163,42 @@ Errors **never abort startup**:
   fails *just that job* — the remaining valid jobs still load — and is reported in
   `plan.failed` naming the offending job.
 
+## Reloading a plan without restarting
+
+When the plan file changes, re-apply it in-process instead of restarting the server:
+
+```bash
+curl -X POST localhost:8902/plan/reload
+```
+
+`POST /plan/reload` re-reads the configured plan path (`--plan` / `$UJIN_INGEST_PLAN`),
+re-runs the **identical** resolution and error handling as startup
+(`defaults:`/`include:`/`matrix:`/`${VAR}`), and upserts the resolved jobs by their
+stable ids into the running job manager — so added or changed jobs become visible via
+`GET /jobs` and the refreshed `GET /health` plan block with no downtime. The response
+mirrors the startup plan-status shape, plus a `reloaded` flag:
+
+```json
+{
+  "reloaded": true,
+  "path": "/data/ingest-plan.yaml",
+  "loaded": ["crossref", "feed-tech", "feed-science"],
+  "failed": [{"id": "feed-business", "error": "ujin: plan job feed-business: …"}]
+}
+```
+
+A single malformed job is reported in `failed` while the rest reload (a reload never
+aborts). Reload only **upserts** — it never deletes jobs dropped from the file. If the
+server was started with [`--only`/`--exclude`](#job-id-selection----only-and---exclude)
+selectors, reload applies the **same** filters, so it never loads jobs the startup
+filter excluded; unlike startup, a `--only` pattern that now matches nothing is reported
+(`{"reloaded": false, "detail": "ujin: --only …: no job ids matched", …}`) rather than
+aborting the running server. When **no plan is configured** the endpoint is a safe no-op
+that changes nothing and
+returns `{"reloaded": false, "detail": "no plan configured", "loaded": [], "failed": []}`.
+Like every mutating jobs route, `/plan/reload` is gated by the optional API-key auth
+(`UJIN_API_KEY`); only `/health` stays open.
+
 ## Validating a plan without starting the server
 
 Use `ujin plan validate` to check a plan file (or a workflows directory) with the
