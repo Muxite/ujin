@@ -126,7 +126,7 @@ ujin plan diff    old-plan.yaml examples/ingest-plan.yaml --exit-code  # exit 1 
 ```
 
 `--plan` (or `$UJIN_INGEST_PLAN`) mounts a single YAML file that declares many jobs
-at once. Three additive layers keep large plans DRY:
+at once. A few additive layers keep large plans DRY:
 
 - **`defaults:`** — a top-level mapping deep-merged under every job; per-job keys win.
 - **`include:`/`use:`** — pull in a fragment file for a shared sink, schedule, or
@@ -138,6 +138,12 @@ at once. Three additive layers keep large plans DRY:
   substitutes each row into `{{ var }}` placeholders across the
   source/transforms/sinks/schedule, emitting one job per row with a stable,
   deterministic id so reloads upsert rather than duplicate.
+- **`vars:`** — a top-level mapping of variable name → default value
+  (e.g. `vars: { region: us-east }`) that backfills any `{{ var }}` placeholder the
+  environment and matrix leave unset. Precedence for a `{{ NAME }}`: a matrix per-entry
+  value wins, then the process environment (variable `NAME`, if set), then the
+  file-level `vars: NAME` default; a plan with no `vars:` key resolves byte-for-byte
+  as before.
 - **`${VAR}` / `${VAR:-default}` / `${VAR:?message}`** — environment substitution
   expanded at file-read time. `${VAR:?message}` raises a clear error (naming the
   variable and including `message`) when `VAR` is unset or empty, so missing secrets
@@ -231,13 +237,14 @@ sinks, schedules, or transform pipelines; or fan one template into many with a
 data file), or a mapping of axis-name → list-of-values fanned into the cartesian
 product (one job per combination), each substituted into the
 `source`/`transforms`/`sinks`/`schedule`, with a stable per-row id so reloads upsert
-rather than duplicate.
+rather than duplicate. An optional top-level `vars:` block (variable name → default
+value) backfills any `{{ var }}` placeholder the environment and matrix leave unset.
 See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
 Prefer one file over a directory? Mount a single **INGEST-PLAN** declaring many
 jobs at once — a top-level list of jobs, or a mapping with `jobs:` plus a shared
 `defaults:` block — and point ujin at it with `--plan` or `$UJIN_INGEST_PLAN`. It
-reuses the same `defaults:`/`include:`/`matrix:` layers and stable ids, so
+reuses the same `defaults:`/`include:`/`matrix:`/`vars:` layers and stable ids, so
 re-loading upserts; a malformed plan or job is reported in `GET /health` without
 aborting startup. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
 
@@ -286,7 +293,7 @@ ujin scrape-serve            # rich scrape HTTP service on :8901
 ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
 ujin plan validate <path>    # validate a plan file or workflows dir (--json/--strict for CI)
 ujin plan render <path>      # resolve and print every expanded job (--json for CI)
-ujin plan diff OLD NEW       # diff two plans by resolved job id: added/removed/changed (--json)
+ujin plan diff OLD NEW       # diff two plans/dirs by resolved job id (--json; --exit-code/--check exits non-zero on any diff)
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
 ujin learned site_state.db   # inspect the durable per-host learned state (--json)

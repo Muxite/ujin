@@ -291,6 +291,37 @@ _VAR_REF = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 _SLUG_STRIP = re.compile(r"[^A-Za-z0-9]+")
 
 
+# ── file-level ``vars:`` defaults ──────────────────────────────────────────── #
+#
+# An optional top-level ``vars:`` mapping (variable-name -> default value) supplies
+# fallbacks for the ``{{ var }}`` substitution the file already uses: a placeholder
+# that no matrix entry and no process-environment value sets resolves from these
+# defaults instead of being left verbatim. Precedence for a ``{{ NAME }}``:
+#   1. the matrix/for_each per-entry value (highest);
+#   2. the process-environment value ``os.environ[NAME]``, if set;
+#   3. the file-level ``vars: NAME`` default (lowest);
+#   4. otherwise the placeholder is left verbatim (unchanged permissive behaviour).
+# The env overlay (2 over 3) is baked in by :func:`_overlay_env_vars`; the matrix
+# overlay (1 over the rest) is applied around expansion in :func:`_expand_matrix`.
+# The ``${VAR}`` / ``${VAR:-default}`` read-time env syntax is unrelated and
+# unchanged. A file with no ``vars:`` key yields an empty mapping here, so the whole
+# feature is a strict no-op and resolution stays byte-for-byte identical.
+
+
+def _overlay_env_vars(raw: Any) -> "dict[str, Any]":
+    """Overlay process-env onto a validated ``vars:`` mapping (env value wins).
+
+    *raw* is the (already type-checked) value of a top-level ``vars:`` key, or
+    ``None``/empty when none was declared. Returns a name -> value dict in which a
+    *set* process-environment value for a name replaces the file-level default; a
+    matrix per-entry var (merged later) overrides both. With *raw* ``None``/empty the
+    result is ``{}``, so callers add no substitution and the load is unchanged.
+    """
+    if not raw:
+        return {}
+    return {k: os.environ.get(k, v) for k, v in raw.items()}
+
+
 def _has_matrix(node: Any) -> bool:
     return isinstance(node, dict) and any(k in node for k in _MATRIX_KEYS)
 
@@ -451,7 +482,11 @@ def _matrix_rows(value: Any, key: str, root: "Path | None") -> list:
 
 
 def _expand_matrix(
-    entry: dict, base_id: str, root: "Path | None" = None, prov: "list | None" = None
+    entry: dict,
+    base_id: str,
+    root: "Path | None" = None,
+    prov: "list | None" = None,
+    var_defaults: "dict | None" = None,
 ) -> list:
     """Fan one job mapping out over its ``matrix:``/``for_each:`` rows.
 
@@ -475,7 +510,14 @@ def _expand_matrix(
     0-based row index, and the variable map that produced it (for cross-product, the
     per-axis combination map) — the provenance surfaced by ``plan render --explain``.
     Default ``None`` collects nothing, so the expansion is byte-for-byte unchanged.
+
+    *var_defaults* are the file-level ``vars:`` fallbacks (already env-overlaid); each
+    row is substituted as ``{**var_defaults, **row}`` so a per-entry var overrides a
+    default while an otherwise-unset ``{{ var }}`` resolves from the default. Empty
+    (the default) means ``{**{}, **row} == row``, so the substitution is unchanged.
+    Provenance still records only the per-entry ``row`` (not the defaults).
     """
+    var_defaults = var_defaults or {}
     present = [k for k in _MATRIX_KEYS if k in entry]
     if len(present) > 1:
         raise ValueError(f"use only one of {present}, not both")
@@ -486,7 +528,7 @@ def _expand_matrix(
     out: list = []
     seen: set = set()
     for i, (row, suffix) in enumerate(rows):
-        d = _subst_vars(template, row)
+        d = _subst_vars(template, {**var_defaults, **row} if var_defaults else row)
         d.setdefault("id", f"{base_id}-{suffix}")
         d.setdefault("name", d["id"])
         if d["id"] in seen:
@@ -502,33 +544,47 @@ def _expand_matrix(
 
 
 def _expand_matrix_entries(
-    entries: list, stem: str, root: "Path | None" = None, prov: "list | None" = None
+    entries: list,
+    stem: str,
+    root: "Path | None" = None,
+    prov: "list | None" = None,
+    var_defaults: "dict | None" = None,
 ) -> list:
     """Replace each matrix-bearing entry with its fan-out; pass others through.
 
-    A list with no matrix anywhere is returned unchanged, so matrix-free files
-    parse to exactly the same entries (and thus the same JobSpecs) as before.
-    *root* (the containing file's directory) is threaded to :func:`_expand_matrix`
-    so a ``matrix: {from: <path>}`` data file resolves relative to it.
+    A list with no matrix anywhere *and* no ``vars:`` defaults is returned unchanged,
+    so matrix-free files with no ``vars:`` key parse to exactly the same entries (and
+    thus the same JobSpecs) as before. *root* (the containing file's directory) is
+    threaded to :func:`_expand_matrix` so a ``matrix: {from: <path>}`` data file
+    resolves relative to it.
+
+    *var_defaults* are the file-level ``vars:`` fallbacks (already env-overlaid). When
+    non-empty they are threaded into :func:`_expand_matrix` for matrix entries and,
+    for a non-matrix entry, applied as a :func:`_subst_vars` pass so a ``{{ var }}``
+    placeholder left unset by env/matrix resolves from the default. Empty (the
+    default) skips that pass entirely, leaving every entry byte-for-byte unchanged.
 
     When *prov* is a list it is filled, in lock-step with the returned entries, with
     one element per output entry: the matrix provenance record (see
     :func:`_expand_matrix`) for a fanned-out job, or ``None`` for an entry that
     carried no matrix. Default ``None`` collects nothing — byte-for-byte unchanged.
     """
-    if not any(_has_matrix(e) for e in entries):
+    var_defaults = var_defaults or {}
+    if not any(_has_matrix(e) for e in entries) and not var_defaults:
         if prov is not None:
             prov.extend([None] * len(entries))
         return entries
     out: list = []
     for i, entry in enumerate(entries):
         if not _has_matrix(entry):
-            out.append(entry)
+            out.append(_subst_vars(entry, var_defaults) if var_defaults else entry)
             if prov is not None:
                 prov.append(None)
             continue
         base = entry.get("id") or (stem if len(entries) == 1 else f"{stem}-{i}")
-        out.extend(_expand_matrix(entry, base, root, prov=prov))
+        out.extend(
+            _expand_matrix(entry, base, root, prov=prov, var_defaults=var_defaults)
+        )
     return out
 
 
@@ -550,11 +606,12 @@ _JOB_KEYS = frozenset({
 })
 
 # Top-level keys of an INGEST-PLAN *mapping* (a top-level list has no keys to check).
-_PLAN_TOP_KEYS = frozenset({"jobs", "defaults", "include", "use"})
+_PLAN_TOP_KEYS = frozenset({"jobs", "defaults", "include", "use", "vars"})
 
 # Top-level keys of a WORKFLOW file: it may be a container (`jobs:`/`defaults:`) OR a
 # single job written directly at the top level, so both key sets are accepted there.
-_WORKFLOW_TOP_KEYS = _JOB_KEYS | {"jobs", "defaults"}
+# `vars:` is a top-level-only key (a default-value map), never a per-job key.
+_WORKFLOW_TOP_KEYS = _JOB_KEYS | {"jobs", "defaults", "vars"}
 
 
 def _suggest(unknown: str, allowed: "frozenset[str]") -> "str | None":
@@ -659,14 +716,16 @@ def _specs_from_workflow_file(
     A file may also hold a list / ``{jobs: [...]}``; entries without an ``id``
     fall back to ``<stem>-<index>`` to stay deterministic.
 
-    Three additive conveniences run before id derivation: ``include:``/``use:``
+    Four additive conveniences run before id derivation: ``include:``/``use:``
     fragments are inlined (relative to the file's dir, then ``$UJIN_WORKFLOWS_DIR``),
     a top-level ``defaults:`` mapping is deep-merged *under* every job (per-job keys
-    win), and a ``matrix:``/``for_each:`` key fans a job out into one per variable
+    win), a ``matrix:``/``for_each:`` key fans a job out into one per variable
     map — given inline, or by a ``{from: <path>}`` data file resolved like an
     ``include:`` fragment — with each map substituted into the merged result (see
-    ``_expand_matrix``).
-    The three layers compose in that order; a file using none resolves byte-for-byte
+    ``_expand_matrix``), and a top-level ``vars:`` mapping supplies default values
+    for any ``{{ var }}`` placeholder the process environment and matrix leave unset
+    (matrix per-entry var > env value > ``vars:`` default; see ``_overlay_env_vars``).
+    The layers compose in that order; a file using none resolves byte-for-byte
     as it did before.
 
     When *provenance* is a list it is filled, in lock-step with the returned specs,
@@ -697,6 +756,19 @@ def _specs_from_workflow_file(
         warnings,
     )
 
+    # Peel off the optional top-level `vars:` defaults (validated as a mapping) and
+    # env-overlay them. They backfill `{{ var }}` placeholders left unset by the
+    # process environment and by matrix entries; with no `vars:` key this is empty and
+    # the whole file resolves byte-for-byte as before. Prefix-free message — the
+    # `_load_workflows_dir` wrapper adds the `ujin: workflow <file>:` context.
+    raw_vars = data.pop("vars", None) if isinstance(data, dict) else None
+    if raw_vars is not None and not isinstance(raw_vars, dict):
+        raise ValueError(
+            "`vars:` must be a mapping of name -> default value, got "
+            f"{type(raw_vars).__name__}"
+        )
+    var_defaults = _overlay_env_vars(raw_vars)
+
     defaults = data.pop("defaults", None) or {} if isinstance(data, dict) else {}
 
     # Single-job mapping (no top-level `jobs:` list) -> the whole file is one job.
@@ -705,6 +777,8 @@ def _specs_from_workflow_file(
     if isinstance(data, dict) and "jobs" not in data:
         merged = _deep_merge(defaults, data) if defaults else dict(data)
         if not _has_matrix(merged):
+            if var_defaults:
+                merged = _subst_vars(merged, var_defaults)
             merged.setdefault("id", stem)
             merged.setdefault("name", stem)
             if provenance is not None:
@@ -732,7 +806,9 @@ def _specs_from_workflow_file(
     # already-merged result: matrix-free entries pass through untouched (same ids),
     # matrix entries fan out with stable, per-entry ids.
     prov_rows = [] if provenance is not None else None
-    raw = _expand_matrix_entries(raw, stem, path.parent, prov=prov_rows)
+    raw = _expand_matrix_entries(
+        raw, stem, path.parent, prov=prov_rows, var_defaults=var_defaults
+    )
     specs = []
     for i, entry in enumerate(raw):
         d = dict(entry)
@@ -811,10 +887,12 @@ def _plan_entries(data: Any, name: str) -> "tuple[dict, list]":
     """Split a parsed plan into ``(defaults, entries)``; validate the top shape.
 
     A plan is either a top-level **list** of job mappings, or a **mapping** with a
-    ``jobs:`` list plus an optional ``defaults:`` mapping. An empty file is treated
-    as zero jobs. Anything else (a bare scalar, a mapping without ``jobs:``, a
-    non-list ``jobs:``/``defaults:``) raises ``ValueError`` naming *name* so the
-    caller can report it instead of crashing startup.
+    ``jobs:`` list plus an optional ``defaults:`` and/or ``vars:`` mapping. An empty
+    file is treated as zero jobs. Anything else (a bare scalar, a mapping without
+    ``jobs:``, a non-list ``jobs:``, a non-mapping ``defaults:``/``vars:``) raises
+    ``ValueError`` naming *name* so the caller can report it instead of crashing
+    startup. The ``vars:`` block is only type-checked here; its env-overlaid defaults
+    are extracted by :func:`_load_ingest_plan`.
     """
     if data is None:
         return {}, []
@@ -826,6 +904,12 @@ def _plan_entries(data: Any, name: str) -> "tuple[dict, list]":
             raise ValueError(
                 f"plan {name}: `defaults:` must be a mapping, got "
                 f"{type(defaults).__name__}"
+            )
+        plan_vars = data.get("vars")
+        if plan_vars is not None and not isinstance(plan_vars, dict):
+            raise ValueError(
+                f"plan {name}: `vars:` must be a mapping of name -> default value, "
+                f"got {type(plan_vars).__name__}"
             )
         if "jobs" not in data:
             raise ValueError(
@@ -855,13 +939,15 @@ def _load_ingest_plan(
 
     Each resulting job gets a stable id (explicit ``id`` wins; otherwise
     ``<plan-stem>-<index>``, with a per-entry ``matrix:`` suffix) so re-loading the
-    plan upserts the same jobs rather than duplicating them. The three additive
+    plan upserts the same jobs rather than duplicating them. The additive
     layers run in the same order as a workflow file: ``include:``/``use:`` fragments
     are inlined first (relative to the plan's directory then ``$UJIN_WORKFLOWS_DIR``),
     a top-level ``defaults:`` mapping is deep-merged *under* every job (per-job keys
     win), then ``matrix:``/``for_each:`` fans an entry into one job per variable map
     (the variable maps given inline, or by a ``{from: <path>}`` data file resolved
-    like an ``include:`` fragment).
+    like an ``include:`` fragment). A top-level ``vars:`` mapping supplies default
+    values for any ``{{ var }}`` placeholder the process environment and matrix leave
+    unset (matrix per-entry var > env value > ``vars:`` default).
 
     Errors never abort startup. A **file-level** problem (missing/unreadable file,
     invalid YAML, a shape that is neither a mapping nor a list, an unresolvable or
@@ -914,6 +1000,14 @@ def _load_ingest_plan(
         warnings,
     )
 
+    # File-level `vars:` defaults (validated as a mapping by `_plan_entries` above,
+    # so a non-mapping already failed the whole plan). Env-overlaid here and threaded
+    # into matrix expansion so a `{{ var }}` left unset by env/matrix resolves from
+    # the default. Empty when no `vars:` key -> resolution is byte-for-byte unchanged.
+    var_defaults = _overlay_env_vars(
+        data.get("vars") if isinstance(data, dict) else None
+    )
+
     # ── per-job resolution: isolate matrix/build errors so one bad job is
     # reported while the rest still load. Ids stay stable across reloads. ──
     seen: set = set()
@@ -934,7 +1028,8 @@ def _load_ingest_plan(
             # (including a `matrix: {from: <path>}` data file relative to the plan).
             prov_rows = [] if provenance is not None else None
             fanned = _expand_matrix_entries(
-                [merged], base, path.parent, prov=prov_rows
+                [merged], base, path.parent, prov=prov_rows,
+                var_defaults=var_defaults,
             )
             for j, raw in enumerate(fanned):
                 d = dict(raw)

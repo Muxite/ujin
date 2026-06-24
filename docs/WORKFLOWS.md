@@ -300,6 +300,49 @@ This resolves to six jobs — `status-us-east-free`, `status-us-east-pro`,
 
 See `examples/matrix-cross-product.yaml` for a runnable cross-product plan.
 
+### `vars:` — default values for `{{ var }}` placeholders
+
+A top-level **`vars:`** mapping (variable name → default value) supplies a fallback
+for any `{{ var }}` placeholder that nothing else sets. It keeps a workflow runnable
+with zero configuration while letting a deploy override a single value from the
+environment — without editing the file:
+
+```yaml
+# /workflows/regional-feed.yaml
+vars:
+  region: us-east          # fallback for every {{ region }} left unset
+  rows: 50                 # an exact-placeholder value keeps its int type
+
+id: "feed-{{ region }}"
+source:
+  kind: api
+  config:
+    url: "https://feeds.example.com/{{ region }}?rows={{ rows }}"
+    json_path: items
+```
+
+Run as-is and the job queries `us-east`; set the environment variable `region` to
+`eu-west` (e.g. in the container) and it switches with no file edit.
+
+- **Precedence.** For a `{{ NAME }}` placeholder: a `matrix:`/`for_each:` per-entry
+  value wins, then the process environment (variable `NAME`, if set), then the
+  file-level `vars: NAME` default; an otherwise-unset placeholder is still left
+  verbatim. So a `vars:` default only fills a variable nothing else provides, and a
+  matrix entry that sets the same name overrides it per job.
+- **Whole-value types preserved.** A string that is *exactly* one placeholder keeps
+  the default's native type (`rows: "{{ rows }}"` → the integer `50`), exactly like
+  matrix substitution; an embedded placeholder interpolates `str(value)`.
+- **Unrelated to `${VAR}`.** The `${VAR}` / `${VAR:-default}` read-time env syntax
+  (the table above) is independent and still expands first, at file-read time — even
+  if a `vars:` entry happens to share the name; `vars:` feeds the later `{{ var }}`
+  pass only.
+- **Additive.** A workflow with no `vars:` key (or an empty one) resolves
+  byte-for-byte as before, and `ujin plan validate` rejects a non-mapping `vars:`
+  with a clean `ujin: …` error.
+
+See `examples/vars-defaults.yaml` for a runnable `vars:` example (a matrix job whose
+`region`/`rows` fall back to the defaults while a per-entry var would override them).
+
 ## Collect — the container does the job
 
 Each workflow is driven by the same [adaptive engine](../README.md#how-it-works)
@@ -371,6 +414,26 @@ A missing or unreadable path exits non-zero with a clean `ujin: …` message (no
 traceback). Works equally for an INGEST-PLAN file — `ujin plan validate` accepts
 either a file or a directory. See [INGEST_PLAN.md](INGEST_PLAN.md) for details.
 
+### Selecting a subset with `--only` / `--exclude`
+
+Both `plan validate` and `plan render` accept `--only PATTERN` and `--exclude PATTERN`
+(fnmatch-style globs, comma-separated or repeatable) to filter which workflows are
+processed. Patterns match the **fully-expanded job id** — after `matrix:`/`for_each:`
+fan-out — so they work on individual expanded ids, not just file stems:
+
+```bash
+ujin plan validate ./workflows/ --only 'search-*'             # ids starting with "search-"
+ujin plan validate ./workflows/ --only 'search-*' --exclude search-old
+ujin plan render   ./workflows/ --only 'search-laptop,search-gpu'
+ujin plan render   ./workflows/ --only 'search-*' --json
+```
+
+`--exclude` subtracts from the `--only` set; when both are omitted all workflows are
+processed unchanged. A `--only` pattern that matches no resolved id exits non-zero
+with a clean `ujin: …` message. `jobs-serve --plan` accepts the same flags and
+reflects only the selected jobs in `GET /health`; see
+[INGEST_PLAN.md](INGEST_PLAN.md#job-id-selection----only-and---exclude).
+
 ### Validation & common mistakes — misspelled keys
 
 After `include:`/`defaults:` resolution the loader checks each workflow against the
@@ -425,6 +488,68 @@ ujin plan render ./workflows/ --explain --json   # each element pairs spec + pro
 name: search-gpu
 ...
 ```
+
+`--only`/`--exclude` also apply to `plan render` — see [above](#selecting-a-subset-with---only----exclude).
+
+## Diffing two workflow directories — `plan diff`
+
+Use `ujin plan diff OLD NEW` to compare two snapshots of a workflows directory
+(or a plan file) before you deploy a change. Both sides resolve through the same
+loaders as `plan validate`/`plan render`, then are compared keyed by **final job id**:
+
+```bash
+ujin plan diff ./workflows/ ./workflows-next/               # human-readable
+ujin plan diff ./workflows/ ./workflows-next/ --json        # machine-readable (CI)
+ujin plan diff ./workflows/ ./workflows-next/ --exit-code   # exit non-zero if any diff
+ujin plan diff ./workflows/ ./workflows-next/ --check       # alias for --exit-code
+```
+
+The human form marks each affected job with `+` (added in `NEW`), `-` (removed), or
+`~` (changed — same id, different resolved spec), followed by a summary count on
+stderr. An identical pair prints `no changes`.
+
+**Exit-status behavior:** `plan diff` exits **zero** whenever both inputs resolve
+successfully — even when differences exist. Pass `--exit-code` (alias `--check`) to
+flip this for CI: the command exits **non-zero** when any jobs differ, zero when the
+plans are identical. `--exit-code` does not affect `--json` output or the diff content
+itself; the flag only changes the exit code.
+
+`--json` emits a structured object with distinct `added`/`removed`/`changed`
+groupings; added and removed entries carry the job's resolved `spec`, changed entries
+carry both `old` and `new`:
+
+```bash
+ujin plan diff ./workflows/ ./workflows-next/ --json | python3 -c \
+  "import sys,json; d=json.load(sys.stdin); \
+   print(len(d['added']),'added', len(d['removed']),'removed', len(d['changed']),'changed')"
+```
+
+`--env-file` is accepted consistently with the other plan subcommands. An unreadable
+or schema-invalid input exits non-zero with a clean `ujin: …` message regardless of
+`--exit-code`. See [INGEST_PLAN.md](INGEST_PLAN.md#diffing-two-plans--plan-diff) for
+the full reference including the `--json` response shape.
+
+## Auto-reloading the plan file (`--watch-plan`)
+
+When deploying via an INGEST-PLAN file (`--plan`), you can have `jobs-serve` watch
+the file and reload it automatically on every save — no restart, no manual
+`POST /plan/reload`:
+
+```bash
+ujin jobs-serve --plan ./ingest-plan.yaml --watch-plan           # default poll: 2.0 s
+ujin jobs-serve --plan ./ingest-plan.yaml --watch-plan --watch-interval 5
+# or via env:
+UJIN_WATCH_PLAN=1 UJIN_WATCH_INTERVAL=5 ujin jobs-serve --plan ./ingest-plan.yaml
+```
+
+On a detected change the file is re-resolved through the full loader
+(`defaults:`/`include:`/`matrix:`/`${VAR}`) and the resulting jobs are upserted and
+pruned against the running set — equivalent to `POST /plan/reload?prune=true` fired
+automatically. A malformed save is skipped (jobs keep running; the error surfaces in
+`GET /health`). This flag is specific to the `--plan` file; the workflows directory
+(`--workflows`) does not have an equivalent watcher and requires a restart to pick up
+new files. See
+[INGEST_PLAN.md](INGEST_PLAN.md#auto-reloading-on-file-change---watch-plan).
 
 ## Examples
 
