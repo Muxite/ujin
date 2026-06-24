@@ -17,8 +17,8 @@ The **ultimate scraper-poller**. Three parts that share one toolkit:
    fan-out to turn one template into N jobs; or mount a single **INGEST-PLAN**
    file with `--plan` / `$UJIN_INGEST_PLAN` for one-file multi-job deploys.
    Validate and inspect offline with `ujin plan validate` / `ujin plan render`,
-   and diff two plans by resolved job id with `ujin plan diff`, before committing
-   to a deploy.
+   diff two plans by resolved job id with `ujin plan diff`, and export the
+   file-format JSON Schema with `ujin plan schema`, before committing to a deploy.
 
 It bundles the [obscura](https://github.com/Muxite/obscura) headless renderer as
 a submodule, and stays a **pure-python pip install** (the renderer is built
@@ -128,6 +128,10 @@ ujin plan render  examples/ingest-plan.yaml --explain --json           # machine
 ujin plan diff    old-plan.yaml examples/ingest-plan.yaml              # `+`/`-`/`~` per job id
 ujin plan diff    old-plan.yaml examples/ingest-plan.yaml --json       # machine-readable (CI)
 ujin plan diff    old-plan.yaml examples/ingest-plan.yaml --exit-code  # exit 1 if any diff (CI gate)
+
+# Export the file-format JSON Schema (draft 2020-12) — for editor linting or CI:
+ujin plan schema                                       # print the schema to stdout
+ujin plan schema --out ingest-plan.schema.json         # …or write it to a file
 ```
 
 `--plan` (or `$UJIN_INGEST_PLAN`) mounts a single YAML file that declares many jobs
@@ -190,6 +194,17 @@ carry each job's `spec`; changed carries `old` and `new`), and its shape is unaf
 by `--exit-code`. `--env-file` is accepted as with the other plan subcommands. An
 unreadable or schema-invalid input exits non-zero with a clean `ujin: …` message and
 no traceback.
+
+`ujin plan schema` prints a **JSON Schema** (draft 2020-12) describing the
+INGEST-PLAN / workflow file format itself — the per-job shape, the top-level
+`defaults:` block, `include:`/`use:`, `matrix:`/`for_each:`, `vars:`, and
+`profiles:` — to stdout, or to a file with `--out PATH`. Feed it to an editor for
+autocompletion/linting, or to a draft-2020-12 validator for a CI well-formedness
+check before `plan validate` runs the loaders. It describes the *unresolved* file,
+so it is deliberately permissive (a job may omit keys that `defaults:` or the
+filename stem supply) but still rejects a structurally-malformed plan (a scalar
+document, a non-list `jobs:`, a string `source:`). The command is read-only and
+resolves nothing; output is deterministic. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
 
 Changed the plan file? `POST /plan/reload` re-reads it and upserts the resolved jobs
 in-process — no restart — sharing the startup loader (a single bad job is reported,
@@ -311,6 +326,7 @@ ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
 ujin plan validate <path>    # validate a plan file or workflows dir (--json/--strict for CI)
 ujin plan render <path>      # resolve and print every expanded job (--json for CI; --summary for concise overview)
 ujin plan diff OLD NEW       # diff two plans/dirs by resolved job id (--json; --exit-code/--check exits non-zero on any diff)
+ujin plan schema             # print the INGEST-PLAN/workflow JSON Schema, draft 2020-12 (--out PATH to a file)
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
 ujin learned site_state.db   # inspect the durable per-host learned state (--json)
