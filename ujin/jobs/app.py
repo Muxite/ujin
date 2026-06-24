@@ -349,7 +349,9 @@ def _load_matrix_file(value: dict, key: str, root: "Path | None") -> list:
     return rows
 
 
-def _expand_matrix(entry: dict, base_id: str, root: "Path | None" = None) -> list:
+def _expand_matrix(
+    entry: dict, base_id: str, root: "Path | None" = None, prov: "list | None" = None
+) -> list:
     """Fan one job mapping out over its ``matrix:``/``for_each:`` rows.
 
     The matrix value is either an **inline list** of variable maps, or a mapping
@@ -362,6 +364,12 @@ def _expand_matrix(entry: dict, base_id: str, root: "Path | None" = None) -> lis
     directory, used to resolve a ``from:`` data file. Raises ``ValueError`` (so the
     file lands in the ``failed`` list, not aborting startup) on a malformed matrix
     or colliding ids.
+
+    When *prov* is a list it collects, in lock-step with the returned jobs, one
+    ``{"key", "index", "vars"}`` record per generated job naming the matrix key, the
+    0-based entry index, and the variable map that produced it — the provenance
+    surfaced by ``plan render --explain``. Default ``None`` collects nothing, so the
+    expansion is byte-for-byte unchanged.
     """
     present = [k for k in _MATRIX_KEYS if k in entry]
     if len(present) > 1:
@@ -391,26 +399,39 @@ def _expand_matrix(entry: dict, base_id: str, root: "Path | None" = None) -> lis
             )
         seen.add(d["id"])
         out.append(d)
+        if prov is not None:
+            prov.append({"key": key, "index": i, "vars": dict(row)})
     return out
 
 
-def _expand_matrix_entries(entries: list, stem: str, root: "Path | None" = None) -> list:
+def _expand_matrix_entries(
+    entries: list, stem: str, root: "Path | None" = None, prov: "list | None" = None
+) -> list:
     """Replace each matrix-bearing entry with its fan-out; pass others through.
 
     A list with no matrix anywhere is returned unchanged, so matrix-free files
     parse to exactly the same entries (and thus the same JobSpecs) as before.
     *root* (the containing file's directory) is threaded to :func:`_expand_matrix`
     so a ``matrix: {from: <path>}`` data file resolves relative to it.
+
+    When *prov* is a list it is filled, in lock-step with the returned entries, with
+    one element per output entry: the matrix provenance record (see
+    :func:`_expand_matrix`) for a fanned-out job, or ``None`` for an entry that
+    carried no matrix. Default ``None`` collects nothing — byte-for-byte unchanged.
     """
     if not any(_has_matrix(e) for e in entries):
+        if prov is not None:
+            prov.extend([None] * len(entries))
         return entries
     out: list = []
     for i, entry in enumerate(entries):
         if not _has_matrix(entry):
             out.append(entry)
+            if prov is not None:
+                prov.append(None)
             continue
         base = entry.get("id") or (stem if len(entries) == 1 else f"{stem}-{i}")
-        out.extend(_expand_matrix(entry, base, root))
+        out.extend(_expand_matrix(entry, base, root, prov=prov))
     return out
 
 
@@ -530,7 +551,9 @@ def _preload_specs(path: str) -> list:
     return [JobSpec.from_dict(d) for d in (raw or [])]
 
 
-def _specs_from_workflow_file(path, warnings: list | None = None) -> list:
+def _specs_from_workflow_file(
+    path, warnings: list | None = None, provenance: list | None = None
+) -> list:
     """Parse one workflow file into JobSpecs, deriving stable ids from the stem.
 
     A workflow file is the same declarative shape as a job. The filename stem is
@@ -548,6 +571,12 @@ def _specs_from_workflow_file(path, warnings: list | None = None) -> list:
     ``_expand_matrix``).
     The three layers compose in that order; a file using none resolves byte-for-byte
     as it did before.
+
+    When *provenance* is a list it is filled, in lock-step with the returned specs,
+    with one ``{"id", "source", ["matrix"]}`` record per job — its originating file
+    and, for a matrix-expanded job, the matrix entry (key/index/vars) that produced
+    it. This is what ``plan render --explain`` consumes. Default ``None`` collects
+    nothing, leaving the resolution byte-for-byte unchanged.
     """
     import yaml
 
@@ -581,6 +610,8 @@ def _specs_from_workflow_file(path, warnings: list | None = None) -> list:
         if not _has_matrix(merged):
             merged.setdefault("id", stem)
             merged.setdefault("name", stem)
+            if provenance is not None:
+                provenance.append({"id": merged["id"], "source": str(path)})
             return [JobSpec.from_dict(merged)]
         raw = [merged]
     else:
@@ -603,18 +634,28 @@ def _specs_from_workflow_file(path, warnings: list | None = None) -> list:
     # defaults/include merge above, so each entry's variables substitute into the
     # already-merged result: matrix-free entries pass through untouched (same ids),
     # matrix entries fan out with stable, per-entry ids.
-    raw = _expand_matrix_entries(raw, stem, path.parent)
+    prov_rows = [] if provenance is not None else None
+    raw = _expand_matrix_entries(raw, stem, path.parent, prov=prov_rows)
     specs = []
     for i, entry in enumerate(raw):
         d = dict(entry)
         d.setdefault("id", stem if len(raw) == 1 else f"{stem}-{i}")
         d.setdefault("name", d["id"])
         specs.append(JobSpec.from_dict(d))
+        if provenance is not None:
+            rec = {"id": d["id"], "source": str(path)}
+            matrix = prov_rows[i] if prov_rows is not None else None
+            if matrix is not None:
+                rec["matrix"] = matrix
+            provenance.append(rec)
     return specs
 
 
 def _load_workflows_dir(
-    path: str, failed: list | None = None, warnings: list | None = None
+    path: str,
+    failed: list | None = None,
+    warnings: list | None = None,
+    provenance: list | None = None,
 ) -> list:
     """Load every top-level ``*.yaml``/``*.yml`` workflow file in *path* (sorted).
 
@@ -631,6 +672,11 @@ def _load_workflows_dir(
     Unrecognized/misspelled keys are *advisory*: each is logged and, when *warnings*
     is given, its ``ujin: …`` message appended there (used by ``ujin plan validate``
     ``--strict``). They never change which workflows load — additive by default.
+
+    When *provenance* is a list it collects, in lock-step with the returned specs, a
+    per-job ``{"id", "source", ["matrix"]}`` record (see
+    :func:`_specs_from_workflow_file`) for ``plan render --explain``. Default ``None``
+    collects nothing.
     """
     root = Path(path)
     if not root.is_dir():
@@ -640,7 +686,11 @@ def _load_workflows_dir(
     # the workflow set — see the docstring. The dir-scan tests guard this.
     for fp in sorted(root.glob("*.y*ml")):
         try:
-            specs.extend(_specs_from_workflow_file(fp, warnings=warnings))
+            specs.extend(
+                _specs_from_workflow_file(
+                    fp, warnings=warnings, provenance=provenance
+                )
+            )
         except Exception as exc:  # noqa: BLE001
             log.warning("skipping workflow file %s: %s", fp, exc)
             if failed is not None:
@@ -702,6 +752,7 @@ def _load_ingest_plan(
     failed: list | None = None,
     warnings: list | None = None,
     present: list | None = None,
+    provenance: list | None = None,
 ) -> list:
     """Load an INGEST-PLAN file into JobSpecs, deriving stable per-job ids.
 
@@ -732,6 +783,12 @@ def _load_ingest_plan(
     ids the file currently declares (used by the reload prune mode as the keep-set).
     A file-level failure (the file never parses into entries) leaves *present*
     untouched, distinguishing "couldn't read the plan" from "the plan is empty".
+
+    When *provenance* is a list it collects, in lock-step with the returned specs, a
+    per-job ``{"id", "source", ["matrix"]}`` record naming the plan file and, for a
+    matrix-expanded job, the matrix entry (key/index/vars) that produced it — the
+    provenance surfaced by ``plan render --explain``. Default ``None`` collects
+    nothing, leaving resolution byte-for-byte unchanged.
     """
     import yaml
 
@@ -778,7 +835,10 @@ def _load_ingest_plan(
             # Reuse the workflow matrix helper on this single entry so `matrix:`/
             # `for_each:` behaves byte-for-byte as it does for workflow files
             # (including a `matrix: {from: <path>}` data file relative to the plan).
-            fanned = _expand_matrix_entries([merged], base, path.parent)
+            prov_rows = [] if provenance is not None else None
+            fanned = _expand_matrix_entries(
+                [merged], base, path.parent, prov=prov_rows
+            )
             for j, raw in enumerate(fanned):
                 d = dict(raw)
                 d.setdefault("id", base if len(fanned) == 1 else f"{base}-{j}")
@@ -792,6 +852,12 @@ def _load_ingest_plan(
                 if present is not None:
                     present.append(d["id"])
                 specs.append(JobSpec.from_dict(d))
+                if provenance is not None:
+                    rec = {"id": d["id"], "source": str(path)}
+                    matrix = prov_rows[j] if prov_rows is not None else None
+                    if matrix is not None:
+                        rec["matrix"] = matrix
+                    provenance.append(rec)
         except Exception as exc:  # noqa: BLE001
             log.warning("skipping plan job %s in %s: %s", base, path, exc)
             if failed is not None:

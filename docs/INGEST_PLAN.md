@@ -433,6 +433,49 @@ ujin plan render ./ingest-plan.yaml --json | python3 -c \
 `ujin plan render` exits zero when all jobs resolve and non-zero with a clean
 `ujin: …` message (no traceback) on a missing/unreadable path or any failed job.
 
+### Provenance — `--explain`
+
+Add `--explain` to annotate each rendered job with **where it came from**: the
+originating plan/workflow source file and, for a `matrix:`/`for_each:`-expanded
+job, the matrix entry index and the exact variable map that produced it. This makes
+it easy to answer "which file and which matrix row created `feed-science`?" without
+re-reading the template by hand. Provenance is threaded through the loaders **only**
+when `--explain` is set, so the default render output is byte-for-byte unchanged.
+
+```bash
+ujin plan render ./ingest-plan.yaml --explain          # YAML with `# …` provenance comments
+ujin plan render ./ingest-plan.yaml --explain --json   # machine-readable provenance
+```
+
+In YAML form each job gains `#`-comment lines above its body — harmless to a YAML
+parser, readable to a human:
+
+```
+--- # feed-science
+# source: examples/ingest-plan.yaml
+# matrix: entry 1 -> {slug: science}
+name: feed-science
+source:
+  kind: api
+  config:
+    url: https://feeds.example.com/science?rows=50
+...
+```
+
+With `--explain --json` each array element pairs the resolved spec with a
+`provenance` object (`source`, plus a `matrix` block of `key`/`index`/`vars` for
+fanned-out jobs) instead of being a bare spec:
+
+```bash
+ujin plan render ./ingest-plan.yaml --explain --json | python3 -c \
+  "import sys,json; rows=json.load(sys.stdin); \
+   print(rows[1]['spec']['id'], '<-', rows[1]['provenance'])"
+# feed-science <- {'source': 'examples/ingest-plan.yaml', 'matrix': {'key': 'matrix', 'index': 1, 'vars': {'slug': 'science'}}}
+```
+
+`--explain` composes with `--json`, `--only`/`--exclude` (provenance survives
+selection — it is keyed to the final expanded id), and `--env-file`.
+
 ## Job-id selection — `--only` and `--exclude`
 
 All three plan-aware commands (`plan render`, `plan validate`, and `jobs-serve`)
