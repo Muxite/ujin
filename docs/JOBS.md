@@ -105,6 +105,7 @@ WS     /jobs/events             live change stream (all jobs)
 POST   /plugins/reload          re-import plugins -> {loaded, failed}
 POST   /plan/reload             re-read the INGEST-PLAN -> {reloaded, path, loaded, failed}
 POST   /plan/reload?prune=true   …also remove plan-owned jobs gone from the file -> +{pruned}
+POST   /plan/reload?dry_run=true preview only -> {reloaded:false, dry_run:true, added, updated, unchanged}
 ```
 
 The `plan` field in `/health` is only present when `--plan`/`$UJIN_INGEST_PLAN` is
@@ -119,7 +120,11 @@ it is a safe no-op (`{"reloaded": false, "detail": "no plan configured", …}`).
 every mutating route it sits behind the optional API-key auth. Add `?prune=true`
 (or a `{"prune": true}` body) to also **remove** plan-owned jobs whose ids vanished
 from the file (returned in a `pruned` list); jobs created via the API or the
-positional preload are never pruned. See
+positional preload are never pruned. Add `?dry_run=true` (or a `{"dry_run": true}`
+body) to **preview** the reload instead: the plan resolves exactly as a real reload
+would, but nothing is upserted or pruned — the response reports which ids would be
+`added`/`updated`/`unchanged` (plus `removed` when combined with `prune`), and
+`GET /jobs` is identical before and after. See
 [INGEST_PLAN.md](INGEST_PLAN.md#reloading-a-plan-without-restarting).
 
 File-driven jobs (**workflows**) load from `UJIN_WORKFLOWS_DIR` on startup (id =

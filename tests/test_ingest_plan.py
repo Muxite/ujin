@@ -756,3 +756,136 @@ def test_reload_prune_skips_when_plan_unreadable(tmp_path, monkeypatch):
         assert body["pruned"] == [] and body["failed"]
         # alpha survives the broken reload.
         assert {j["id"] for j in c.get("/jobs").json()} == {"alpha"}
+
+
+# ── POST /plan/reload?dry_run=true: preview the effect, mutate nothing ──────── #
+def test_reload_dry_run_classifies_without_mutating(tmp_path, monkeypatch):
+    # A dry run resolves the plan exactly like a real reload but reports which ids
+    # would be added/updated/unchanged and leaves GET /jobs byte-identical.
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [_cmd_job("alpha", "a"), _cmd_job("gamma", "g")])
+
+    with TestClient(create_jobs_app(run_engine=False, plan_path=str(plan))) as c:
+        before = c.get("/jobs").json()
+        assert {j["id"] for j in before} == {"alpha", "gamma"}
+        # Edit alpha, add beta, leave gamma identical, then preview the reload.
+        _write(plan, [
+            _cmd_job("alpha", "AA"),   # spec changes -> updated
+            _cmd_job("beta", "b"),     # new id -> added
+            _cmd_job("gamma", "g"),    # identical -> unchanged
+        ])
+        body = c.post("/plan/reload?dry_run=true").json()
+        assert body["reloaded"] is False and body["dry_run"] is True
+        assert body["path"] == str(plan)
+        assert body["added"] == ["beta"]
+        assert body["updated"] == ["alpha"]
+        assert body["unchanged"] == ["gamma"]
+        assert body["failed"] == [] and body["loaded"] == []
+        assert "pruned" not in body and "removed" not in body
+
+        # Nothing changed: GET /jobs is identical before and after, the new id never
+        # materialized, and alpha still has its original spec.
+        after = c.get("/jobs").json()
+        assert before == after
+        assert {j["id"] for j in after} == {"alpha", "gamma"}
+        assert c.get("/jobs/beta").status_code == 404
+        spec = c.get("/jobs/alpha").json()["spec"]
+        assert spec["source"]["config"]["argv"] == ["printf", "a"]
+        # /health plan block is untouched (still the startup load).
+        assert sorted(c.get("/health").json()["plan"]["loaded"]) == ["alpha", "gamma"]
+
+
+def test_reload_dry_run_accepts_json_body(tmp_path, monkeypatch):
+    # The opt-in is also accepted as a {"dry_run": true} JSON body, not only the
+    # query param, mirroring how prune is accepted.
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [_cmd_job("alpha", "a")])
+
+    with TestClient(create_jobs_app(run_engine=False, plan_path=str(plan))) as c:
+        _write(plan, [_cmd_job("alpha", "a"), _cmd_job("beta", "b")])
+        before = c.get("/jobs").json()
+        body = c.post("/plan/reload", json={"dry_run": True}).json()
+        assert body["reloaded"] is False and body["dry_run"] is True
+        assert body["added"] == ["beta"] and body["unchanged"] == ["alpha"]
+        assert c.get("/jobs").json() == before
+        assert {j["id"] for j in c.get("/jobs").json()} == {"alpha"}
+
+
+def test_reload_dry_run_with_prune_lists_but_keeps_jobs(tmp_path, monkeypatch):
+    # dry_run + prune reports the ids a real prune would remove without deleting
+    # any job; GET /jobs stays identical before and after the call.
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [_cmd_job("keep", "k"), _cmd_job("drop", "d")])
+
+    with TestClient(create_jobs_app(run_engine=False, plan_path=str(plan))) as c:
+        before = c.get("/jobs").json()
+        assert {j["id"] for j in before} == {"keep", "drop"}
+        # Drop one job from the file and preview a pruning reload.
+        _write(plan, [_cmd_job("keep", "k")])
+        body = c.post("/plan/reload?prune=true&dry_run=true").json()
+        assert body["reloaded"] is False and body["dry_run"] is True
+        assert body["removed"] == ["drop"]
+        assert body["unchanged"] == ["keep"] and body["added"] == []
+        # No job is actually pruned: both jobs survive, /jobs is byte-identical.
+        after = c.get("/jobs").json()
+        assert before == after
+        assert {j["id"] for j in after} == {"keep", "drop"}
+        assert c.get("/jobs/drop").status_code == 200
+        # A real (non-dry) prune afterwards still removes it as before.
+        real = c.post("/plan/reload?prune=true").json()
+        assert real["reloaded"] is True and real["pruned"] == ["drop"]
+        assert {j["id"] for j in c.get("/jobs").json()} == {"keep"}
+
+
+def test_reload_dry_run_reports_only_no_match_without_mutating(tmp_path, monkeypatch):
+    # Like a real reload, a dry run whose --only now matches nothing is reported
+    # (not fatal) and changes nothing. Opt in via the query param with a JSON body
+    # present, exercising both intake paths at once.
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [_cmd_job("alpha", "a")])
+
+    app = create_jobs_app(run_engine=False, plan_path=str(plan), only=["alpha"])
+    with TestClient(app) as c:
+        before = c.get("/jobs").json()
+        # Drop the only matching job; --only alpha now resolves to nothing.
+        _write(plan, [_cmd_job("beta", "b")])
+        body = c.post("/plan/reload?dry_run=true", json={"prune": True}).json()
+        assert body["reloaded"] is False and body["dry_run"] is True
+        assert "no job ids matched" in body["detail"]
+        assert body["loaded"] == [] and body["failed"] == []
+        # Nothing mutated: the originally-loaded job is untouched.
+        assert c.get("/jobs").json() == before
+        assert {j["id"] for j in c.get("/jobs").json()} == {"alpha"}
+
+
+def test_reload_dry_run_noop_when_no_plan_configured(tmp_path, monkeypatch):
+    # With no plan configured the dry run is a non-error no-op that changes nothing.
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    monkeypatch.delenv("UJIN_INGEST_PLAN", raising=False)
+    with TestClient(create_jobs_app(run_engine=False)) as c:
+        r = c.post("/plan/reload?dry_run=true")
+        assert r.status_code == 200
+        body = r.json()
+        assert body == {"reloaded": False, "dry_run": True,
+                        "detail": "no plan configured", "loaded": [], "failed": []}
+        # No plan key materializes on /health -> no-plan deploys stay unchanged.
+        assert "plan" not in c.get("/health").json()
