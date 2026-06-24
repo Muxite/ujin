@@ -153,6 +153,15 @@ would, but nothing is upserted or pruned — the response reports which ids woul
 `GET /jobs` is identical before and after. See
 [INGEST_PLAN.md](INGEST_PLAN.md#reloading-a-plan-without-restarting).
 
+To skip the manual POST entirely, start with `jobs-serve --watch-plan` (or
+`UJIN_WATCH_PLAN=1`; tune with `--watch-interval` / `$UJIN_WATCH_INTERVAL`, default
+`2.0`s). Off by default. When on, a background task watches the `--plan` file and, on
+change, applies the **same** reload-with-prune automatically — added/changed jobs
+appear and removed plan-owned jobs are pruned with no restart. A malformed save is
+skipped (jobs kept, error in `failed`), API/preload jobs are never pruned, and it is
+race-free with the manual endpoint. See
+[INGEST_PLAN.md](INGEST_PLAN.md#auto-reloading-on-file-change---watch-plan).
+
 File-driven jobs (**workflows**) load from `UJIN_WORKFLOWS_DIR` on startup (id =
 filename stem), with optional `defaults:` deep-merge, `include:`/`use:` fragments,
 and `matrix:`/`for_each:` fan-out — see [WORKFLOWS.md](WORKFLOWS.md). A single
