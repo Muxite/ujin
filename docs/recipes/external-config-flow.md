@@ -1,6 +1,6 @@
 # Recipe: end-to-end external-config flow
 
-**What this shows:** how the three additive config layers — `defaults:`, `include:` fragments, and `matrix:` fan-out — compose inside a single mounted **INGEST-PLAN** file, and how to validate and inspect the result without starting the server.
+**What this shows:** how the five additive config layers — `defaults:`, `include:` fragments, `matrix:` fan-out, `vars:` defaults, and `profiles:` overlays — compose inside a single mounted **INGEST-PLAN** file, and how to validate and inspect the result without starting the server.
 
 References: [INGEST_PLAN.md](../INGEST_PLAN.md), [WORKFLOWS.md](../WORKFLOWS.md), [JOBS.md](../JOBS.md).
 
@@ -105,9 +105,13 @@ jobs:
 | `include:` fragments | file-load time | inline the fragment in-place |
 | `defaults:` deep-merge | per-job | shared keys merged *under* each job (job wins) |
 | `matrix:` fan-out | per-entry | one expanded job per variable map |
+| `vars:` defaults | per-placeholder | backfills any `{{ var }}` left unset by matrix or env |
+| `profiles:` overlay | before per-job merge | a named overlay deep-merged *over* `defaults:` |
 
 They run in that order: fragments first, then defaults merged in, then matrix
-expands the result. A file that uses none of them loads identically to a plain
+expands the result, then `vars:` fills any remaining placeholders. A `profiles:`
+overlay (when selected with `--profile NAME`) is applied between `defaults:` and
+the per-job merge. A file that uses none of them loads identically to a plain
 list of jobs.
 
 ---
@@ -241,10 +245,77 @@ Restart (or redeploy) the server: because ids are stable, re-loading the plan
 
 ---
 
-## 6. The same layers work in a workflows directory
+## 6. `vars:` defaults and `profiles:` overlays
+
+Two more additive layers keep a plan portable and environment-tunable without
+editing the file.
+
+**`vars:`** supplies fallback values for any `{{ var }}` placeholder the
+environment and matrix leave unset:
+
+```yaml
+# Add to ingest-plan.yaml alongside `defaults:` and `jobs:`
+vars:
+  rows: 50   # every {{ rows }} placeholder falls back to 50
+```
+
+Set the environment variable `rows=100` and every URL's `?rows=` switches with
+no file edit; a matrix entry that sets its own `rows` still wins for that job.
+
+**`profiles:`** declares named overlays over `defaults:`. Select one with
+`--profile NAME` (or `$UJIN_PLAN_PROFILE`; the flag wins):
+
+```yaml
+# Add to ingest-plan.yaml
+defaults:
+  schedule: { mode: adaptive, base: 3600 }
+profiles:
+  fast:
+    schedule: { base: 60 }    # tighten every job that doesn't pin its own schedule
+  slow:
+    schedule: { base: 86400 } # back off to daily
+```
+
+```bash
+ujin plan render ./ingest-plan.yaml --profile fast    # all jobs poll every 60s
+ujin plan render ./ingest-plan.yaml --profile slow    # all jobs poll daily
+ujin plan validate ./ingest-plan.yaml --profile fast  # validate with the overlay applied
+UJIN_PLAN_PROFILE=slow ujin jobs-serve --plan ./ingest-plan.yaml
+```
+
+---
+
+## 7. Reload without restarting
+
+After editing `ingest-plan.yaml` while the server is running, apply the changes
+in-process:
+
+```bash
+# upsert added/changed jobs (leaves removed jobs running)
+curl -X POST localhost:8902/plan/reload
+
+# upsert and also prune jobs removed from the file
+curl -X POST 'localhost:8902/plan/reload?prune=true'
+
+# preview what would change — mutates nothing
+curl -X POST 'localhost:8902/plan/reload?dry_run=true'
+
+# preview with prune — shows what would be removed too
+curl -X POST 'localhost:8902/plan/reload?prune=true&dry_run=true'
+```
+
+A dry run returns `added`/`updated`/`unchanged` (and `removed` with prune)
+without touching the running jobs. See
+[INGEST_PLAN.md](../INGEST_PLAN.md#reloading-a-plan-without-restarting) for the
+full response shapes.
+
+---
+
+## 8. The same layers work in a workflows directory
 
 A workflows directory supports the identical layers — `defaults:`, `include:`,
-and `matrix:` — per file. The ingest-plan is just the single-file alternative:
+`matrix:`, `vars:`, and `profiles:` — per file. The ingest-plan is just the
+single-file alternative:
 
 ```bash
 # directory-driven (one file per workflow, fragments in a subdirectory)

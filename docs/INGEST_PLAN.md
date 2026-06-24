@@ -799,7 +799,7 @@ fanned-out jobs) instead of being a bare spec:
 ```bash
 ujin plan render ./ingest-plan.yaml --explain --json | python3 -c \
   "import sys,json; rows=json.load(sys.stdin); \
-   print(rows[1]['spec']['id'], '<-', rows[1]['provenance'])"
+   print(rows[2]['spec']['id'], '<-', rows[2]['provenance'])"
 # feed-science <- {'source': 'examples/ingest-plan.yaml', 'matrix': {'key': 'matrix', 'index': 1, 'vars': {'slug': 'science'}}}
 ```
 
