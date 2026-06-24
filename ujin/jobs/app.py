@@ -606,12 +606,14 @@ _JOB_KEYS = frozenset({
 })
 
 # Top-level keys of an INGEST-PLAN *mapping* (a top-level list has no keys to check).
-_PLAN_TOP_KEYS = frozenset({"jobs", "defaults", "include", "use", "vars"})
+# `profiles:` is a top-level-only key (a map of named overlays for `defaults:`).
+_PLAN_TOP_KEYS = frozenset({"jobs", "defaults", "include", "use", "vars", "profiles"})
 
 # Top-level keys of a WORKFLOW file: it may be a container (`jobs:`/`defaults:`) OR a
 # single job written directly at the top level, so both key sets are accepted there.
-# `vars:` is a top-level-only key (a default-value map), never a per-job key.
-_WORKFLOW_TOP_KEYS = _JOB_KEYS | {"jobs", "defaults", "vars"}
+# `vars:`/`profiles:` are top-level-only keys (a default-value map / overlay map),
+# never per-job keys.
+_WORKFLOW_TOP_KEYS = _JOB_KEYS | {"jobs", "defaults", "vars", "profiles"}
 
 
 def _suggest(unknown: str, allowed: "frozenset[str]") -> "str | None":
@@ -650,6 +652,102 @@ def _report_warnings(messages: "list[str]", warnings: "list | None") -> None:
         log.warning(msg)
         if warnings is not None:
             warnings.append(msg)
+
+
+# ── profile overlays (`profiles:` + --profile / $UJIN_PLAN_PROFILE) ─────────── #
+#
+# A top-level `profiles:` mapping declares named overlays — each one deep-merged
+# OVER the plan's base `defaults:` block when its name is selected (so a profile
+# key wins over the same key in `defaults:`). The resulting effective defaults are
+# then deep-merged UNDER each job exactly as before, so per-job keys still win and
+# the established `${VAR}` / `{{ var }}` / matrix substitution order is unchanged.
+# Selection is `--profile NAME` (flag) with a `$UJIN_PLAN_PROFILE` env fallback (the
+# flag wins); neither set means no profile, no `profiles:` lookup, and resolution is
+# byte-for-byte unchanged — strictly additive.
+
+PLAN_PROFILE_ENV = "UJIN_PLAN_PROFILE"
+
+
+class PlanProfileError(ValueError):
+    """A selected ``--profile`` / ``$UJIN_PLAN_PROFILE`` name can't be applied.
+
+    Raised when a profile is selected but the file declares no ``profiles:`` block
+    (in strict/plan mode), the name is absent from it, or the overlay is malformed.
+    A ``ValueError`` subclass so the loader's existing file-level handling records it
+    in ``failed`` with a clean ``ujin: …`` message; callers that must exit non-zero
+    (``plan validate``/``plan render``, ``jobs-serve`` startup) surface it as such.
+    """
+
+
+def _profile_overlay(
+    data: Any, profile: "str | None", name: str, *, strict: bool = True
+) -> dict:
+    """Return the deep-merge overlay for the selected *profile* (``{}`` if none).
+
+    *data* is the parsed top-level plan/workflow node (after include resolution).
+    With *profile* falsy this is a no-op returning ``{}`` so resolution is unchanged.
+    When a profile is selected it is looked up in *data*'s ``profiles:`` mapping and
+    the matching overlay returned for the caller to deep-merge over ``defaults:``.
+
+    Raises :class:`PlanProfileError` (clean, naming the available profiles) when the
+    profile cannot be applied. In *strict* mode (a single plan file) a missing
+    ``profiles:`` block is an error; in lenient mode (a workflow file in a directory
+    scan, where files legitimately may not declare profiles) a file with no
+    ``profiles:`` key is left unchanged so only a present-but-unknown name fails.
+    """
+    if not profile:
+        return {}
+    profiles = data.get("profiles") if isinstance(data, dict) else None
+    if profiles is None:
+        if strict:
+            raise PlanProfileError(
+                f"plan {name}: profile {profile!r} selected but the file declares "
+                "no `profiles:` block"
+            )
+        return {}
+    if not isinstance(profiles, dict):
+        raise PlanProfileError(
+            f"plan {name}: `profiles:` must be a mapping of name -> overlay, got "
+            f"{type(profiles).__name__}"
+        )
+    if profile not in profiles:
+        available = ", ".join(sorted(profiles)) if profiles else "(none defined)"
+        raise PlanProfileError(
+            f"plan {name}: profile {profile!r} not found; available profiles: "
+            f"{available}"
+        )
+    overlay = profiles[profile]
+    if overlay is None:
+        return {}
+    if not isinstance(overlay, dict):
+        raise PlanProfileError(
+            f"plan {name}: profile {profile!r} must be a mapping, got "
+            f"{type(overlay).__name__}"
+        )
+    return overlay
+
+
+def _check_plan_profile(plan_src, profile: "str | None") -> None:
+    """Validate the selected *profile* against *plan_src* without loading jobs.
+
+    Raises :class:`PlanProfileError` (clean message) when *profile* is selected but
+    cannot be applied to the plan. A falsy *profile* or *plan_src*, or a plan that
+    can't be read/parsed at all, is a no-op here — the normal loader reports any
+    file-level problem at load time. Used by ``jobs-serve`` as a pre-flight so a bad
+    ``--profile`` exits non-zero before the server binds a port (mirroring ``--only``).
+    """
+    if not profile or not plan_src:
+        return
+    import yaml
+
+    p = Path(plan_src)
+    try:
+        data = _resolve_includes(
+            yaml.safe_load(_expand_env(p.read_text(encoding="utf-8"))), p.parent
+        )
+    except Exception:  # noqa: BLE001 - a file-level problem is reported at load time
+        return
+    _profile_overlay(data, profile, p.name)
 
 
 # ── job-id selection (--only / --exclude) ──────────────────────────────────── #
@@ -706,7 +804,10 @@ def _preload_specs(path: str) -> list:
 
 
 def _specs_from_workflow_file(
-    path, warnings: list | None = None, provenance: list | None = None
+    path,
+    warnings: list | None = None,
+    provenance: list | None = None,
+    profile: "str | None" = None,
 ) -> list:
     """Parse one workflow file into JobSpecs, deriving stable ids from the stem.
 
@@ -769,7 +870,19 @@ def _specs_from_workflow_file(
         )
     var_defaults = _overlay_env_vars(raw_vars)
 
+    # Profile overlay (lenient for a workflow file: a file with no `profiles:` key is
+    # left unchanged, so a directory scan with a `--profile` set only fails files that
+    # declare profiles but not the selected name). Pop `profiles:` so a single-job
+    # mapping below doesn't carry it as a stray key. Merged OVER base defaults so the
+    # overlay wins over `defaults:` but a per-job key still wins over the overlay.
+    raw_profiles = data.pop("profiles", None) if isinstance(data, dict) else None
+    overlay = _profile_overlay(
+        {"profiles": raw_profiles}, profile, path.name, strict=False
+    )
+
     defaults = data.pop("defaults", None) or {} if isinstance(data, dict) else {}
+    if overlay:
+        defaults = _deep_merge(defaults, overlay)
 
     # Single-job mapping (no top-level `jobs:` list) -> the whole file is one job.
     # A `matrix:`/`for_each:` key turns that mapping into a *template* fanned into
@@ -829,6 +942,7 @@ def _load_workflows_dir(
     failed: list | None = None,
     warnings: list | None = None,
     provenance: list | None = None,
+    profile: "str | None" = None,
 ) -> list:
     """Load every top-level ``*.yaml``/``*.yml`` workflow file in *path* (sorted).
 
@@ -861,7 +975,7 @@ def _load_workflows_dir(
         try:
             specs.extend(
                 _specs_from_workflow_file(
-                    fp, warnings=warnings, provenance=provenance
+                    fp, warnings=warnings, provenance=provenance, profile=profile
                 )
             )
         except Exception as exc:  # noqa: BLE001
@@ -934,6 +1048,7 @@ def _load_ingest_plan(
     warnings: list | None = None,
     present: list | None = None,
     provenance: list | None = None,
+    profile: "str | None" = None,
 ) -> list:
     """Load an INGEST-PLAN file into JobSpecs, deriving stable per-job ids.
 
@@ -948,6 +1063,14 @@ def _load_ingest_plan(
     like an ``include:`` fragment). A top-level ``vars:`` mapping supplies default
     values for any ``{{ var }}`` placeholder the process environment and matrix leave
     unset (matrix per-entry var > env value > ``vars:`` default).
+
+    When *profile* names an entry of a top-level ``profiles:`` mapping, that overlay
+    is deep-merged *over* the base ``defaults:`` before the per-job merge, so each
+    job inherits the overlaid values unless it sets the key itself and the matrix/
+    env/var substitution order is unchanged. A selected profile absent from
+    ``profiles:`` fails the whole plan (one ``failed`` record) with a clean
+    ``ujin: …`` message. ``profile=None`` (the default) skips this step entirely so
+    resolution is byte-for-byte unchanged.
 
     Errors never abort startup. A **file-level** problem (missing/unreadable file,
     invalid YAML, a shape that is neither a mapping nor a list, an unresolvable or
@@ -986,6 +1109,14 @@ def _load_ingest_plan(
         data = yaml.safe_load(_expand_env(path.read_text(encoding="utf-8")))
         data = _resolve_includes(data, path.parent)
         defaults, entries = _plan_entries(data, path.name)
+        # Profile overlay: deep-merge the selected `profiles:` entry OVER the base
+        # `defaults:` before the per-job merge below, so each job inherits the
+        # overlaid values unless it sets the key itself. A selected-but-absent
+        # profile raises PlanProfileError (a ValueError), failing the whole plan
+        # here with a clean message; profile=None is a no-op (unchanged).
+        overlay = _profile_overlay(data, profile, path.name)
+        if overlay:
+            defaults = _deep_merge(defaults, overlay)
     except (OSError, yaml.YAMLError, WorkflowIncludeError, ValueError) as exc:
         log.warning("skipping ingest plan %s: %s", path, exc)
         if failed is not None:
@@ -1062,7 +1193,7 @@ def _load_ingest_plan(
 
 
 def _apply_ingest_plan(
-    manager, plan_src, only=None, exclude=None, *, prune=False
+    manager, plan_src, only=None, exclude=None, *, prune=False, profile=None
 ) -> "dict[str, list]":
     """Resolve *plan_src*, apply ``--only``/``--exclude``, upsert into *manager*.
 
@@ -1095,7 +1226,7 @@ def _apply_ingest_plan(
     # stays empty on a file-level read failure, which gates prune below.
     present: list[str] = []
     plan_specs = _load_ingest_plan(
-        plan_src, failed=plan_status["failed"], present=present
+        plan_src, failed=plan_status["failed"], present=present, profile=profile
     )
     if only is not None or exclude is not None:
         plan_specs = _select_jobs(plan_specs, only, exclude)
@@ -1137,7 +1268,7 @@ def _spec_differs(current: "JobSpec", resolved: "JobSpec") -> bool:
 
 
 def _dryrun_ingest_plan(
-    manager, plan_src, only=None, exclude=None, *, prune=False
+    manager, plan_src, only=None, exclude=None, *, prune=False, profile=None
 ) -> "dict[str, list]":
     """Preview a reload of *plan_src* WITHOUT mutating *manager*.
 
@@ -1165,7 +1296,7 @@ def _dryrun_ingest_plan(
     }
     present: list[str] = []
     plan_specs = _load_ingest_plan(
-        plan_src, failed=plan_status["failed"], present=present
+        plan_src, failed=plan_status["failed"], present=present, profile=profile
     )
     if only is not None or exclude is not None:
         plan_specs = _select_jobs(plan_specs, only, exclude)
@@ -1197,7 +1328,7 @@ def _dryrun_ingest_plan(
 
 
 def _introspect_active_plan(
-    plan_src, wf_dir, only=None, exclude=None
+    plan_src, wf_dir, only=None, exclude=None, profile=None
 ) -> "dict[str, Any]":
     """Resolve the active workflows dir + INGEST-PLAN into a read-only payload.
 
@@ -1221,12 +1352,14 @@ def _introspect_active_plan(
     # Workflows directory: scanned unfiltered, matching the startup load order
     # (only the plan applies --only/--exclude). A non-existent dir yields nothing.
     if wf_dir:
-        _load_workflows_dir(wf_dir, failed=failed, provenance=prov)
+        _load_workflows_dir(wf_dir, failed=failed, provenance=prov, profile=profile)
     # INGEST-PLAN: resolve with provenance, then apply the same selection startup
     # would. A no-match --only is reported as zero selected, never raised (read-only).
     if plan_src:
         plan_prov: list = []
-        plan_specs = _load_ingest_plan(plan_src, failed=failed, provenance=plan_prov)
+        plan_specs = _load_ingest_plan(
+            plan_src, failed=failed, provenance=plan_prov, profile=profile
+        )
         if only is not None or exclude is not None:
             try:
                 keep = {s.id for s in _select_jobs(plan_specs, only, exclude)}
@@ -1318,7 +1451,8 @@ class _PlanWatcher:
     """
 
     def __init__(
-        self, app, manager, plan_src, only, exclude, interval, *, sleep=None
+        self, app, manager, plan_src, only, exclude, interval, *, sleep=None,
+        profile=None,
     ):
         self.app = app
         self.manager = manager
@@ -1326,6 +1460,7 @@ class _PlanWatcher:
         self.only = only
         self.exclude = exclude
         self.interval = interval
+        self.profile = profile
         self._sleep = sleep or asyncio.sleep
         self._sig = self._signature()
 
@@ -1360,7 +1495,7 @@ class _PlanWatcher:
         try:
             status = _apply_ingest_plan(
                 self.manager, self.plan_src, only=self.only, exclude=self.exclude,
-                prune=True,
+                prune=True, profile=self.profile,
             )
         except ValueError as exc:
             # --only now matches nothing: surface it, keep the last good job set.
@@ -1409,6 +1544,7 @@ def create_jobs_app(
     exclude: list | None = None,
     watch_plan: bool = False,
     watch_interval: float | None = None,
+    profile: str | None = None,
 ) -> Any:
     try:
         from fastapi import (
@@ -1434,6 +1570,11 @@ def create_jobs_app(
     # The `--plan` flag (passed as plan_path) overrides $UJIN_INGEST_PLAN; unset ->
     # no plan is loaded and /health stays byte-identical to a no-plan deploy.
     plan_src = plan_path or os.environ.get(INGEST_PLAN_ENV)
+    # Active profile overlay: the `--profile` flag (passed as profile) wins over
+    # $UJIN_PLAN_PROFILE; neither set -> None -> no overlay (byte-identical to today).
+    # Resolved once here so startup, reload, the watcher, and GET /plan all apply the
+    # same profile, exactly as plan_src/only/exclude are shared.
+    profile_name = profile or os.environ.get(PLAN_PROFILE_ENV) or None
     # Opt-in plan-file watcher. Resolved once here (flag wins over env); off by
     # default, so without it the lifespan creates no watcher task and does no extra
     # I/O — a no-config deploy is byte-identical to today.
@@ -1494,7 +1635,8 @@ def create_jobs_app(
         if plan_src:
             try:
                 app.state.plan = _apply_ingest_plan(
-                    manager, plan_src, only=only, exclude=exclude
+                    manager, plan_src, only=only, exclude=exclude,
+                    profile=profile_name,
                 )
             except ValueError as exc:
                 # A --only pattern matched no resolved job: fatal at startup.
@@ -1520,7 +1662,8 @@ def create_jobs_app(
         app.state.plan_watcher = None
         if watch_enabled and plan_src:
             watcher = _PlanWatcher(
-                app, manager, plan_src, only, exclude, watch_secs
+                app, manager, plan_src, only, exclude, watch_secs,
+                profile=profile_name,
             )
             app.state.plan_watcher = watcher
             tasks.append(asyncio.create_task(watcher.run()))
@@ -1619,7 +1762,9 @@ def create_jobs_app(
         plan nor a populated workflows dir configured, ``jobs`` is empty.
         """
         return PlanIntrospection(
-            **_introspect_active_plan(plan_src, wf_dir, only=only, exclude=exclude)
+            **_introspect_active_plan(
+                plan_src, wf_dir, only=only, exclude=exclude, profile=profile_name
+            )
         )
 
     @app.post("/plan/reload")
@@ -1675,7 +1820,7 @@ def create_jobs_app(
             try:
                 preview = _dryrun_ingest_plan(
                     app.state.manager, plan_src, only=only, exclude=exclude,
-                    prune=prune,
+                    prune=prune, profile=profile_name,
                 )
             except ValueError as exc:
                 return {"reloaded": False, "dry_run": True, "detail": str(exc),
@@ -1683,7 +1828,8 @@ def create_jobs_app(
             return {"reloaded": False, "dry_run": True, **preview}
         try:
             plan_status = _apply_ingest_plan(
-                app.state.manager, plan_src, only=only, exclude=exclude, prune=prune
+                app.state.manager, plan_src, only=only, exclude=exclude, prune=prune,
+                profile=profile_name,
             )
         except ValueError as exc:
             # --only matched no job on reload: report, don't kill the server.
@@ -1812,12 +1958,13 @@ def serve(  # pragma: no cover -- launches uvicorn; not testable without a live 
     exclude: list | None = None,
     watch_plan: bool = False,
     watch_interval: float | None = None,
+    profile: str | None = None,
 ) -> None:
     import uvicorn
 
     uvicorn.run(
         create_jobs_app(config_path, workflows_dir=workflows_dir, plan_path=plan_path,
                         only=only, exclude=exclude, watch_plan=watch_plan,
-                        watch_interval=watch_interval),
+                        watch_interval=watch_interval, profile=profile),
         host=host, port=port,
     )

@@ -210,6 +210,12 @@ def _apply_env_file(env_file: str) -> int:
     return 0
 
 
+def _resolve_profile(flag: "str | None") -> "str | None":
+    """Resolve the active plan profile: the ``--profile`` flag wins over
+    ``$UJIN_PLAN_PROFILE``; with neither set the result is ``None`` (no overlay)."""
+    return flag or os.environ.get("UJIN_PLAN_PROFILE") or None
+
+
 def _cmd_jobs_serve(args: argparse.Namespace) -> int:
     from ujin.jobs.app import serve
 
@@ -221,24 +227,39 @@ def _cmd_jobs_serve(args: argparse.Namespace) -> int:
 
     only = _parse_patterns(getattr(args, "only", None))
     exclude = _parse_patterns(getattr(args, "exclude", None))
+    profile = _resolve_profile(getattr(args, "profile", None))
 
     # Pre-flight: if --only given with --plan, check for a match before launching
     # uvicorn so the CLI exits non-zero with a clean message (no traceback).
     if only and args.plan:
         from ujin.jobs.app import _load_ingest_plan, _select_jobs
         pre_failed: list = []
-        pre_specs = _load_ingest_plan(Path(args.plan), failed=pre_failed)
+        pre_specs = _load_ingest_plan(Path(args.plan), failed=pre_failed, profile=profile)
         try:
             _select_jobs(pre_specs, only, exclude)
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 1
 
+    # Pre-flight: a selected --profile/$UJIN_PLAN_PROFILE absent from the plan's
+    # `profiles:` exits non-zero with a clean message before binding a port, instead
+    # of starting the server with the overlay silently un-applied. Resolves the plan
+    # from the flag or $UJIN_INGEST_PLAN, matching what the server would load.
+    plan_src = args.plan or os.environ.get("UJIN_INGEST_PLAN")
+    if profile and plan_src:
+        from ujin.jobs.app import PlanProfileError, _check_plan_profile
+        try:
+            _check_plan_profile(plan_src, profile)
+        except PlanProfileError as exc:
+            print(f"ujin: {exc}", file=sys.stderr)
+            return 1
+
     serve(host=args.host, port=args.port, config_path=args.jobs,
           workflows_dir=args.workflows, plan_path=args.plan,
           only=only or None, exclude=exclude or None,
           watch_plan=getattr(args, "watch_plan", False),
-          watch_interval=getattr(args, "watch_interval", None))
+          watch_interval=getattr(args, "watch_interval", None),
+          profile=profile)
     return 0
 
 
@@ -268,6 +289,7 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
     strict = getattr(args, "strict", False)
     only = _parse_patterns(getattr(args, "only", None))
     exclude = _parse_patterns(getattr(args, "exclude", None))
+    profile = _resolve_profile(getattr(args, "profile", None))
 
     if not path.exists():
         msg = f"ujin: path not found: {args.path}"
@@ -281,9 +303,11 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
     failed: list = []
     warnings: list = []
     if path.is_dir():
-        specs = _load_workflows_dir(str(path), failed=failed, warnings=warnings)
+        specs = _load_workflows_dir(str(path), failed=failed, warnings=warnings,
+                                    profile=profile)
     else:
-        specs = _load_ingest_plan(path, failed=failed, warnings=warnings)
+        specs = _load_ingest_plan(path, failed=failed, warnings=warnings,
+                                  profile=profile)
 
     # Apply --only/--exclude selection after full resolution so patterns match
     # the final expanded job ids (post defaults-merge, includes, matrix fan-out).
