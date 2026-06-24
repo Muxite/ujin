@@ -337,3 +337,143 @@ def test_reload_upserts_plan_jobs(tmp_path):
         assert first == second == ["feed-a", "feed-b"]
     finally:
         os.environ.pop("UJIN_JOBS_DB", None)
+
+
+# ── POST /plan/reload: pick up file changes without a restart ──────────────── #
+def test_reload_endpoint_picks_up_added_and_changed_jobs(tmp_path, monkeypatch):
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [{"id": "alpha", "schedule": {"mode": "once"},
+                   "source": {"kind": "command", "config": {"argv": ["printf", "a"]}}}])
+
+    with TestClient(create_jobs_app(run_engine=False, plan_path=str(plan))) as c:
+        assert {j["id"] for j in c.get("/jobs").json()} == {"alpha"}
+
+        # Add a job and change the existing one, then reload in-process.
+        _write(plan, [
+            {"id": "alpha", "schedule": {"mode": "once"},
+             "source": {"kind": "command", "config": {"argv": ["printf", "AA"]}}},
+            {"id": "beta", "schedule": {"mode": "once"},
+             "source": {"kind": "command", "config": {"argv": ["printf", "b"]}}},
+        ])
+        body = c.post("/plan/reload").json()
+        assert body["reloaded"] is True
+        assert sorted(body["loaded"]) == ["alpha", "beta"] and body["failed"] == []
+        assert body["path"] == str(plan)
+
+        # New job is present, existing one upserted (no duplicate), /health refreshed.
+        assert {j["id"] for j in c.get("/jobs").json()} == {"alpha", "beta"}
+        assert sorted(c.get("/health").json()["plan"]["loaded"]) == ["alpha", "beta"]
+        spec = c.get("/jobs/alpha").json()["spec"]
+        assert spec["source"]["config"]["argv"] == ["printf", "AA"]
+
+
+def test_reload_endpoint_reports_malformed_job_without_aborting(tmp_path, monkeypatch):
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [{"id": "ok", "schedule": {"mode": "once"},
+                   "source": {"kind": "command", "config": {"argv": ["printf", "x"]}}}])
+
+    with TestClient(create_jobs_app(run_engine=False, plan_path=str(plan))) as c:
+        _write(plan, [
+            {"id": "ok", "schedule": {"mode": "once"},
+             "source": {"kind": "command", "config": {"argv": ["printf", "x"]}}},
+            {"id": "bad", "matrix": "nope",
+             "source": {"kind": "command", "config": {"argv": ["printf", "y"]}}},
+        ])
+        body = c.post("/plan/reload").json()
+        assert body["reloaded"] is True
+        assert body["loaded"] == ["ok"]
+        assert [f["id"] for f in body["failed"]] == ["bad"]
+        assert body["failed"][0]["error"].startswith("ujin:")
+        # The valid job loaded and /health mirrors the reload summary.
+        assert "ok" in {j["id"] for j in c.get("/jobs").json()}
+        assert c.get("/health").json()["plan"]["failed"][0]["id"] == "bad"
+
+
+def test_reload_endpoint_noop_when_no_plan_configured(tmp_path, monkeypatch):
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    monkeypatch.delenv("UJIN_INGEST_PLAN", raising=False)
+    with TestClient(create_jobs_app(run_engine=False)) as c:
+        r = c.post("/plan/reload")
+        assert r.status_code == 200
+        body = r.json()
+        assert body == {"reloaded": False, "detail": "no plan configured",
+                        "loaded": [], "failed": []}
+        # No plan key materializes on /health -> no-plan deploys stay unchanged.
+        assert "plan" not in c.get("/health").json()
+
+
+def test_reload_endpoint_requires_auth(tmp_path, monkeypatch):
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    monkeypatch.setenv("UJIN_API_KEY", "s3cret")
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [{"id": "alpha", "schedule": {"mode": "once"},
+                   "source": {"kind": "command", "config": {"argv": ["printf", "a"]}}}])
+    with TestClient(create_jobs_app(run_engine=False, plan_path=str(plan))) as c:
+        assert c.post("/plan/reload").status_code == 401
+        ok = c.post("/plan/reload", headers={"X-API-Key": "s3cret"})
+        assert ok.status_code == 200 and ok.json()["reloaded"] is True
+
+
+def test_reload_endpoint_honors_startup_only_filter(tmp_path, monkeypatch):
+    # A server started with --only applies the SAME filter on reload, so a job
+    # excluded at startup never sneaks in via /plan/reload.
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [{"id": "alpha", "schedule": {"mode": "once"},
+                   "source": {"kind": "command", "config": {"argv": ["printf", "a"]}}}])
+
+    app = create_jobs_app(run_engine=False, plan_path=str(plan), only=["alpha"])
+    with TestClient(app) as c:
+        assert {j["id"] for j in c.get("/jobs").json()} == {"alpha"}
+        # Add an out-of-filter job; reload must keep filtering it out.
+        _write(plan, [
+            {"id": "alpha", "schedule": {"mode": "once"},
+             "source": {"kind": "command", "config": {"argv": ["printf", "a"]}}},
+            {"id": "beta", "schedule": {"mode": "once"},
+             "source": {"kind": "command", "config": {"argv": ["printf", "b"]}}},
+        ])
+        body = c.post("/plan/reload").json()
+        assert body["reloaded"] is True and body["loaded"] == ["alpha"]
+        assert {j["id"] for j in c.get("/jobs").json()} == {"alpha"}
+
+
+def test_reload_endpoint_reports_only_no_match_without_killing_server(tmp_path, monkeypatch):
+    # Unlike startup (which exits), a reload whose --only now matches nothing is
+    # reported as not-reloaded and the server keeps running.
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [{"id": "alpha", "schedule": {"mode": "once"},
+                   "source": {"kind": "command", "config": {"argv": ["printf", "a"]}}}])
+
+    app = create_jobs_app(run_engine=False, plan_path=str(plan), only=["alpha"])
+    with TestClient(app) as c:
+        # Drop the only matching job from the file; --only alpha now matches nothing.
+        _write(plan, [{"id": "beta", "schedule": {"mode": "once"},
+                       "source": {"kind": "command", "config": {"argv": ["printf", "b"]}}}])
+        body = c.post("/plan/reload").json()
+        assert body["reloaded"] is False
+        assert "no job ids matched" in body["detail"]
+        assert body["loaded"] == [] and body["failed"] == []
+        # Server still serving; the originally-loaded job is untouched.
+        assert c.get("/health").json()["status"] == "ok"
+        assert {j["id"] for j in c.get("/jobs").json()} == {"alpha"}

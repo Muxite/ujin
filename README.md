@@ -130,7 +130,11 @@ pattern that matches nothing exits non-zero with a clean `ujin: …` message.
 loaders as `jobs-serve` — identical ids and error messages — without starting the
 server. `ujin plan render` prints every fully-expanded `JobSpec` after all resolution
 layers so you can verify matrix fan-out and defaults merges before deploying.
-See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md), [docs/WORKFLOWS.md](docs/WORKFLOWS.md),
+
+Changed the plan file? `POST /plan/reload` re-reads it and upserts the resolved jobs
+in-process — no restart — sharing the startup loader (a single bad job is reported,
+the rest reload) and refreshing the `/health` plan status; with no plan configured
+it is a safe no-op. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md), [docs/WORKFLOWS.md](docs/WORKFLOWS.md),
 and the [external-config recipe](docs/recipes/external-config-flow.md).
 
 ## Watch a page for change
@@ -257,7 +261,8 @@ Three FastAPI apps — run any combination. Full reference in
 - **Jobs control plane** (`:8902`): `POST /jobs` (source→transforms→sinks→schedule),
   `GET/DELETE /jobs/{id}`, `/jobs/{id}/run|pause|resume|runs|events`,
   `/jobs/{id}/content` + `/jobs/{id}/results` (hand out obtained data), `WS /jobs/events`,
-  `/kinds`, `/metrics`, `POST /plugins/reload`. Durable + plugin-extensible.
+  `/kinds`, `/metrics`, `POST /plugins/reload`, `POST /plan/reload` (re-read the
+  INGEST-PLAN, no restart). Durable + plugin-extensible.
   File-driven workflows load from `./workflows` (with `matrix:`/`for_each:` template
   fan-out) — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 - **Poller control** (`:8900`): `GET /health /metrics /targets`,
