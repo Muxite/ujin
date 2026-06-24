@@ -122,6 +122,7 @@ ujin plan render  examples/ingest-plan.yaml --explain --json           # machine
 # Diff two plans by resolved job id — what was added, removed, or changed:
 ujin plan diff    old-plan.yaml examples/ingest-plan.yaml              # `+`/`-`/`~` per job id
 ujin plan diff    old-plan.yaml examples/ingest-plan.yaml --json       # machine-readable (CI)
+ujin plan diff    old-plan.yaml examples/ingest-plan.yaml --exit-code  # exit 1 if any diff (CI gate)
 ```
 
 `--plan` (or `$UJIN_INGEST_PLAN`) mounts a single YAML file that declares many jobs
@@ -158,11 +159,13 @@ default render output is unchanged without the flag.
 loaders and reports, keyed by final job id, which jobs were **added** in `NEW` (`+`),
 **removed** in `NEW` (`-`), and **changed** (`~`, present in both but with a differing
 resolved spec). It exits zero whenever both inputs resolve — an identical pair prints
-`no changes`. `--json` emits the same information as a structured object with distinct
-`added`/`removed`/`changed` groupings (added/removed carry each job's `spec`; changed
-carries `old` and `new`), and `--env-file` is accepted as with the other plan
-subcommands. An unreadable or schema-invalid input exits non-zero with a clean
-`ujin: …` message and no traceback.
+`no changes`. Pass `--exit-code` (alias `--check`) to flip this for CI: non-zero when
+any jobs differ, zero when identical. `--json` emits the same information as a
+structured object with distinct `added`/`removed`/`changed` groupings (added/removed
+carry each job's `spec`; changed carries `old` and `new`), and its shape is unaffected
+by `--exit-code`. `--env-file` is accepted as with the other plan subcommands. An
+unreadable or schema-invalid input exits non-zero with a clean `ujin: …` message and
+no traceback.
 
 Changed the plan file? `POST /plan/reload` re-reads it and upserts the resolved jobs
 in-process — no restart — sharing the startup loader (a single bad job is reported,
@@ -172,7 +175,11 @@ plan-owned jobs dropped from the file (returned in a `pruned` list); API- and
 preload-created jobs are never pruned. Add `?dry_run=true` (or a `{"dry_run": true}`
 body) to preview the reload without touching the manager — the response reports the
 ids that would be `added`/`updated`/`unchanged` (and `removed` with `prune`) while
-`GET /jobs` stays identical. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md), [docs/WORKFLOWS.md](docs/WORKFLOWS.md),
+`GET /jobs` stays identical. Want to see what the active plan/workflows resolve to
+without touching anything? `GET /plan` is the read-only, live counterpart to
+`ujin plan render --explain`: it returns every currently-resolved job id with its
+provenance — the originating plan/workflow file, plus the matrix entry for
+fanned-out jobs. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md), [docs/WORKFLOWS.md](docs/WORKFLOWS.md),
 and the [external-config recipe](docs/recipes/external-config-flow.md).
 
 ## Watch a page for change
@@ -301,8 +308,9 @@ Three FastAPI apps — run any combination. Full reference in
 - **Jobs control plane** (`:8902`): `POST /jobs` (source→transforms→sinks→schedule),
   `GET/DELETE /jobs/{id}`, `/jobs/{id}/run|pause|resume|runs|events`,
   `/jobs/{id}/content` + `/jobs/{id}/results` (hand out obtained data), `WS /jobs/events`,
-  `/kinds`, `/metrics`, `POST /plugins/reload`, `POST /plan/reload` (re-read the
-  INGEST-PLAN, no restart; `?prune=true` also drops plan-owned jobs gone from the
+  `/kinds`, `/metrics`, `POST /plugins/reload`, `GET /plan` (read-only: the jobs the
+  active plan/workflows resolve to, each with provenance), `POST /plan/reload` (re-read
+  the INGEST-PLAN, no restart; `?prune=true` also drops plan-owned jobs gone from the
   file, `?dry_run=true` previews the effect without mutating anything). Durable +
   plugin-extensible.
   File-driven workflows load from `./workflows` (with `matrix:`/`for_each:` template
