@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **docs(sync): add `profiles:` section to `docs/WORKFLOWS.md`.** The `profiles:` overlay block (shipped in 0.34.0) was documented in `README.md` and `docs/INGEST_PLAN.md` but not in `docs/WORKFLOWS.md`. Added a `profiles:` subsection under "Defaults, fragments, and matrix fan-out" covering the overlay merge order, per-file leniency in a workflows directory (files without `profiles:` are left unchanged; only a file that declares `profiles:` but omits the selected name fails), the `--profile`/`$UJIN_PLAN_PROFILE` selection flags, and an additive-only note — with a runnable example and a cross-reference to `INGEST_PLAN.md` for the full reference. No production code changed.
+
 ## 0.35.0 — 2026-06-24
 
 - **feat(plan): `ujin plan render --summary` — concise human-readable overview of a resolved plan.** The new `--summary` flag on `ujin plan render` prints a job count followed by one line per resolved job (id, source kind/url, schedule, and number of sinks) instead of the full expanded YAML/JSON specs; it reuses the same loaders as the normal render path so resolution (defaults/include/matrix/profile/${VAR}) is identical. Composes with `--only`/`--exclude`, `--env-file`, and `--profile`; works for both INGEST-PLAN files and workflows directories. Default `ujin plan render` output (no flag) is byte-for-byte unchanged. Documented in README and `docs/INGEST_PLAN.md` with a runnable example; 23 offline deterministic tests added.
