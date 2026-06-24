@@ -113,6 +113,10 @@ ujin jobs-serve    --plan examples/ingest-plan.yaml --env-file .env
 ujin plan render  examples/ingest-plan.yaml --only 'feed-*'            # matching ids only
 ujin plan render  examples/ingest-plan.yaml --only 'feed-*' --exclude feed-tech
 ujin jobs-serve   --plan examples/ingest-plan.yaml --only 'feed-*'     # preload subset
+
+# Provenance — show which source file and matrix row produced each expanded job:
+ujin plan render  examples/ingest-plan.yaml --explain                  # `# source:` / `# matrix:` comments
+ujin plan render  examples/ingest-plan.yaml --explain --json           # machine-readable provenance
 ```
 
 `--plan` (or `$UJIN_INGEST_PLAN`) mounts a single YAML file that declares many jobs
@@ -139,7 +143,11 @@ pattern that matches nothing exits non-zero with a clean `ujin: …` message.
 `ujin plan validate` checks a plan file **or** a workflows directory with the same
 loaders as `jobs-serve` — identical ids and error messages — without starting the
 server. `ujin plan render` prints every fully-expanded `JobSpec` after all resolution
-layers so you can verify matrix fan-out and defaults merges before deploying.
+layers so you can verify matrix fan-out and defaults merges before deploying. Add
+`--explain` to annotate each job with its provenance — the originating source file
+and, for matrix/for_each-expanded jobs, the matrix entry index and variable map that
+produced it (as `#` comments in YAML, or a `provenance` object with `--json`); the
+default render output is unchanged without the flag.
 
 Changed the plan file? `POST /plan/reload` re-reads it and upserts the resolved jobs
 in-process — no restart — sharing the startup loader (a single bad job is reported,

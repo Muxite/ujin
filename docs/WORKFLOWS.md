@@ -366,6 +366,24 @@ document is prefixed with `--- # <id>` so you can grep for a specific job id. Th
 `--json` output uses the same spec shape as the REST `/jobs` endpoint. See
 [INGEST_PLAN.md](INGEST_PLAN.md) for full details and examples.
 
+Add `--explain` to annotate each job with its provenance — the workflow **file** it
+came from and, for a `matrix:`/`for_each:`-expanded job, the matrix entry index and
+variable map that produced it. Provenance is collected only under `--explain`, so the
+default render is byte-for-byte unchanged:
+
+```bash
+ujin plan render ./workflows/ --explain          # YAML with `# source:` / `# matrix:` comments
+ujin plan render ./workflows/ --explain --json   # each element pairs spec + provenance
+```
+
+```
+--- # search-gpu
+# source: workflows/marketplace-search.yaml
+# matrix: entry 1 -> {slug: gpu, query: rtx 4090, floor: 800}
+name: search-gpu
+...
+```
+
 ## Examples
 
 `examples/workflows/` ships runnable workflow files:
