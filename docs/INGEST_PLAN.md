@@ -911,6 +911,64 @@ print("ingest-plan.yaml conforms")
 PY
 ```
 
+## Reporting required env vars — `plan env`
+
+Use `ujin plan env` to see, **before deploying**, which `${VAR}` environment
+variables a plan (or workflows directory) needs. It resolves `include:`/`use:`
+fragments first, then collects every `${VAR}` reference and reports, per variable:
+
+* its **default** — the value declared by a `${VAR:-default}` form (the first one
+  seen wins, mirroring expansion);
+* whether it is **required** — `optional`, or `required` if any occurrence uses the
+  `${VAR:?message}` form;
+* whether it is currently **set** in the environment.
+
+```bash
+ujin plan env ./ingest-plan.yaml             # human table
+ujin plan env ./workflows/                   # also works for a workflows directory
+ujin plan env ./ingest-plan.yaml --json      # machine-readable (CI)
+ujin plan env ./ingest-plan.yaml --env-file .env   # count .env vars as set
+```
+
+The bundled `examples/ingest-plan.yaml` `include:`s a webhook-sink fragment that
+references `${INGEST_URL:-http://localhost:8000/ingest}`, so the report walks into
+the fragment and surfaces it:
+
+```text
+$ ujin plan env examples/ingest-plan.yaml
+1 variable referenced
+  INGEST_URL  optional  unset  default=http://localhost:8000/ingest
+```
+
+The `--json` form emits an object keyed by `path` plus a `vars` list, one entry per
+variable in first-encounter order:
+
+```json
+{
+  "path": "examples/ingest-plan.yaml",
+  "vars": [
+    {
+      "name": "INGEST_URL",
+      "default": "http://localhost:8000/ingest",
+      "required": false,
+      "set": false
+    }
+  ]
+}
+```
+
+`--env-file PATH` loads the same dotenv-style file the other plan commands accept
+and treats its keys as set when deciding `set`/`unset` (a process-environment value
+still wins — the file only fills in variables not already set). A plan that
+references no `${VAR}` succeeds (exit 0) and reports `no environment variables
+referenced` (an empty `vars` list under `--json`); a missing or unreadable path
+exits non-zero with a clean `ujin: …` message and no traceback.
+
+`plan env` is **strictly read-only**: it reuses the same `${VAR}`-scanning regex and
+`include:`/`use:` fragment-resolution the loaders use, but it never expands a
+variable, builds a `JobSpec`, or otherwise alters resolution — running it has no
+effect on how `jobs-serve`/`plan render` later resolve the same plan.
+
 ## Job-id selection — `--only` and `--exclude`
 
 All three plan-aware commands (`plan render`, `plan validate`, and `jobs-serve`)
