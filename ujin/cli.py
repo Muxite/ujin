@@ -386,6 +386,7 @@ def _cmd_plan_render(args: argparse.Namespace) -> int:
     only = _parse_patterns(getattr(args, "only", None))
     exclude = _parse_patterns(getattr(args, "exclude", None))
     explain = getattr(args, "explain", False)
+    profile = _resolve_profile(getattr(args, "profile", None))
 
     if not path.exists():
         print(f"ujin: path not found: {args.path}", file=sys.stderr)
@@ -396,9 +397,11 @@ def _cmd_plan_render(args: argparse.Namespace) -> int:
     # the existing code path (provenance=None) so the default render is unchanged.
     provenance: list | None = [] if explain else None
     if path.is_dir():
-        specs = _load_workflows_dir(str(path), failed=failed, provenance=provenance)
+        specs = _load_workflows_dir(str(path), failed=failed, provenance=provenance,
+                                    profile=profile)
     else:
-        specs = _load_ingest_plan(path, failed=failed, provenance=provenance)
+        specs = _load_ingest_plan(path, failed=failed, provenance=provenance,
+                                  profile=profile)
 
     # Apply --only/--exclude selection after full resolution so patterns match
     # the final expanded job ids (post defaults-merge, includes, matrix fan-out).
@@ -990,6 +993,11 @@ def main(argv: list[str] | None = None) -> int:
         "--watch-interval", type=float, default=None, metavar="SECONDS",
         help="poll interval for --watch-plan, in seconds (default: 2.0; also "
              "$UJIN_WATCH_INTERVAL)")
+    p_jobs.add_argument(
+        "--profile", default=None, metavar="NAME",
+        help="apply the named overlay from the plan's `profiles:` block over "
+             "`defaults:` before the per-job merge (default: $UJIN_PLAN_PROFILE; "
+             "the flag wins; unknown name exits non-zero)")
     p_jobs.add_argument("--host", default="0.0.0.0", help="bind address (default: 0.0.0.0)")
     p_jobs.add_argument("--port", type=int, default=8902, help="port (default: 8902)")
     p_jobs.set_defaults(func=_cmd_jobs_serve)
@@ -1037,6 +1045,11 @@ def main(argv: list[str] | None = None) -> int:
         "--exclude", action="append", default=None, metavar="PATTERN",
         help="exclude jobs whose id matches this fnmatch pattern "
              "(comma-separated or repeatable; subtracts from --only)")
+    p_plan_validate.add_argument(
+        "--profile", default=None, metavar="NAME",
+        help="apply the named overlay from the plan's `profiles:` block over "
+             "`defaults:` before the per-job merge (default: $UJIN_PLAN_PROFILE; "
+             "the flag wins; unknown name exits non-zero)")
     p_plan_validate.set_defaults(func=_cmd_plan_validate)
 
     p_plan_render = plan_sub.add_parser(
@@ -1082,6 +1095,11 @@ def main(argv: list[str] | None = None) -> int:
         "--exclude", action="append", default=None, metavar="PATTERN",
         help="exclude jobs whose id matches this fnmatch pattern "
              "(comma-separated or repeatable; subtracts from --only)")
+    p_plan_render.add_argument(
+        "--profile", default=None, metavar="NAME",
+        help="apply the named overlay from the plan's `profiles:` block over "
+             "`defaults:` before the per-job merge (default: $UJIN_PLAN_PROFILE; "
+             "the flag wins; unknown name exits non-zero)")
     p_plan_render.set_defaults(func=_cmd_plan_render)
 
     p_plan_diff = plan_sub.add_parser(

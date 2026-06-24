@@ -110,6 +110,10 @@ ujin plan validate examples/ingest-plan.yaml --env-file .env
 ujin plan render   examples/ingest-plan.yaml --env-file .env
 ujin jobs-serve    --plan examples/ingest-plan.yaml --env-file .env
 
+# Profiles — overlay a named variation of `defaults:` (flag wins over $UJIN_PLAN_PROFILE):
+ujin plan render  examples/profiles.yaml --profile fast                # apply the `fast` overlay
+UJIN_PLAN_PROFILE=slow ujin jobs-serve --plan examples/profiles.yaml   # env fallback
+
 # Job-id selectors — filter after full resolution (defaults, includes, matrix fan-out):
 ujin plan render  examples/ingest-plan.yaml --only 'feed-*'            # matching ids only
 ujin plan render  examples/ingest-plan.yaml --only 'feed-*' --exclude feed-tech
@@ -144,6 +148,13 @@ at once. A few additive layers keep large plans DRY:
   value wins, then the process environment (variable `NAME`, if set), then the
   file-level `vars: NAME` default; a plan with no `vars:` key resolves byte-for-byte
   as before.
+- **`profiles:`** — a top-level mapping of profile name → overlay, each deep-merged
+  *over* `defaults:` before the per-job merge when selected with `--profile NAME`
+  (or `$UJIN_PLAN_PROFILE`; the flag wins). A profile key replaces the same key in
+  `defaults:`, but a per-job key still wins over the profile, so precedence is
+  per-job > profile > `defaults:`. With no profile selected resolution is
+  byte-for-byte unchanged; an unknown name exits non-zero with a clean `ujin: …`
+  message listing the available profiles.
 - **`${VAR}` / `${VAR:-default}` / `${VAR:?message}`** — environment substitution
   expanded at file-read time. `${VAR:?message}` raises a clear error (naming the
   variable and including `message`) when `VAR` is unset or empty, so missing secrets
@@ -244,7 +255,9 @@ See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 Prefer one file over a directory? Mount a single **INGEST-PLAN** declaring many
 jobs at once — a top-level list of jobs, or a mapping with `jobs:` plus a shared
 `defaults:` block — and point ujin at it with `--plan` or `$UJIN_INGEST_PLAN`. It
-reuses the same `defaults:`/`include:`/`matrix:`/`vars:` layers and stable ids, so
+reuses the same `defaults:`/`include:`/`matrix:`/`vars:` layers and stable ids (plus
+an optional `profiles:` map of named overlays selected with `--profile` /
+`$UJIN_PLAN_PROFILE`), so
 re-loading upserts; a malformed plan or job is reported in `GET /health` without
 aborting startup. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
 
