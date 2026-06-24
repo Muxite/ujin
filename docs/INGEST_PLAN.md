@@ -235,6 +235,46 @@ Errors **never abort startup**:
   fails *just that job* — the remaining valid jobs still load — and is reported in
   `plan.failed` naming the offending job.
 
+## Introspecting the active plan (`GET /plan`)
+
+To see exactly which jobs the running server's active plan and workflows directory
+currently resolve to — without mutating anything — read the plan introspection
+endpoint:
+
+```bash
+curl localhost:8902/plan
+```
+
+`GET /plan` re-runs the **same** loaders and provenance plumbing as
+`ujin plan render --explain` (`defaults:`/`include:`/`matrix:`/`${VAR}` fully
+expanded), so each returned job names its originating source file and, for a
+`matrix:`/`for_each:`-expanded job, the matrix entry that produced it. It is purely
+read-only — it never creates, mutates, prunes, or reloads a job, so `GET /jobs` is
+identical before and after:
+
+```json
+{
+  "plan_path": "/data/ingest-plan.yaml",
+  "workflows_dir": "/workflows",
+  "jobs": [
+    {"id": "crossref", "provenance": {"source": "/data/ingest-plan.yaml", "matrix": null}},
+    {"id": "feed-tech", "provenance": {"source": "/data/ingest-plan.yaml",
+                                        "matrix": {"key": "matrix", "index": 0, "vars": {"slug": "tech"}}}},
+    {"id": "feed-science", "provenance": {"source": "/data/ingest-plan.yaml",
+                                           "matrix": {"key": "matrix", "index": 1, "vars": {"slug": "science"}}}}
+  ],
+  "failed": []
+}
+```
+
+`plan_path` is `null` when no `--plan`/`$UJIN_INGEST_PLAN` is configured (jobs then
+come only from `workflows_dir`); with neither configured, `jobs` is empty. Files or
+jobs that fail to resolve are reported in `failed` (`{id, error}`) exactly as the
+[`GET /health` plan block](#reporting-and-errors) lists them. If the server was
+started with [`--only`/`--exclude`](#job-id-selection----only-and---exclude), the
+plan jobs are filtered by the same selectors, matching what actually loaded. This is
+the live counterpart to the offline `ujin plan render --explain` CLI.
+
 ## Reloading a plan without restarting
 
 When the plan file changes, re-apply it in-process instead of restarting the server:

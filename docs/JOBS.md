@@ -103,6 +103,7 @@ GET    /jobs/{id}/content       latest obtained payload (the data ujin last got)
 GET    /jobs/{id}/results?limit=N  recent buffer of obtained results (per change)
 WS     /jobs/events             live change stream (all jobs)
 POST   /plugins/reload          re-import plugins -> {loaded, failed}
+GET    /plan                    read-only: jobs the active plan/workflows resolve to + provenance
 POST   /plan/reload             re-read the INGEST-PLAN -> {reloaded, path, loaded, failed}
 POST   /plan/reload?prune=true   …also remove plan-owned jobs gone from the file -> +{pruned}
 POST   /plan/reload?dry_run=true preview only -> {reloaded:false, dry_run:true, added, updated, unchanged}
@@ -111,6 +112,31 @@ POST   /plan/reload?dry_run=true preview only -> {reloaded:false, dry_run:true, 
 The `plan` field in `/health` is only present when `--plan`/`$UJIN_INGEST_PLAN` is
 configured; it lists `loaded` and `failed` job ids, mirroring `workflows`. Omitted
 entirely on no-plan deploys so `/health` stays byte-identical.
+
+`GET /plan` is a **read-only** introspection of what the active workflows directory
+and INGEST-PLAN currently resolve to. It re-runs the same loaders and provenance
+plumbing that back `ujin plan render --explain`, so every returned job carries its
+originating source file and — for `matrix:`/`for_each:`-expanded jobs — the matrix
+entry (key/index/vars) that produced it. It never creates, mutates, or deletes a
+job; it only reads. With neither a plan nor a populated workflows dir configured,
+`jobs` is empty:
+
+```jsonc
+// GET /plan
+{
+  "plan_path": "/etc/ujin/ingest-plan.yaml",   // null when no --plan/$UJIN_INGEST_PLAN
+  "workflows_dir": "/workflows",
+  "jobs": [
+    {"id": "crossref",   "provenance": {"source": "/etc/ujin/ingest-plan.yaml", "matrix": null}},
+    {"id": "feed-tech",  "provenance": {"source": "/etc/ujin/ingest-plan.yaml",
+                                         "matrix": {"key": "matrix", "index": 0, "vars": {"slug": "tech"}}}}
+  ],
+  "failed": []   // {id, error} per file/job that did not resolve, as in /health
+}
+```
+
+Unresolvable files or jobs are reported in `failed` exactly as `GET /health` lists
+them. See [INGEST_PLAN.md](INGEST_PLAN.md#introspecting-the-active-plan-get-plan).
 
 `POST /plan/reload` re-reads the configured plan file and upserts its jobs by their
 stable ids — picking up added/changed jobs without restarting the server — then
