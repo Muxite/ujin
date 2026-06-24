@@ -4,7 +4,7 @@ An **INGEST-PLAN** is a single YAML/JSON file that declares **many jobs at once*
 It's the file-driven counterpart to the [workflows](WORKFLOWS.md) directory for
 when you'd rather mount *one file* than a folder: same `source → transforms →
 sinks → schedule` job shape, same engine, same durability, and the same additive
-conveniences (`defaults:`, `include:`/`use:`, `matrix:`/`for_each:`).
+conveniences (`defaults:`, `include:`/`use:`, `vars:`, `profiles:`, `matrix:`/`for_each:`).
 
 A plan is **strictly additive**: one that uses none of `defaults`/`include`/
 `matrix` loads to exactly the jobs of the equivalent plain list, and a deploy with
@@ -693,8 +693,8 @@ ujin plan validate ./ingest-plan.yaml --strict --json
 
 Use `ujin plan render` to print every fully-expanded `JobSpec` — after all five
 resolution layers (`defaults:` deep-merge, `include:`/`use:` fragments,
-`matrix:`/`for_each:` fan-out, `${VAR}` substitution) — in human-readable YAML,
-using the **same loaders** as `jobs-serve` and `plan validate`:
+`matrix:`/`for_each:` fan-out, `vars:` defaults, and `${VAR}` substitution) — in
+human-readable YAML, using the **same loaders** as `jobs-serve` and `plan validate`:
 
 ```bash
 ujin plan render ./ingest-plan.yaml          # YAML, one document per job
@@ -759,7 +759,7 @@ job showing its id, source kind (and url if present), schedule, and number of si
 ```
 
 `--summary` reuses the same loaders as the normal render path, so resolution
-(`defaults:`, `include:`/`use:`, `matrix:`/`for_each:`, profiles, `${VAR}`) is
+(`defaults:`, `include:`/`use:`, `matrix:`/`for_each:`, `vars:`, profiles, `${VAR}`) is
 identical. It composes with `--only`/`--exclude`, `--env-file`, and `--profile`;
 the default `ujin plan render` output (no flag) is byte-for-byte unchanged.
 
