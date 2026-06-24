@@ -283,3 +283,62 @@ def test_diff_invalid_old_schema_exits_nonzero(tmp_path, capsys):
     rc = main(["plan", "diff", str(bad), str(new)])
     assert rc != 0
     assert "Traceback" not in capsys.readouterr().err
+
+
+# ── --exit-code / --check flag ──────────────────────────────────────────────── #
+
+def test_exit_code_identical_plans_exits_zero(tmp_path, capsys):
+    plan = _plan(tmp_path, "plan.yaml", [{"id": "alpha", **_minimal_job("https://a/")}])
+    rc = main(["plan", "diff", str(plan), str(plan), "--exit-code"])
+    assert rc == 0
+    assert "no changes" in capsys.readouterr().out
+
+
+def test_check_alias_identical_plans_exits_zero(tmp_path, capsys):
+    plan = _plan(tmp_path, "plan.yaml", [{"id": "alpha", **_minimal_job("https://a/")}])
+    rc = main(["plan", "diff", str(plan), str(plan), "--check"])
+    assert rc == 0
+
+
+def test_exit_code_differing_plans_exits_nonzero(tmp_path, capsys):
+    old = _plan(tmp_path, "old.yaml", [{"id": "alpha", **_minimal_job("https://a/")}])
+    new = _plan(tmp_path, "new.yaml", [{"id": "beta", **_minimal_job("https://b/")}])
+    rc = main(["plan", "diff", str(old), str(new), "--exit-code"])
+    assert rc != 0
+
+
+def test_no_exit_code_differing_plans_exits_zero(tmp_path, capsys):
+    # Without --exit-code, a diff always exits zero on successful resolve.
+    old = _plan(tmp_path, "old.yaml", [{"id": "alpha", **_minimal_job("https://a/")}])
+    new = _plan(tmp_path, "new.yaml", [{"id": "beta", **_minimal_job("https://b/")}])
+    rc = main(["plan", "diff", str(old), str(new)])
+    assert rc == 0
+
+
+def test_exit_code_changed_job_exits_nonzero(tmp_path, capsys):
+    old = _plan(tmp_path, "old.yaml", [{"id": "alpha", **_minimal_job("https://a/")}])
+    new = _plan(tmp_path, "new.yaml", [{"id": "alpha", **_minimal_job("https://a2/")}])
+    rc = main(["plan", "diff", str(old), str(new), "--exit-code"])
+    assert rc != 0
+
+
+def test_exit_code_json_output_unchanged(tmp_path, capsys):
+    # --exit-code must not affect --json output shape.
+    old = _plan(tmp_path, "old.yaml", [{"id": "alpha", **_minimal_job("https://a/")}])
+    new = _plan(tmp_path, "new.yaml", [{"id": "beta", **_minimal_job("https://b/")}])
+    rc_with = main(["plan", "diff", str(old), str(new), "--json", "--exit-code"])
+    out_with = capsys.readouterr().out
+    rc_without = main(["plan", "diff", str(old), str(new), "--json"])
+    out_without = capsys.readouterr().out
+    assert json.loads(out_with) == json.loads(out_without)
+    # exit codes differ
+    assert rc_with != 0
+    assert rc_without == 0
+
+
+def test_exit_code_unresolvable_input_still_nonzero(tmp_path, capsys):
+    # Unresolvable inputs produce non-zero regardless of --exit-code.
+    plan = _plan(tmp_path, "plan.yaml", [{"id": "alpha", **_minimal_job()}])
+    rc = main(["plan", "diff", str(tmp_path / "missing.yaml"), str(plan), "--exit-code"])
+    assert rc != 0
+    assert "ujin:" in capsys.readouterr().err
