@@ -71,6 +71,10 @@ ujin jobs-serve --workflows ./examples/workflows      # or set UJIN_WORKFLOWS_DI
   "workflows": { "dir": "/workflows", "loaded": ["crossref-papers", "example-page"], "failed": [] } }
 ```
 
+Each entry in `failed` is `{"id": "<stem>", "error": "<message>"}` — the workflow
+file stem and the first error (bad YAML, missing include, unknown kind, …). One bad
+file never prevents the others from loading.
+
 ## Defaults, fragments, and matrix fan-out
 
 When you run **many similar workflows**, three optional, purely-additive conveniences

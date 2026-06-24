@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+- **docs(sync): audit external-config surface; fix INGEST_PLAN.md stable-id rule;
+  add `$UJIN_WORKFLOWS_DIR`/`--workflows` to README jobs paragraph; document
+  `failed`-entry shape in WORKFLOWS.md.** Corrected the stable-ids section of
+  `docs/INGEST_PLAN.md`: a single-entry plan derives id `<plan-stem>` (no index),
+  not `<plan-stem>-0` — matching the single-file-vs-jobs-list asymmetry already
+  documented in WORKFLOWS.md. Added `$UJIN_WORKFLOWS_DIR` and `--workflows`
+  references to README's workflows paragraph so both directory-driven and
+  single-file (`--plan`/`$UJIN_INGEST_PLAN`) paths are named alongside each other.
+  Added the `{"id","error"}` failed-entry shape to the WORKFLOWS.md health-response
+  example so the per-file error-reporting behaviour is fully described.
 - **docs(jobs): sync JOBS.md REST surface with shipped ingest-plan loader.** Added
   the optional `plan` field to the `/health` response description and expanded the
   file-driven-jobs cross-reference to name the four external-config capabilities
