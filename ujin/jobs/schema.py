@@ -117,7 +117,7 @@ def plan_schema() -> dict[str, Any]:
         },
         "additionalProperties": True,
     }
-    return {
+    schema_root = {
         "$schema": SCHEMA_DIALECT,
         "$id": SCHEMA_ID,
         "title": "ujin INGEST-PLAN / workflow file",
@@ -173,3 +173,130 @@ def plan_schema() -> dict[str, Any]:
             "fragmentRef": fragment_ref,
         },
     }
+    return schema_root
+
+
+# ── minimal, stdlib-only validator ──────────────────────────────────────────── #
+#
+# ``ujin plan validate --schema`` checks the *unresolved* document against
+# :func:`plan_schema` without depending on a third-party validator. We hand-roll a
+# tiny walker over the schema dict rather than pull in ``jsonschema`` so installing
+# and running ujin needs no new mandatory dependency. The walker interprets only the
+# handful of constructs :func:`plan_schema` actually uses — ``type``, ``properties``,
+# ``items``, ``$ref`` (into ``$defs``), and ``anyOf`` — which is exactly enough to
+# reject a structurally malformed plan (a scalar document, a non-list ``jobs:``, a
+# string ``source:``) while accepting every plan the loader would. ``additionalProperties``
+# stays open in the schema, so unknown keys are never reported here — that stays the
+# job of the advisory ``--strict`` unknown-key check.
+
+
+def _json_type_name(value: Any) -> str:
+    """Return the JSON Schema type name for a YAML/JSON-decoded Python value."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):  # bool before int — bool is a subclass of int
+        return "boolean"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+
+def _matches_type(value: Any, type_name: str) -> bool:
+    """Return True when *value* satisfies a single JSON Schema ``type`` name."""
+    if type_name == "object":
+        return isinstance(value, dict)
+    if type_name == "array":
+        return isinstance(value, list)
+    if type_name == "string":
+        return isinstance(value, str)
+    if type_name == "boolean":
+        return isinstance(value, bool)
+    if type_name == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if type_name == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if type_name == "null":
+        return value is None
+    return True  # an unrecognized type name constrains nothing
+
+
+def _resolve_ref(subschema: dict, defs: dict) -> dict:
+    """Follow a ``$ref`` into ``$defs`` (siblings like ``description`` are ignored)."""
+    ref = subschema.get("$ref")
+    if not ref:
+        return subschema
+    return defs.get(ref.rsplit("/", 1)[-1], {})
+
+
+def _expected_types(subschema: dict, defs: dict) -> list[str]:
+    """List the JSON type names *subschema* accepts (across ``anyOf`` branches)."""
+    names: list[str] = []
+    if "anyOf" in subschema:
+        for branch in subschema["anyOf"]:
+            names.extend(_expected_types(_resolve_ref(branch, defs), defs))
+    else:
+        t = subschema.get("type")
+        if isinstance(t, list):
+            names.extend(t)
+        elif t:
+            names.append(t)
+    seen: list[str] = []
+    for n in names:  # dedupe, preserve order
+        if n not in seen:
+            seen.append(n)
+    return seen
+
+
+def _walk(value: Any, subschema: dict, path: str, defs: dict, errors: list[str]) -> None:
+    subschema = _resolve_ref(subschema, defs)
+
+    if "anyOf" in subschema:
+        for branch in subschema["anyOf"]:
+            trial: list[str] = []
+            _walk(value, branch, path, defs, trial)
+            if not trial:
+                return  # value satisfies at least one branch
+        expected = " or ".join(_expected_types(subschema, defs)) or "a different shape"
+        errors.append(f"{path}: expected {expected}, got {_json_type_name(value)}")
+        return
+
+    types = _expected_types(subschema, defs)
+    if types and not any(_matches_type(value, t) for t in types):
+        errors.append(f"{path}: expected {' or '.join(types)}, got {_json_type_name(value)}")
+        return  # type mismatch — descending further would only add noise
+
+    props = subschema.get("properties")
+    if props and isinstance(value, dict):
+        for key, child in props.items():
+            if key in value:
+                _walk(value[key], child, f"{path}.{key}", defs, errors)
+
+    items = subschema.get("items")
+    if items and isinstance(value, list):
+        for i, elem in enumerate(value):
+            _walk(elem, items, f"{path}[{i}]", defs, errors)
+
+
+def validate_document(document: Any, schema: "dict[str, Any] | None" = None) -> list[str]:
+    """Return structural violations of *document* against the INGEST-PLAN schema.
+
+    *document* is the **unresolved** YAML/JSON-decoded value (before ``defaults:``
+    merge, ``include:`` splicing, or ``matrix:`` fan-out). The return value is a list
+    of human-readable messages, each naming the offending location as a JSON path
+    (e.g. ``$``, ``$.jobs``, ``$.jobs[0].source``); an empty list means the document
+    conforms. Pure stdlib — it interprets the dict from :func:`plan_schema` directly
+    and pulls in no third-party validator.
+    """
+    if schema is None:
+        schema = plan_schema()
+    errors: list[str] = []
+    _walk(document, schema, "$", schema.get("$defs", {}), errors)
+    return errors

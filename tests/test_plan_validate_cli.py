@@ -660,3 +660,155 @@ def test_for_each_scalar_value_message_mentions_both_shapes(tmp_path, capsys):
     assert "FAIL" in out
     assert "list" in out.lower()
     assert "mapping" in out.lower()
+
+
+# ── --schema: opt-in JSON-Schema shape check of the unresolved document ──────── #
+#
+# `--schema` checks the UNRESOLVED plan/workflow doc against the schema
+# `ujin plan schema` emits. It is strictly additive: off by default (output and exit
+# codes byte-for-byte unchanged), on it reports structural violations naming the
+# offending JSON path. Shipped examples all pass; deliberately-malformed docs fail.
+
+# Top-level shipped plan files — those `plan validate <file>` loads standalone.
+# marketplace_profiles.yaml is a marketplace source-profiles reference, not a plan;
+# the single-job workflow files under workflows/ load as a directory, not as plan
+# files (the loader requires a `jobs:` key for a mapping), and are covered by the
+# workflows-dir test below plus the document-level checks in test_plan_schema_cli.py.
+_SCHEMA_PLAN_FILES = [
+    p for p in sorted(_EXAMPLES.glob("*.yaml")) if p.name != "marketplace_profiles.yaml"
+]
+
+
+def test_schema_plan_files_discovered():
+    # Guard against a glob that finds nothing (vacuously passing acceptance test).
+    names = {p.name for p in _SCHEMA_PLAN_FILES}
+    assert "ingest-plan.yaml" in names
+    assert "jobs.crossref.yaml" in names
+    assert len(_SCHEMA_PLAN_FILES) >= 5
+
+
+@pytest.mark.parametrize("path", _SCHEMA_PLAN_FILES, ids=lambda p: p.name)
+def test_schema_accepts_every_shipped_example(path, capsys, monkeypatch):
+    monkeypatch.delenv("INGEST_URL", raising=False)
+    rc = main(["plan", "validate", str(path), "--schema", "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert rc == 0, data
+    assert data["schema_errors"] == []
+
+
+def test_schema_accepts_workflows_dir(capsys):
+    # The workflows directory (each *.yaml a standalone workflow) passes --schema.
+    rc = main(["plan", "validate", str(_EXAMPLES / "workflows"), "--schema", "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert rc == 0, data
+    assert data["schema_errors"] == []
+
+
+def test_schema_rejects_non_list_jobs_names_path(tmp_path, capsys):
+    plan = tmp_path / "plan.yaml"
+    plan.write_text("jobs: not-a-list\n", encoding="utf-8")
+    rc = main(["plan", "validate", str(plan), "--schema"])
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "FAIL" in out
+    assert "$.jobs" in out                # names the offending JSON path
+    assert "expected array" in out
+
+
+def test_schema_rejects_string_source_names_job_index(tmp_path, capsys):
+    plan = tmp_path / "plan.yaml"
+    _write(plan, {"jobs": [{"id": "j", "source": "https://example.com/"}]})
+    rc = main(["plan", "validate", str(plan), "--schema"])
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "$.jobs[0].source" in out      # names job index AND key
+    assert "expected object" in out
+
+
+def test_schema_rejects_scalar_document(tmp_path, capsys):
+    plan = tmp_path / "plan.yaml"
+    plan.write_text("42\n", encoding="utf-8")
+    rc = main(["plan", "validate", str(plan), "--schema"])
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "$:" in out
+    assert "object or array" in out
+
+
+def test_schema_json_reports_schema_errors_with_location(tmp_path, capsys):
+    plan = tmp_path / "plan.yaml"
+    _write(plan, {"matrix": "everything"})
+    rc = main(["plan", "validate", str(plan), "--schema", "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert rc != 0
+    assert data["ok"] is False
+    assert len(data["schema_errors"]) == 1
+    assert "$.matrix" in data["schema_errors"][0]
+    # Both valid shapes named
+    assert "array" in data["schema_errors"][0]
+    assert "object" in data["schema_errors"][0]
+
+
+def test_schema_workflow_dir_names_offending_file(tmp_path, capsys):
+    # A valid workflow alongside a structurally-broken one: the broken file's
+    # schema error must name that file, and the run must fail.
+    _write(tmp_path / "good.yaml", _minimal_job("https://a/"))
+    (tmp_path / "bad.yaml").write_text("source: 123\n", encoding="utf-8")
+    rc = main(["plan", "validate", str(tmp_path), "--schema"])
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "bad.yaml" in out
+    assert "$.source" in out
+
+
+def test_schema_skips_unparseable_yaml_no_double_report(tmp_path, capsys):
+    # Broken YAML is the loader's domain; the schema pass must not crash or
+    # duplicate it — the file still fails (via the loader), just not twice.
+    plan = tmp_path / "broken.yaml"
+    plan.write_text("key: [unclosed bracket", encoding="utf-8")
+    rc = main(["plan", "validate", str(plan), "--schema", "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert rc != 0
+    assert data["schema_errors"] == []    # parse error skipped here
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_schema_empty_file_no_schema_error(tmp_path, capsys):
+    # A comment-only file decodes to None — declares no document, so no shape error.
+    plan = tmp_path / "empty.yaml"
+    plan.write_text("# just a comment\n", encoding="utf-8")
+    main(["plan", "validate", str(plan), "--schema", "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert data["schema_errors"] == []
+
+
+# ── --schema is strictly additive (no flag → byte-for-byte unchanged) ────────── #
+
+def test_without_schema_json_omits_schema_errors_key(tmp_path, capsys):
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [{"id": "j", **_minimal_job()}])
+    main(["plan", "validate", str(plan), "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert "schema_errors" not in data    # additive: key absent without the flag
+
+
+def test_without_schema_output_identical_for_malformed_input(tmp_path, capsys):
+    # The same structurally-malformed plan, validated WITHOUT --schema, must
+    # produce exactly the output (and exit code) it did before this flag existed.
+    plan = tmp_path / "plan.yaml"
+    plan.write_text("jobs: not-a-list\n", encoding="utf-8")
+    rc = main(["plan", "validate", str(plan), "--json"])
+    captured = capsys.readouterr().out
+    data = json.loads(captured)
+    assert rc != 0
+    assert set(data) == {"ok", "resolved", "failed", "warnings", "strict"}
+    assert "schema:" not in captured      # no schema lines leak in
+
+
+def test_without_schema_valid_plan_unchanged(tmp_path, capsys):
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [{"id": "alpha", **_minimal_job("https://a/")}])
+    rc = main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out == "ok  alpha\n"            # human output unchanged, no schema noise
