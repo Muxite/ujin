@@ -131,6 +131,28 @@ A whole-value placeholder keeps the variable's native type
 *before* matrix runs, so a `{{ var }}` placeholder living in a shared default
 resolves per entry.
 
+The matrix value may also be a **`{ from: <path> }`** mapping naming an external
+**data file** that supplies the list of variable maps, instead of an inline list:
+
+```yaml
+jobs:
+  - id: "search-{{ slug }}"
+    matrix:
+      from: data/marketplace-searches.yaml   # a non-empty list of variable maps
+    source:
+      kind: api
+      config: { url: "https://api.example.com/search?q={{ query }}" }
+```
+
+The `from:` path resolves exactly the way an `include:`/`use:` fragment does —
+relative to **this plan's directory**, then `$UJIN_WORKFLOWS_DIR` — and the loaded
+rows drive the same fan-out, substitution, and stable-id rules as an inline list, so
+`matrix: { from: rows.yaml }` produces byte-for-byte the same jobs as inlining
+`rows.yaml`'s contents. A missing/unreadable data file, or one that is not a
+non-empty list of variable maps, fails *that* job (see [errors](#reporting-and-errors))
+rather than aborting the plan. The shipped `examples/matrix-from-file.yaml`
+(+ `examples/data/marketplace-searches.yaml`) is a runnable file-backed plan.
+
 ## Stable ids
 
 Every resulting job gets a **stable id**, so re-loading the same plan **upserts**

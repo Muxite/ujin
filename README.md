@@ -116,7 +116,8 @@ at once. Three additive layers keep large plans DRY:
 - **`defaults:`** — a top-level mapping deep-merged under every job; per-job keys win.
 - **`include:`/`use:`** — pull in a fragment file for a shared sink, schedule, or
   transform pipeline; paths resolve relative to the plan file, then `$UJIN_WORKFLOWS_DIR`.
-- **`matrix:`/`for_each:`** — a list of variable maps; ujin substitutes each into
+- **`matrix:`/`for_each:`** — a list of variable maps (inline, or a `{ from: <path> }`
+  data file resolved like an `include:` fragment); ujin substitutes each into
   `{{ var }}` placeholders across the source/transforms/sinks/schedule, emitting one
   job per entry with a stable, deterministic id so reloads upsert rather than duplicate.
 - **`${VAR}` / `${VAR:-default}` / `${VAR:?message}`** — environment substitution
@@ -183,9 +184,10 @@ and ujin sets it up on startup, runs it, and hands back what it obtained at
 many similar workflows DRY with an optional top-level `defaults:` block (deep-merged
 under each job, per-job keys win) and `include:`/`use:` fragment files for shared
 sinks, schedules, or transform pipelines; or fan one template into many with a
-`matrix:`/`for_each:` key — a list of variable maps, each substituted into the
-`source`/`transforms`/`sinks`/`schedule`, with a stable per-entry id so reloads
-upsert rather than duplicate. See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
+`matrix:`/`for_each:` key — a list of variable maps (inline, or a `{ from: <path> }`
+data file), each substituted into the `source`/`transforms`/`sinks`/`schedule`, with
+a stable per-entry id so reloads upsert rather than duplicate.
+See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
 Prefer one file over a directory? Mount a single **INGEST-PLAN** declaring many
 jobs at once — a top-level list of jobs, or a mapping with `jobs:` plus a shared
