@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **tests(schema): close schema.py coverage gap to 100%; extend profile.py edge-case coverage.** Added unit tests for the stdlib-only `_json_type_name`, `_matches_type`, and `_expected_types` helpers in `ujin/jobs/schema.py` to cover all previously-missed branches — boolean/float/exotic-type returns in `_json_type_name`; "boolean"/"integer"/"null"/unknown-type paths in `_matches_type`; the no-`type`-key `elif t:` false branch and dedup loop arc in `_expected_types` — bringing `schema.py` from 88% to 100% line+branch coverage. Also added five `apply_link_profile`/`apply_article_profile` edge-case tests in `test_extract_profile.py` covering the slop-URL `continue` (line 97), shorter-duplicate-title no-update branch (117→119), no-body-selector early return (135→137), absent `published_meta` skip (150→157), and meta-tag-not-found skip (154→157), raising `profile.py` from 95% to 98%. Total suite coverage rises to 98.31% (2167 tests, 0 failures). No production-code changes.
+
 ## 0.38.0 — 2026-06-24
 
 - **docs(sync): add `profiles:` to the workflows-dir paragraph in README.md.** The workflows-directory description in the README quickstart named four additive layers (`defaults:`, `include:`/`use:`, `matrix:`/`for_each:`, `vars:`) but omitted `profiles:` overlays, even though the feature-list bullet and the INGEST-PLAN paragraph already mentioned it. Added a sentence describing the `profiles:` block, its `--profile`/`$UJIN_PLAN_PROFILE` selection, and the lenient per-file behaviour (a file without `profiles:` is left unchanged). No production-code changes.

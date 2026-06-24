@@ -184,3 +184,74 @@ def test_select_text():
     assert _select_text(tree, "p") is None     # empty text
     assert _select_text(tree, ".nope") is None
     assert _select_text(tree, None) is None
+
+
+# ── edge-case branches in apply_link_profile ────────────────────────────────
+
+def test_link_profile_slop_url_is_skipped():
+    """Line 97: _is_slop_url returns True for a path containing a slop
+    segment (e.g. 'games'), so the anchor is skipped before text is read."""
+    slop_html = (
+        "<html><body>"
+        '<a class="story" href="/games/todays-crossword">Play crossword online now</a>'
+        '<a class="story" href="/2026/06/verified-story">'
+        "The primary news headline reported on today</a>"
+        "</body></html>"
+    )
+    links = apply_link_profile(slop_html, BASE, _profile())
+    urls = {l.url for l in links}
+    assert not any("/games/" in u for u in urls)
+    assert any("/2026/" in u for u in urls)
+
+
+def test_link_profile_shorter_duplicate_title_not_overwritten():
+    """Branch 117->119: when a duplicate URL arrives with shorter text, the
+    condition (existing is None OR longer) is False so seen[canon] is NOT
+    updated and execution jumps to the max_links guard at line 119."""
+    html = (
+        "<html><body>"
+        '<a class="story" href="/2026/06/story">'
+        "A very long detailed headline that is quite informative indeed today</a>"
+        '<a class="story" href="/2026/06/story">'
+        "A shorter repeat headline for the same page</a>"
+        "</body></html>"
+    )
+    links = apply_link_profile(html, BASE, _profile())
+    found = [l for l in links if "/2026/06/story" in l.url]
+    assert len(found) == 1
+    assert "very long" in found[0].text   # longer first title kept
+
+
+# ── edge-case branches in apply_article_profile ──────────────────────────────
+
+def test_article_profile_no_body_selector_returns_none():
+    """Branch 135->137: when profile.body is falsy the css_first call at
+    line 136 is skipped, body_node stays None, and the function returns None."""
+    art = apply_article_profile(ART_HTML, BASE, ArticleProfile())
+    assert art is None
+
+
+def test_article_profile_without_published_meta():
+    """Branch 150->157: when profile.published_meta is None the entire
+    published-lookup block is skipped and published is None in the result."""
+    art = apply_article_profile(ART_HTML, BASE, ArticleProfile(body=".article-body"))
+    assert art is not None
+    assert art.published is None
+
+
+def test_article_profile_published_meta_not_found_in_html():
+    """Branch 154->157: published_meta is set but neither property= nor
+    name= meta tag exists → meta stays None, published block is skipped."""
+    html_no_meta = (
+        "<html><body>"
+        '<div class="article-body">'
+        "<p>A sufficiently long paragraph with enough content to pass the threshold.</p>"
+        "<p>Another paragraph so there is ample article text present here.</p>"
+        "</div></body></html>"
+    )
+    art = apply_article_profile(
+        html_no_meta, BASE,
+        ArticleProfile(body=".article-body", published_meta="article:published_time"),
+    )
+    assert art is not None
+    assert art.published is None
