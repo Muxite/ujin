@@ -782,6 +782,62 @@ def test_schema_empty_file_no_schema_error(tmp_path, capsys):
     assert data["schema_errors"] == []
 
 
+# ── warning messages include the plan-file name (schema key location) ─────────── #
+#
+# `_key_problems` formats every advisory message as:
+#   "ujin: plan <filename>: unrecognized top-level key <key>"      (top-level)
+#   "ujin: plan job <id> in <filename>: unrecognized key <key>"    (per-job)
+# No existing test verifies that the FILE NAME (not just the key/job-id) surfaces
+# in the output.  These four tests assert both the file name and the offending key
+# appear, using substring checks rather than pinning exact wording.
+
+
+def test_top_level_key_warning_names_plan_file(tmp_path, capsys):
+    """Top-level unrecognised-key warning includes both the plan file name and the key."""
+    plan = tmp_path / "named-plan.yaml"
+    _write(plan, {"defaluts": {}, "jobs": [{"id": "j", **_minimal_job()}]})
+    main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert "named-plan.yaml" in out    # file name surfaces (not just the key)
+    assert "defaluts" in out           # offending key also present
+
+
+def test_top_level_key_warning_names_plan_file_in_json(tmp_path, capsys):
+    """Top-level unrecognised-key warning in --json mode includes the plan file name."""
+    plan = tmp_path / "named-plan.yaml"
+    _write(plan, {"defaluts": {}, "jobs": [{"id": "j", **_minimal_job()}]})
+    main(["plan", "validate", str(plan), "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert len(data["warnings"]) == 1
+    w = data["warnings"][0]
+    assert "named-plan.yaml" in w      # file name surfaces in the JSON warning field
+    assert "defaluts" in w             # offending key also present
+
+
+def test_per_job_key_warning_names_file_and_job(tmp_path, capsys):
+    """Per-job unrecognised-key warning surfaces the plan file name AND the job id."""
+    plan = tmp_path / "myjobs.yaml"
+    _write(plan, [{"id": "myworker", **_minimal_job(), "shedule": {"mode": "cron"}}])
+    main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert "myjobs.yaml" in out        # file name surfaces
+    assert "myworker" in out           # job id surfaces
+    assert "shedule" in out            # offending key surfaces
+
+
+def test_per_job_key_warning_in_json_names_file_job_and_key(tmp_path, capsys):
+    """Per-job unrecognised-key warning in --json includes file name, job id, and key."""
+    plan = tmp_path / "myjobs.yaml"
+    _write(plan, [{"id": "myworker", **_minimal_job(), "shedule": {"mode": "cron"}}])
+    main(["plan", "validate", str(plan), "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert len(data["warnings"]) == 1
+    w = data["warnings"][0]
+    assert "myjobs.yaml" in w          # file name in JSON warning field
+    assert "myworker" in w             # job id in JSON warning field
+    assert "shedule" in w              # offending key in JSON warning field
+
+
 # ── --schema is strictly additive (no flag → byte-for-byte unchanged) ────────── #
 
 def test_without_schema_json_omits_schema_errors_key(tmp_path, capsys):

@@ -1,6 +1,6 @@
 # Recipe: end-to-end external-config flow
 
-**What this shows:** how the five additive config layers — `defaults:`, `include:` fragments, `matrix:` fan-out, `vars:` defaults, and `profiles:` overlays — compose inside a single mounted **INGEST-PLAN** file, and how to validate and inspect the result without starting the server.
+**What this shows:** how the six additive resolution layers — `defaults:`, `include:` fragments, `matrix:` fan-out, `vars:` defaults, `profiles:` overlays, and `${VAR}` env substitution — compose inside a single mounted **INGEST-PLAN** file, and how to validate and inspect the result without starting the server.
 
 References: [INGEST_PLAN.md](../INGEST_PLAN.md), [WORKFLOWS.md](../WORKFLOWS.md), [JOBS.md](../JOBS.md).
 
@@ -102,17 +102,18 @@ jobs:
 
 | Layer | When it runs | Effect |
 |---|---|---|
+| `${VAR}` env substitution | file-read time | expands `${VAR}`, `${VAR:-default}`, `${VAR:?msg}` before YAML parsing |
 | `include:` fragments | file-load time | inline the fragment in-place |
 | `defaults:` deep-merge | per-job | shared keys merged *under* each job (job wins) |
+| `profiles:` overlay | before per-job merge | a named overlay deep-merged *over* `defaults:` |
 | `matrix:` fan-out | per-entry | one expanded job per variable map |
 | `vars:` defaults | per-placeholder | backfills any `{{ var }}` left unset by matrix or env |
-| `profiles:` overlay | before per-job merge | a named overlay deep-merged *over* `defaults:` |
 
-They run in that order: fragments first, then defaults merged in, then matrix
-expands the result, then `vars:` fills any remaining placeholders. A `profiles:`
-overlay (when selected with `--profile NAME`) is applied between `defaults:` and
-the per-job merge. A file that uses none of them loads identically to a plain
-list of jobs.
+They run in that order: env substitution first (at file-read time), then fragments
+inlined, then defaults merged in, then the profile overlay (when `--profile NAME` is
+selected) applied over defaults, then matrix expands the result, then `vars:` fills
+any remaining `{{ var }}` placeholders. A file that uses none of them loads
+identically to a plain list of jobs.
 
 ---
 
