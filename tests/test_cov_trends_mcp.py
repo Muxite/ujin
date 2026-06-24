@@ -269,6 +269,17 @@ async def test_x_brave_empty_list_returns_empty(x_legs):
     assert result.posts == []
 
 
+# ── ujin/mcp/__init__.py ─────────────────────────────────────────────────────
+
+
+def test_mcp_package_unknown_attr_raises():
+    # __getattr__ raises AttributeError for names not in __all__ (line 19)
+    import ujin.mcp as _mcp
+
+    with pytest.raises(AttributeError, match="has no attribute"):
+        _ = _mcp.this_does_not_exist
+
+
 # ── ujin/mcp/server.py ───────────────────────────────────────────────────────
 
 mcp_sdk = pytest.importorskip("mcp")
