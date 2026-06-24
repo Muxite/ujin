@@ -217,6 +217,47 @@ schedule:
 
 See `examples/workflows/marketplace-search.yaml` for a runnable matrix template.
 
+#### File-backed matrix — `matrix: { from: <path> }`
+
+Instead of an inline list, the matrix value may be a **`{ from: <path> }`** mapping
+naming an external **data file** that supplies the list of variable maps. This keeps
+the set of rows (the saved searches, the regions, …) in its own file so it can
+change without editing the job definition — or be mounted / version-controlled
+separately:
+
+```yaml
+# /workflows/marketplace-search.yaml
+matrix:
+  from: data/marketplace-searches.yaml   # a list of variable maps, one per job
+
+id: "search-{{ slug }}"
+source:
+  kind: api
+  config: { url: "https://api.example.com/search?q={{ query }}&min_price={{ floor }}" }
+```
+
+```yaml
+# /workflows/data/marketplace-searches.yaml — a NON-EMPTY top-level list of maps
+- { slug: laptop,  query: "gaming laptop", floor: 500 }
+- { slug: gpu,     query: "rtx 4090",      floor: 800 }
+- { slug: monitor, query: "4k monitor",    floor: 200 }
+```
+
+- **Path resolution.** The `from:` path resolves exactly like an `include:`/`use:`
+  fragment — relative to the **containing file's directory**, then
+  `$UJIN_WORKFLOWS_DIR`. Keep data files in a **subdirectory** (e.g. `data/`) so the
+  non-recursive startup scan never loads them as standalone workflows.
+- **Equivalent to inlining.** The loaded rows drive the same fan-out, `{{ var }}`
+  substitution, and stable-id rules as an inline list — `matrix: { from: rows.yaml }`
+  produces byte-for-byte the same jobs as pasting `rows.yaml`'s contents under
+  `matrix:`. `${VAR}` is expanded in the data file at read time, as everywhere else.
+- **Errors are contained.** A missing/unreadable data file, or one that is not a
+  non-empty list of variable maps, fails just that workflow with an actionable error
+  in the `failed` list (`GET /health`); other workflows still load.
+
+See `examples/matrix-from-file.yaml` (+ `examples/data/marketplace-searches.yaml`)
+for a runnable file-backed matrix.
+
 ## Collect — the container does the job
 
 Each workflow is driven by the same [adaptive engine](../README.md#how-it-works)

@@ -231,9 +231,10 @@ def _resolve_includes(node: Any, root: Path, seen: "tuple[Path, ...]" = ()) -> A
 #
 # A self-contained, additive step that runs *after* defaults/include resolution
 # (Track 1) and *before* id derivation: a job mapping carrying ``matrix:`` (alias
-# ``for_each:``) — a list of variable maps — is fanned into one job per map, with
-# each map's variables substituted into every ``{{ var }}`` placeholder across the
-# template (source/transforms/sinks/schedule/name/id/...). Kept in its own code
+# ``for_each:``) — a list of variable maps, or a ``{from: <path>}`` mapping naming
+# an external data file that supplies that list — is fanned into one job per map,
+# with each map's variables substituted into every ``{{ var }}`` placeholder across
+# the template (source/transforms/sinks/schedule/name/id/...). Kept in its own code
 # path so it neither entangles with, nor conflicts much with, the includes work.
 # A file carrying neither key passes through structurally unchanged.
 
@@ -272,21 +273,73 @@ def _subst_vars(node: Any, vars: dict[str, Any]) -> Any:
     return node
 
 
-def _expand_matrix(entry: dict, base_id: str) -> list:
-    """Fan one job mapping out over its ``matrix:``/``for_each:`` list.
+def _load_matrix_file(value: dict, key: str, root: "Path | None") -> list:
+    """Load matrix rows from an external data file (``matrix: {from: <path>}``).
 
-    Returns one dict per variable map, each a copy of *entry* (minus the matrix
-    key) with the map's variables substituted in. A stable, distinct id/name is
-    derived per generated job: an explicit ``id`` template (e.g.
-    ``id: feed-{{ slug }}``) is honored after substitution, otherwise
-    ``<base_id>-<index>``. Raises ``ValueError`` (so the file lands in the
-    ``failed`` list, not aborting startup) on a malformed matrix or colliding ids.
+    The mapping value must carry exactly a ``from:`` string naming a YAML/JSON data
+    file. The path is resolved *the same way an ``include:``/``use:`` fragment is*
+    — relative to the containing file's directory, then ``$UJIN_WORKFLOWS_DIR`` —
+    via :func:`_resolve_fragment_path`. ``${VAR}`` is expanded at read time, like
+    every other workflow/plan file. The file must parse to a **non-empty list of
+    variable maps** (the same shape an inline ``matrix:`` list would hold).
+
+    Every failure (a bad ``from:``, a missing/unreadable file, a file that is not a
+    non-empty list of maps) raises ``ValueError`` naming the offending path, so the
+    containing workflow/plan lands in the loader's ``failed`` list (``GET /health``)
+    rather than aborting startup.
+    """
+    import yaml
+
+    ref = value.get("from")
+    extra = sorted(k for k in value if k != "from")
+    if not isinstance(ref, str) or not ref:
+        raise ValueError(
+            f"`{key}: {{from: ...}}` needs a `from:` data-file path (a string)"
+        )
+    if extra:
+        raise ValueError(
+            f"`{key}: {{from: ...}}` accepts only `from:`, not {extra}"
+        )
+    if root is None:
+        raise ValueError(
+            f"`{key}:` data file {ref!r} cannot be resolved without a base directory"
+        )
+    try:
+        fp = _resolve_fragment_path(ref, root)
+    except WorkflowIncludeError as exc:
+        raise ValueError(f"`{key}:` data file not found: {ref!r}") from exc
+    try:
+        rows = yaml.safe_load(_expand_env(fp.read_text(encoding="utf-8")))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError(f"`{key}:` data file {ref!r} could not be read: {exc}") from exc
+    if not isinstance(rows, list) or not rows:
+        raise ValueError(
+            f"`{key}:` data file {ref!r} must contain a non-empty list of "
+            "variable maps"
+        )
+    return rows
+
+
+def _expand_matrix(entry: dict, base_id: str, root: "Path | None" = None) -> list:
+    """Fan one job mapping out over its ``matrix:``/``for_each:`` rows.
+
+    The matrix value is either an **inline list** of variable maps, or a mapping
+    ``{from: <path>}`` naming an external data file that supplies that list (see
+    :func:`_load_matrix_file`); both yield the same rows. Returns one dict per
+    variable map, each a copy of *entry* (minus the matrix key) with the map's
+    variables substituted in. A stable, distinct id/name is derived per generated
+    job: an explicit ``id`` template (e.g. ``id: feed-{{ slug }}``) is honored after
+    substitution, otherwise ``<base_id>-<index>``. *root* is the containing file's
+    directory, used to resolve a ``from:`` data file. Raises ``ValueError`` (so the
+    file lands in the ``failed`` list, not aborting startup) on a malformed matrix
+    or colliding ids.
     """
     present = [k for k in _MATRIX_KEYS if k in entry]
     if len(present) > 1:
         raise ValueError(f"use only one of {present}, not both")
     key = present[0]
-    rows = entry[key]
+    value = entry[key]
+    rows = _load_matrix_file(value, key, root) if isinstance(value, dict) else value
     if not isinstance(rows, list) or not rows:
         raise ValueError(f"`{key}:` must be a non-empty list of variable maps")
     template = {k: v for k, v in entry.items() if k not in _MATRIX_KEYS}
@@ -312,11 +365,13 @@ def _expand_matrix(entry: dict, base_id: str) -> list:
     return out
 
 
-def _expand_matrix_entries(entries: list, stem: str) -> list:
+def _expand_matrix_entries(entries: list, stem: str, root: "Path | None" = None) -> list:
     """Replace each matrix-bearing entry with its fan-out; pass others through.
 
     A list with no matrix anywhere is returned unchanged, so matrix-free files
     parse to exactly the same entries (and thus the same JobSpecs) as before.
+    *root* (the containing file's directory) is threaded to :func:`_expand_matrix`
+    so a ``matrix: {from: <path>}`` data file resolves relative to it.
     """
     if not any(_has_matrix(e) for e in entries):
         return entries
@@ -326,7 +381,7 @@ def _expand_matrix_entries(entries: list, stem: str) -> list:
             out.append(entry)
             continue
         base = entry.get("id") or (stem if len(entries) == 1 else f"{stem}-{i}")
-        out.extend(_expand_matrix(entry, base))
+        out.extend(_expand_matrix(entry, base, root))
     return out
 
 
@@ -459,7 +514,9 @@ def _specs_from_workflow_file(path, warnings: list | None = None) -> list:
     fragments are inlined (relative to the file's dir, then ``$UJIN_WORKFLOWS_DIR``),
     a top-level ``defaults:`` mapping is deep-merged *under* every job (per-job keys
     win), and a ``matrix:``/``for_each:`` key fans a job out into one per variable
-    map with each map substituted into the merged result (see ``_expand_matrix``).
+    map — given inline, or by a ``{from: <path>}`` data file resolved like an
+    ``include:`` fragment — with each map substituted into the merged result (see
+    ``_expand_matrix``).
     The three layers compose in that order; a file using none resolves byte-for-byte
     as it did before.
     """
@@ -517,7 +574,7 @@ def _specs_from_workflow_file(path, warnings: list | None = None) -> list:
     # defaults/include merge above, so each entry's variables substitute into the
     # already-merged result: matrix-free entries pass through untouched (same ids),
     # matrix entries fan out with stable, per-entry ids.
-    raw = _expand_matrix_entries(raw, stem)
+    raw = _expand_matrix_entries(raw, stem, path.parent)
     specs = []
     for i, entry in enumerate(raw):
         d = dict(entry)
@@ -622,7 +679,9 @@ def _load_ingest_plan(
     layers run in the same order as a workflow file: ``include:``/``use:`` fragments
     are inlined first (relative to the plan's directory then ``$UJIN_WORKFLOWS_DIR``),
     a top-level ``defaults:`` mapping is deep-merged *under* every job (per-job keys
-    win), then ``matrix:``/``for_each:`` fans an entry into one job per variable map.
+    win), then ``matrix:``/``for_each:`` fans an entry into one job per variable map
+    (the variable maps given inline, or by a ``{from: <path>}`` data file resolved
+    like an ``include:`` fragment).
 
     Errors never abort startup. A **file-level** problem (missing/unreadable file,
     invalid YAML, a shape that is neither a mapping nor a list, an unresolvable or
@@ -679,8 +738,9 @@ def _load_ingest_plan(
                 warnings,
             )
             # Reuse the workflow matrix helper on this single entry so `matrix:`/
-            # `for_each:` behaves byte-for-byte as it does for workflow files.
-            fanned = _expand_matrix_entries([merged], base)
+            # `for_each:` behaves byte-for-byte as it does for workflow files
+            # (including a `matrix: {from: <path>}` data file relative to the plan).
+            fanned = _expand_matrix_entries([merged], base, path.parent)
             for j, raw in enumerate(fanned):
                 d = dict(raw)
                 d.setdefault("id", base if len(fanned) == 1 else f"{base}-{j}")
