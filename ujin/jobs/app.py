@@ -264,18 +264,31 @@ def _resolve_includes(node: Any, root: Path, seen: "tuple[Path, ...]" = ()) -> A
 #
 # A self-contained, additive step that runs *after* defaults/include resolution
 # (Track 1) and *before* id derivation: a job mapping carrying ``matrix:`` (alias
-# ``for_each:``) — a list of variable maps, or a ``{from: <path>}`` mapping naming
-# an external data file that supplies that list — is fanned into one job per map,
-# with each map's variables substituted into every ``{{ var }}`` placeholder across
-# the template (source/transforms/sinks/schedule/name/id/...). Kept in its own code
-# path so it neither entangles with, nor conflicts much with, the includes work.
-# A file carrying neither key passes through structurally unchanged.
+# ``for_each:``) is fanned into one job per row, with each row's variables
+# substituted into every ``{{ var }}`` placeholder across the template
+# (source/transforms/sinks/schedule/name/id/...). The matrix value takes one of
+# three shapes, all yielding the same downstream fan-out:
+#
+#   * an inline **list** of variable maps (one job per map);
+#   * a **``{from: <path>}``** mapping naming an external data file holding that list;
+#   * a **cross-product axes** mapping of axis-name -> value-list — any mapping with
+#     no ``from:`` key — fanned into one job per cartesian-product combination.
+#
+# The ``from:`` key is the disambiguator between the two mapping shapes (so ``from``
+# is reserved as an axis name). Kept in its own code path so it neither entangles
+# with, nor conflicts much with, the includes work. A file carrying no matrix key
+# passes through structurally unchanged.
 
 _MATRIX_KEYS = ("matrix", "for_each")
 
 # ``{{ var }}`` placeholder (whitespace-tolerant). Distinct from the ``${VAR}``
 # env syntax (already expanded at file-read time), so the two never collide.
 _VAR_REF = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+
+# Runs of non-alphanumerics collapse to a single ``-`` when slugifying a
+# cross-product axis value into the default job-id fragment (e.g. ``"4k monitor"``
+# -> ``"4k-monitor"``).
+_SLUG_STRIP = re.compile(r"[^A-Za-z0-9]+")
 
 
 def _has_matrix(node: Any) -> bool:
@@ -353,48 +366,128 @@ def _load_matrix_file(value: dict, key: str, root: "Path | None") -> list:
     return rows
 
 
-def _expand_matrix(
-    entry: dict, base_id: str, root: "Path | None" = None, prov: "list | None" = None
-) -> list:
-    """Fan one job mapping out over its ``matrix:``/``for_each:`` rows.
+def _slug(value: Any) -> str:
+    """A compact, id-safe token derived from a scalar axis value.
 
-    The matrix value is either an **inline list** of variable maps, or a mapping
-    ``{from: <path>}`` naming an external data file that supplies that list (see
-    :func:`_load_matrix_file`); both yield the same rows. Returns one dict per
-    variable map, each a copy of *entry* (minus the matrix key) with the map's
-    variables substituted in. A stable, distinct id/name is derived per generated
-    job: an explicit ``id`` template (e.g. ``id: feed-{{ slug }}``) is honored after
-    substitution, otherwise ``<base_id>-<index>``. *root* is the containing file's
-    directory, used to resolve a ``from:`` data file. Raises ``ValueError`` (so the
-    file lands in the ``failed`` list, not aborting startup) on a malformed matrix
-    or colliding ids.
-
-    When *prov* is a list it collects, in lock-step with the returned jobs, one
-    ``{"key", "index", "vars"}`` record per generated job naming the matrix key, the
-    0-based entry index, and the variable map that produced it — the provenance
-    surfaced by ``plan render --explain``. Default ``None`` collects nothing, so the
-    expansion is byte-for-byte unchanged.
+    Runs of non-alphanumerics collapse to a single ``-`` and the ends are trimmed,
+    so ``"4k monitor"`` -> ``"4k-monitor"``; an all-symbol value yields ``"x"``.
+    Used to build the default id of a cross-product combination — two values that
+    slug to the same token are caught by ``_expand_matrix``'s duplicate-id check.
     """
-    present = [k for k in _MATRIX_KEYS if k in entry]
-    if len(present) > 1:
-        raise ValueError(f"use only one of {present}, not both")
-    key = present[0]
-    value = entry[key]
-    rows = _load_matrix_file(value, key, root) if isinstance(value, dict) else value
+    return _SLUG_STRIP.sub("-", str(value)).strip("-") or "x"
+
+
+def _cross_product_rows(axes: dict, key: str) -> list:
+    """Fan a mapping of *axis-name -> value-list* into cartesian-product rows.
+
+    ``{size: [s, m], region: [us, eu]}`` yields the four ``{size, region}``
+    combinations — one variable map per combination. Returns ``(vars, suffix)``
+    pairs where *vars* is the combination's per-axis map and *suffix* is a stable
+    id fragment built from the combination's values.
+
+    Both the row order and each *suffix* are derived with the **axis names sorted**,
+    so they are independent of the order the axes were written: reordering the axes
+    in the file leaves every combination with the same default id. Raises
+    ``ValueError`` (routing the file into the loader's ``failed`` list) on an empty
+    axes map, or an axis whose value is not a non-empty list.
+    """
+    import itertools
+
+    if not axes:
+        raise ValueError(
+            f"`{key}:` cross-product needs at least one axis "
+            "(a mapping of axis-name -> list of values)"
+        )
+    names = sorted(axes)
+    value_lists = []
+    for name in names:
+        vals = axes[name]
+        if not isinstance(vals, list) or not vals:
+            raise ValueError(
+                f"`{key}:` axis {name!r} must be a non-empty list of values, got "
+                f"{type(vals).__name__}"
+            )
+        value_lists.append(vals)
+    return [
+        (dict(zip(names, combo)), "-".join(_slug(v) for v in combo))
+        for combo in itertools.product(*value_lists)
+    ]
+
+
+def _matrix_rows(value: Any, key: str, root: "Path | None") -> list:
+    """Resolve a ``matrix:``/``for_each:`` value into ``(vars, default_suffix)`` rows.
+
+    Three input shapes, all producing the same downstream fan-out (one job per row):
+
+    * an **inline list** of variable maps — suffixed by each row's 0-based index;
+    * a **``{from: <path>}``** mapping naming an external data file holding that list
+      (see :func:`_load_matrix_file`) — identical to inline once loaded;
+    * a **cross-product axes** mapping of axis-name -> value-list (any mapping with no
+      ``from:`` key) — one row per cartesian-product combination, suffixed by the
+      combination's slugified values (see :func:`_cross_product_rows`).
+
+    The ``from:`` key disambiguates the two mapping shapes, so it is reserved (an
+    axes mapping cannot name an axis ``from``). Raises ``ValueError`` on a malformed
+    value so the containing file lands in the loader's ``failed`` list.
+    """
+    if isinstance(value, dict):
+        if "from" in value:
+            rows = _load_matrix_file(value, key, root)
+        else:
+            return _cross_product_rows(value, key)
+    else:
+        rows = value
     if not isinstance(rows, list) or not rows:
         raise ValueError(f"`{key}:` must be a non-empty list of variable maps")
-    template = {k: v for k, v in entry.items() if k not in _MATRIX_KEYS}
-
     out: list = []
-    seen: set = set()
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             raise ValueError(
                 f"`{key}:` entry {i} must be a variable map, got "
                 f"{type(row).__name__}"
             )
+        out.append((row, str(i)))
+    return out
+
+
+def _expand_matrix(
+    entry: dict, base_id: str, root: "Path | None" = None, prov: "list | None" = None
+) -> list:
+    """Fan one job mapping out over its ``matrix:``/``for_each:`` rows.
+
+    The matrix value is an **inline list** of variable maps, a ``{from: <path>}``
+    mapping naming an external data file that supplies that list (see
+    :func:`_load_matrix_file`), or a **cross-product axes** mapping of
+    axis-name -> value-list fanned into one row per combination (see
+    :func:`_matrix_rows`/:func:`_cross_product_rows`). Returns one dict per row, each
+    a copy of *entry* (minus the matrix key) with the row's variables substituted in.
+    A stable, distinct id/name is derived per generated job: an explicit ``id``
+    template (e.g. ``id: feed-{{ slug }}``) is honored after substitution, otherwise
+    ``<base_id>-<suffix>`` — the suffix being the row index (inline/file forms) or the
+    combination's slugified values (cross-product form), so the id is deterministic
+    and, for cross-product, independent of axis order. *root* is the containing file's
+    directory, used to resolve a ``from:`` data file. Raises ``ValueError`` (so the
+    file lands in the ``failed`` list, not aborting startup) on a malformed matrix
+    or colliding ids.
+
+    When *prov* is a list it collects, in lock-step with the returned jobs, one
+    ``{"key", "index", "vars"}`` record per generated job naming the matrix key, the
+    0-based row index, and the variable map that produced it (for cross-product, the
+    per-axis combination map) — the provenance surfaced by ``plan render --explain``.
+    Default ``None`` collects nothing, so the expansion is byte-for-byte unchanged.
+    """
+    present = [k for k in _MATRIX_KEYS if k in entry]
+    if len(present) > 1:
+        raise ValueError(f"use only one of {present}, not both")
+    key = present[0]
+    rows = _matrix_rows(entry[key], key, root)
+    template = {k: v for k, v in entry.items() if k not in _MATRIX_KEYS}
+
+    out: list = []
+    seen: set = set()
+    for i, (row, suffix) in enumerate(rows):
         d = _subst_vars(template, row)
-        d.setdefault("id", f"{base_id}-{i}")
+        d.setdefault("id", f"{base_id}-{suffix}")
         d.setdefault("name", d["id"])
         if d["id"] in seen:
             raise ValueError(

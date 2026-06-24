@@ -258,6 +258,48 @@ source:
 See `examples/matrix-from-file.yaml` (+ `examples/data/marketplace-searches.yaml`)
 for a runnable file-backed matrix.
 
+#### Cross-product matrix — axes fanned into combinations
+
+Instead of an explicit list of rows, the matrix value may be a **mapping of
+axis-name → list-of-values**. ujin fans it into the **cartesian product** — one
+workflow per *combination* of axis values. Two axes of sizes M and N produce M·N
+jobs:
+
+```yaml
+# /workflows/region-status.yaml
+matrix:
+  region: [us-east, us-west, eu-central]   # 3 values
+  tier:   [free, pro]                      # 2 values   -> 3 * 2 = 6 jobs
+
+id: "status-{{ region }}-{{ tier }}"
+source:
+  kind: api
+  config: { url: "https://api.example.com/{{ region }}/status?tier={{ tier }}" }
+```
+
+This resolves to six jobs — `status-us-east-free`, `status-us-east-pro`,
+`status-us-west-free`, `status-us-west-pro`, `status-eu-central-free`,
+`status-eu-central-pro` — each with both `{{ region }}` and `{{ tier }}` substituted.
+
+- **Disambiguation.** A matrix mapping is read as cross-product axes **unless it
+  carries a `from:` key**, which selects the file-backed form above. `from` is
+  therefore reserved — you cannot name an axis `from`.
+- **Stable, order-independent ids.** Omit `id:` and each combination falls back to
+  `<stem>-<value>-<value>…` built with the **axis names sorted** and each axis's
+  values kept in the order written — so reordering the axes in the file leaves every
+  combination with the same id, and repeated `ujin plan render` runs are identical.
+  An explicit `id:` template referencing the axis variables (as above) gives friendly
+  ids. Values are slugified into the id (`4k monitor` → `4k-monitor`); two values
+  that collapse to the same token are rejected as a duplicate id.
+- **Same substitution + composition.** `{{ var }}` substitution, whole-value type
+  preservation, and the `defaults:`/`include:` composition order are identical to the
+  inline form.
+- **Errors are contained.** An empty axes mapping, an empty or non-list axis value,
+  or a colliding generated id fails *that* workflow with an actionable error in the
+  `failed` list (`GET /health`); other workflows still load.
+
+See `examples/matrix-cross-product.yaml` for a runnable cross-product plan.
+
 ## Collect — the container does the job
 
 Each workflow is driven by the same [adaptive engine](../README.md#how-it-works)

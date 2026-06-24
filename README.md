@@ -131,10 +131,13 @@ at once. Three additive layers keep large plans DRY:
 - **`defaults:`** — a top-level mapping deep-merged under every job; per-job keys win.
 - **`include:`/`use:`** — pull in a fragment file for a shared sink, schedule, or
   transform pipeline; paths resolve relative to the plan file, then `$UJIN_WORKFLOWS_DIR`.
-- **`matrix:`/`for_each:`** — a list of variable maps (inline, or a `{ from: <path> }`
-  data file resolved like an `include:` fragment); ujin substitutes each into
-  `{{ var }}` placeholders across the source/transforms/sinks/schedule, emitting one
-  job per entry with a stable, deterministic id so reloads upsert rather than duplicate.
+- **`matrix:`/`for_each:`** — fan one template into many jobs. The value is a list of
+  variable maps (inline, or a `{ from: <path> }` data file resolved like an `include:`
+  fragment), **or** a mapping of axis-name → list-of-values fanned into the cartesian
+  product (one job per combination — two axes of sizes M and N give M·N jobs). ujin
+  substitutes each row into `{{ var }}` placeholders across the
+  source/transforms/sinks/schedule, emitting one job per row with a stable,
+  deterministic id so reloads upsert rather than duplicate.
 - **`${VAR}` / `${VAR:-default}` / `${VAR:?message}`** — environment substitution
   expanded at file-read time. `${VAR:?message}` raises a clear error (naming the
   variable and including `message`) when `VAR` is unset or empty, so missing secrets
@@ -225,8 +228,10 @@ many similar workflows DRY with an optional top-level `defaults:` block (deep-me
 under each job, per-job keys win) and `include:`/`use:` fragment files for shared
 sinks, schedules, or transform pipelines; or fan one template into many with a
 `matrix:`/`for_each:` key — a list of variable maps (inline, or a `{ from: <path> }`
-data file), each substituted into the `source`/`transforms`/`sinks`/`schedule`, with
-a stable per-entry id so reloads upsert rather than duplicate.
+data file), or a mapping of axis-name → list-of-values fanned into the cartesian
+product (one job per combination), each substituted into the
+`source`/`transforms`/`sinks`/`schedule`, with a stable per-row id so reloads upsert
+rather than duplicate.
 See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
 Prefer one file over a directory? Mount a single **INGEST-PLAN** declaring many
