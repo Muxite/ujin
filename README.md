@@ -13,9 +13,10 @@ The **ultimate scraper-poller**. Three parts that share one toolkit:
    all behind a small HTTP API.
 3. **Declarative jobs control plane** — `source → transforms → sinks → schedule`
    driven by REST or file-based config: shared `defaults:` deep-merged under
-   every job, reusable `include:`/`use:` fragment files, and `matrix:`/`for_each:`
-   fan-out to turn one template into N jobs; or mount a single **INGEST-PLAN**
-   file with `--plan` / `$UJIN_INGEST_PLAN` for one-file multi-job deploys.
+   every job, reusable `include:`/`use:` fragment files, `vars:` placeholder
+   defaults, named `profiles:` overlays, and `matrix:`/`for_each:` fan-out to
+   turn one template into N jobs; or mount a single **INGEST-PLAN** file with
+   `--plan` / `$UJIN_INGEST_PLAN` for one-file multi-job deploys.
    Validate and inspect offline with `ujin plan validate` / `ujin plan render`,
    diff two plans by resolved job id with `ujin plan diff`, and export the
    file-format JSON Schema with `ujin plan schema`, before committing to a deploy.
