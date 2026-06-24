@@ -276,6 +276,64 @@ win for that job.
 
 The shipped `examples/vars-defaults.yaml` is a runnable `vars:` plan.
 
+### `profiles:` — named overlays over `defaults:`
+
+A top-level **`profiles:`** mapping (profile name → overlay mapping) declares named
+variations of the plan's base `defaults:`. Selecting one **deep-merges that overlay
+over `defaults:`** *before* the per-job merge, so every job that does not set the key
+itself inherits the overlaid value, while per-job keys, `matrix:`/`for_each:` fan-out,
+and `${VAR}` / `{{ var }}` substitution behave exactly as without a profile:
+
+```yaml
+defaults:
+  schedule: { mode: poll, base: 60 }   # base cadence: every 60s
+profiles:
+  fast:
+    schedule: { base: 5 }              # tighten the loop to 5s
+  slow:
+    schedule: { base: 600 }            # back off to 10 minutes
+jobs:
+  - id: home
+    source: { kind: http, config: { url: "https://example.com/" } }
+  - id: status
+    schedule: { mode: poll, base: 9 }  # this job pins its own cadence
+    source: { kind: http, config: { url: "https://example.com/status" } }
+```
+
+Select a profile with the **`--profile NAME`** flag or the **`$UJIN_PLAN_PROFILE`**
+environment variable (the flag wins; neither set means no overlay):
+
+```bash
+# with no profile: home polls every 60s, status every 9s
+ujin plan render ingest-plan.yaml
+
+# --profile fast: home now polls every 5s; status keeps its own 9s (per-job wins)
+ujin plan render ingest-plan.yaml --profile fast
+
+# env fallback — the same overlay without a flag (a flag would override this)
+UJIN_PLAN_PROFILE=slow ujin jobs-serve --plan ingest-plan.yaml
+```
+
+`--profile` is accepted by `ujin plan validate`, `ujin plan render`, and
+`ujin jobs-serve`; `jobs-serve` validates the name before binding a port.
+
+- **Merge order.** profile overlay over `defaults:` → that result deep-merged under
+  each job. A profile key replaces the same key in `defaults:` (lists replace
+  wholesale, nested mappings merge key-by-key), but a per-job key still wins over the
+  profile, so the established precedence (per-job > profile > `defaults:`) holds.
+- **Selection.** `--profile NAME` overrides `$UJIN_PLAN_PROFILE`; with neither set no
+  overlay is applied and resolution is byte-for-byte unchanged.
+- **Unknown name.** Selecting a profile absent from `profiles:` exits non-zero with a
+  clean `ujin: …` message that lists the available profiles — no Python traceback (see
+  [errors](#reporting-and-errors)). A directory of workflow files is lenient: a file
+  with no `profiles:` key is left unchanged, so only a file that declares profiles but
+  not the selected name fails.
+- **Additive.** A plan with no `profiles:` key, and with no profile selected, resolves
+  byte-for-byte as before; `plan validate` reports a non-mapping `profiles:` block as a
+  clean error.
+
+The shipped `examples/profiles.yaml` is a runnable `profiles:` plan.
+
 ## Stable ids
 
 Every resulting job gets a **stable id**, so re-loading the same plan **upserts**

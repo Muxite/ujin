@@ -94,9 +94,10 @@ def test_main_jobs_serve_dispatch(monkeypatch):
     called = {}
 
     def fake_serve(host, port, config_path, workflows_dir, plan_path, only=None,
-                   exclude=None, watch_plan=False, watch_interval=None):
+                   exclude=None, watch_plan=False, watch_interval=None, profile=None):
         called.update(port=port, workflows_dir=workflows_dir, plan_path=plan_path,
-                      watch_plan=watch_plan, watch_interval=watch_interval)
+                      watch_plan=watch_plan, watch_interval=watch_interval,
+                      profile=profile)
 
     monkeypatch.setattr("ujin.jobs.app.serve", fake_serve)
     rc = cli.main(["jobs-serve", "--workflows", "/wf", "--plan", "/p.yaml"])
