@@ -286,6 +286,9 @@ product (one job per combination), each substituted into the
 `source`/`transforms`/`sinks`/`schedule`, with a stable per-row id so reloads upsert
 rather than duplicate. An optional top-level `vars:` block (variable name → default
 value) backfills any `{{ var }}` placeholder the environment and matrix leave unset.
+An optional top-level `profiles:` block declares named overlays over `defaults:`,
+selected with `--profile NAME` or `$UJIN_PLAN_PROFILE` (flag wins; a file with no
+`profiles:` key is left unchanged, so only files that declare the block are affected).
 See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
 Prefer one file over a directory? Mount a single **INGEST-PLAN** declaring many
