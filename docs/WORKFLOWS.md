@@ -300,6 +300,49 @@ This resolves to six jobs — `status-us-east-free`, `status-us-east-pro`,
 
 See `examples/matrix-cross-product.yaml` for a runnable cross-product plan.
 
+### `vars:` — default values for `{{ var }}` placeholders
+
+A top-level **`vars:`** mapping (variable name → default value) supplies a fallback
+for any `{{ var }}` placeholder that nothing else sets. It keeps a workflow runnable
+with zero configuration while letting a deploy override a single value from the
+environment — without editing the file:
+
+```yaml
+# /workflows/regional-feed.yaml
+vars:
+  region: us-east          # fallback for every {{ region }} left unset
+  rows: 50                 # an exact-placeholder value keeps its int type
+
+id: "feed-{{ region }}"
+source:
+  kind: api
+  config:
+    url: "https://feeds.example.com/{{ region }}?rows={{ rows }}"
+    json_path: items
+```
+
+Run as-is and the job queries `us-east`; set the environment variable `region` to
+`eu-west` (e.g. in the container) and it switches with no file edit.
+
+- **Precedence.** For a `{{ NAME }}` placeholder: a `matrix:`/`for_each:` per-entry
+  value wins, then the process environment (variable `NAME`, if set), then the
+  file-level `vars: NAME` default; an otherwise-unset placeholder is still left
+  verbatim. So a `vars:` default only fills a variable nothing else provides, and a
+  matrix entry that sets the same name overrides it per job.
+- **Whole-value types preserved.** A string that is *exactly* one placeholder keeps
+  the default's native type (`rows: "{{ rows }}"` → the integer `50`), exactly like
+  matrix substitution; an embedded placeholder interpolates `str(value)`.
+- **Unrelated to `${VAR}`.** The `${VAR}` / `${VAR:-default}` read-time env syntax
+  (the table above) is independent and still expands first, at file-read time — even
+  if a `vars:` entry happens to share the name; `vars:` feeds the later `{{ var }}`
+  pass only.
+- **Additive.** A workflow with no `vars:` key (or an empty one) resolves
+  byte-for-byte as before, and `ujin plan validate` rejects a non-mapping `vars:`
+  with a clean `ujin: …` error.
+
+See `examples/vars-defaults.yaml` for a runnable `vars:` example (a matrix job whose
+`region`/`rows` fall back to the defaults while a per-entry var would override them).
+
 ## Collect — the container does the job
 
 Each workflow is driven by the same [adaptive engine](../README.md#how-it-works)
