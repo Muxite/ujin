@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.26.0 — 2026-06-24
 
 - **docs(sync): fix stale `plan validate --json` schema examples; guard `examples/matrix-from-file.yaml`.** The `--json` output of `ujin plan validate` includes `warnings` and `strict` fields that were absent from the JSON examples in `docs/INGEST_PLAN.md` (normal-case and missing-path cases) and `docs/WORKFLOWS.md`; corrected both to match actual CLI output. Added five offline tests to `tests/test_examples_plan_validate.py` covering the new 0.25 `examples/matrix-from-file.yaml` (file-backed matrix plan) — validate, render, `--json` forms, and expected ids — so example-file drift is caught at CI time.
 - **docs(sync): fix stale `--json` example in `docs/recipes/external-config-flow.md`; add schema-guard tests.** The `plan validate --json` example in the external-config recipe was missing the `warnings` and `strict` fields present in all other doc examples and in the actual CLI output; corrected to include both. Added a note on `--strict` to the recipe. Added three offline tests to `tests/test_examples_plan_validate.py` asserting the `--json` output schema contains all documented fields (`warnings`, `strict`) and that the `strict` flag round-trips correctly — so the `--json` schema is pinned against future drift.
