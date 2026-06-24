@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **docs(sync): fix layer-count in INGEST_PLAN.md; split MARKETPLACE.md supply-mechanism list into three explicit subsections.** INGEST_PLAN.md said "all five resolution layers" but only listed four (missing `vars:` defaults); updated at three locations: the intro paragraph, the `plan render` section, and the `--summary` blurb. MARKETPLACE.md labelled the profile-supply section "Two mechanisms" but the engine actually supports three independent mechanisms (`$UJIN_MARKETPLACE_PROFILES` env var, `profiles_path:` config key, and inline `profiles:` mapping); refactored into three numbered subsections matching the acceptance surface. No production-code changes.
+
 ## 0.37.0 — 2026-06-24
 
 - **tests(external-config): confirm 100% line/branch coverage of external-config code paths.** Verified that `ujin/jobs/app.py` (`_load_ingest_plan`, `_select_jobs`, `_PlanWatcher`, `_expand_matrix_entries`, plan-introspection endpoints) and `ujin/cli.py` (`ujin plan validate|render|diff|schema` subcommands, `_explain_comment_lines`, `_open_strategy_feedback_ro`, `_cmd_jobs_serve`) are at 100% line and branch coverage. Existing test suites (`tests/test_external_config_coverage.py`, `tests/test_jobs_gap_fill.py`, `tests/test_ingest_plan.py`, `tests/test_plan_*_cli.py`) collectively cover all previously-identified gaps — including malformed `include:`/`matrix:`/`profiles:`/`defaults:` inputs, `${VAR:-default}`/`${VAR:?msg}` env paths, `--only`/`--exclude` glob selection, `--summary`/`--explain`/`--json` render variants, and `--exit-code` diff edge cases. Total suite coverage 98.22%, above the 90% floor; 2092 tests pass. No production-code changes.
