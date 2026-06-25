@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.42.0 — 2026-06-25
 
 - **docs(sync): cross-reference the external-config recipe from the README feature list and quickstart section.** Feature list item 3 (Declarative jobs control plane) now ends with a direct link to `docs/recipes/external-config-flow.md` and `docs/INGEST_PLAN.md`. The "Quick start — jobs and file-driven config" section gains a two-sentence intro that enumerates all six additive layers (`defaults:`, `include:`/`use:`, `vars:`, `profiles:`, `matrix:`/`for_each:`, and INGEST-PLAN via `--plan`/`$UJIN_INGEST_PLAN`) and links to the walkthrough, making these capabilities visible before the code block. No production code changed.
 
