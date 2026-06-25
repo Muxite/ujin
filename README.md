@@ -140,6 +140,11 @@ ujin plan schema --out ingest-plan.schema.json         # …or write it to a fil
 ujin plan env     examples/ingest-plan.yaml            # human table
 ujin plan env     examples/ingest-plan.yaml --json     # machine-readable (CI)
 ujin plan env     examples/ingest-plan.yaml --env-file .env  # count .env vars as set
+
+# Eject resolved jobs to standalone single-job YAML files (one <id>.yaml per job):
+ujin plan eject   examples/ingest-plan.yaml --out ./ejected/
+ujin plan eject   examples/ingest-plan.yaml --out ./ejected/ --only 'feed-*'
+ujin plan eject   examples/ingest-plan.yaml --out ./ejected/ --profile fast
 ```
 
 `--plan` (or `$UJIN_INGEST_PLAN`) mounts a single YAML file that declares many jobs
@@ -229,6 +234,17 @@ loaders but never expands or alters anything (strictly read-only). `--json` emit
 machine-readable object and `--env-file PATH` feeds the set/unset check (process env
 wins); a plan with no `${VAR}` references succeeds and reports an empty set. Use it
 to see, before deploying, which secrets/config a mounted plan still needs.
+
+`ujin plan eject <path> --out <dir>` **materializes** every fully-resolved job from a
+plan (or a workflows directory) into a directory of standalone single-job YAML files —
+one `<id>.yaml` per expanded job. All six resolution layers are applied first
+(`defaults:` deep-merge, `include:`/`use:` fragments, `matrix:`/`for_each:` fan-out,
+`profiles:` overlays, `vars:` defaults, and `${VAR}` substitution), so each ejected
+file contains only resolved `JobSpec` fields — no templates, placeholders, or
+inheritance remain. Loading any ejected file back through the single-file workflow
+loader produces the same job spec it had inside the plan. The `--out` directory is
+created if it does not exist. Accepts the same `--only`/`--exclude`/`--profile`/`--env-file`
+selectors as `plan render`. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
 
 Changed the plan file? `POST /plan/reload` re-reads it and upserts the resolved jobs
 in-process — no restart — sharing the startup loader (a single bad job is reported,

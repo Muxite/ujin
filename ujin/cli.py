@@ -783,6 +783,79 @@ def _cmd_plan_env(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_plan_eject(args: argparse.Namespace) -> int:
+    """Materialize fully-expanded jobs from a plan or workflows dir to standalone files.
+
+    Resolves the plan through the same loaders as ``jobs-serve`` and ``plan render``
+    — ``defaults:`` deep-merge, ``include:``/``use:`` fragment inlining,
+    ``matrix:``/``for_each:`` fan-out, ``profiles:`` overlays, and ``${VAR}``
+    substitution all applied — then writes one YAML file per resolved job id into the
+    ``--out`` directory.  The file is named ``<id>.yaml`` and contains only the
+    fully-resolved ``JobSpec`` fields; no ``defaults:``, ``include:``, ``matrix:``,
+    or ``${VAR}`` placeholders remain.  Loading any ejected file back through the
+    single-file workflow loader (``_specs_from_workflow_file``) yields the same
+    ``JobSpec`` it had inside the plan.
+
+    The ``--out`` directory is created (including parents) if it does not yet exist;
+    existing files are overwritten.  Exits zero when all jobs resolve; non-zero with a
+    clean ``ujin: …`` message (no traceback) on a missing/unreadable path or any
+    failed job.
+    """
+    import yaml as _yaml
+
+    from ujin.jobs.app import _load_ingest_plan, _load_workflows_dir, _select_jobs
+
+    env_file = getattr(args, "env_file", None)
+    if env_file:
+        rc = _apply_env_file(env_file)
+        if rc:
+            return rc
+
+    path = Path(args.path)
+    only = _parse_patterns(getattr(args, "only", None))
+    exclude = _parse_patterns(getattr(args, "exclude", None))
+    profile = _resolve_profile(getattr(args, "profile", None))
+    out_dir = Path(args.out)
+
+    if not path.exists():
+        print(f"ujin: path not found: {args.path}", file=sys.stderr)
+        return 1
+
+    failed: list = []
+    if path.is_dir():
+        specs = _load_workflows_dir(str(path), failed=failed, profile=profile)
+    else:
+        specs = _load_ingest_plan(path, failed=failed, profile=profile)
+
+    if only or exclude:
+        try:
+            specs = _select_jobs(specs, only or None, exclude or None)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+    if failed:
+        for entry in failed:
+            print(entry["error"], file=sys.stderr)
+        print(
+            f"ujin: {len(failed)} failure(s); {len(specs)} job(s) resolved",
+            file=sys.stderr,
+        )
+        return 1
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for spec in specs:
+        dest = out_dir / f"{spec.id}.yaml"
+        dest.write_text(
+            _yaml.dump(spec.to_dict(), default_flow_style=False, sort_keys=False),
+            encoding="utf-8",
+        )
+        print(f"  {spec.id}  ->  {dest}")
+
+    print(f"ujin: {len(specs)} job(s) ejected to {out_dir}")
+    return 0
+
+
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
     from ujin.mcp import serve
 
@@ -1422,6 +1495,59 @@ def main(argv: list[str] | None = None) -> int:
              "which referenced variables are set (process env vars take precedence; "
              "the file only fills in variables not already set)")
     p_plan_env.set_defaults(func=_cmd_plan_env)
+
+    p_plan_eject = plan_sub.add_parser(
+        "eject",
+        help="materialize resolved jobs to standalone single-job YAML files",
+        description="Resolve an INGEST-PLAN file (or a workflows directory) using the "
+                    "same loaders as `jobs-serve` and `plan render` — `defaults:` "
+                    "deep-merge, `include:`/`use:` fragment inlining, "
+                    "`matrix:`/`for_each:` fan-out, `profiles:` overlays, and "
+                    "`${VAR}` substitution all applied — then write one YAML file per "
+                    "resolved job id into the `--out` directory. Each file is named "
+                    "`<id>.yaml` and contains only the fully-resolved JobSpec fields; "
+                    "no `defaults:`, `include:`, `matrix:`, or `${VAR}` placeholders "
+                    "remain. Loading any ejected file back through the single-file "
+                    "workflow loader yields the same job spec it had inside the plan. "
+                    "The output directory is created (including parents) if it does "
+                    "not exist; existing files are overwritten. Exits zero when all "
+                    "jobs resolve; non-zero on any failure.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="examples:\n"
+               "  ujin plan eject ./ingest-plan.yaml --out ./ejected/\n"
+               "  ujin plan eject ./workflows/ --out ./ejected/\n"
+               "  ujin plan eject ./ingest-plan.yaml --out ./ejected/ --only 'feed-*'\n"
+               "  ujin plan eject ./ingest-plan.yaml --out ./ejected/ "
+               "--exclude feed-tech\n"
+               "  ujin plan eject ./ingest-plan.yaml --out ./ejected/ --profile fast\n"
+               "  ujin plan eject ./ingest-plan.yaml --out ./ejected/ "
+               "--env-file .env",
+    )
+    p_plan_eject.add_argument("path",
+                              help="INGEST-PLAN file or workflows directory to eject")
+    p_plan_eject.add_argument(
+        "--out", required=True, metavar="DIR",
+        help="directory to write one <id>.yaml per resolved job into "
+             "(created with parents if it does not exist; existing files are overwritten)")
+    p_plan_eject.add_argument(
+        "--env-file", default=None, metavar="PATH",
+        help="load KEY=VALUE pairs from PATH and use them for ${VAR} substitution "
+             "when resolving the plan/workflows directory (process env vars take "
+             "precedence; the file only fills in variables not already set)")
+    p_plan_eject.add_argument(
+        "--only", action="append", default=None, metavar="PATTERN",
+        help="eject only jobs whose id matches this fnmatch pattern "
+             "(comma-separated or repeatable; matched after full resolution)")
+    p_plan_eject.add_argument(
+        "--exclude", action="append", default=None, metavar="PATTERN",
+        help="exclude jobs whose id matches this fnmatch pattern "
+             "(comma-separated or repeatable; subtracts from --only)")
+    p_plan_eject.add_argument(
+        "--profile", default=None, metavar="NAME",
+        help="apply the named overlay from the plan's `profiles:` block over "
+             "`defaults:` before the per-job merge (default: $UJIN_PLAN_PROFILE; "
+             "the flag wins; unknown name exits non-zero)")
+    p_plan_eject.set_defaults(func=_cmd_plan_eject)
 
     p_watch = sub.add_parser(
         "watch", help="watch a URL's regions for change (adaptive, jittered)",
