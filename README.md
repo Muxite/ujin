@@ -21,6 +21,8 @@ The **ultimate scraper-poller**. Three parts that share one toolkit:
    diff two plans by resolved job id with `ujin plan diff`, list the environment
    variables a plan needs with `ujin plan env`, and export the file-format JSON
    Schema with `ujin plan schema`, before committing to a deploy.
+   See the [external-config walkthrough](docs/recipes/external-config-flow.md) for
+   an end-to-end example, and [INGEST_PLAN.md](docs/INGEST_PLAN.md) for the full reference.
 
 It bundles the [obscura](https://github.com/Muxite/obscura) headless renderer as
 a submodule, and stays a **pure-python pip install** (the renderer is built
@@ -102,6 +104,12 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
 
 ## Quick start — jobs and file-driven config
 
+`--plan` / `$UJIN_INGEST_PLAN` mounts a single YAML file that declares many jobs at
+once, kept DRY with `defaults:` deep-merge, `include:`/`use:` fragments, `vars:`
+placeholder defaults, named `profiles:` overlays, and `matrix:`/`for_each:` fan-out.
+See the [external-config walkthrough](docs/recipes/external-config-flow.md) for an
+end-to-end example.
+
 ```bash
 ujin jobs-serve --plan examples/ingest-plan.yaml   # :8902 — many jobs from one file
 ujin plan validate examples/ingest-plan.yaml        # validate plan before deploying (exit 0 = ok)
@@ -140,6 +148,11 @@ ujin plan schema --out ingest-plan.schema.json         # …or write it to a fil
 ujin plan env     examples/ingest-plan.yaml            # human table
 ujin plan env     examples/ingest-plan.yaml --json     # machine-readable (CI)
 ujin plan env     examples/ingest-plan.yaml --env-file .env  # count .env vars as set
+
+# Eject resolved jobs to standalone single-job YAML files (one <id>.yaml per job):
+ujin plan eject   examples/ingest-plan.yaml --out ./ejected/
+ujin plan eject   examples/ingest-plan.yaml --out ./ejected/ --only 'feed-*'
+ujin plan eject   examples/ingest-plan.yaml --out ./ejected/ --profile fast
 ```
 
 `--plan` (or `$UJIN_INGEST_PLAN`) mounts a single YAML file that declares many jobs
@@ -229,6 +242,17 @@ loaders but never expands or alters anything (strictly read-only). `--json` emit
 machine-readable object and `--env-file PATH` feeds the set/unset check (process env
 wins); a plan with no `${VAR}` references succeeds and reports an empty set. Use it
 to see, before deploying, which secrets/config a mounted plan still needs.
+
+`ujin plan eject <path> --out <dir>` **materializes** every fully-resolved job from a
+plan (or a workflows directory) into a directory of standalone single-job YAML files —
+one `<id>.yaml` per expanded job. All six resolution layers are applied first
+(`defaults:` deep-merge, `include:`/`use:` fragments, `matrix:`/`for_each:` fan-out,
+`profiles:` overlays, `vars:` defaults, and `${VAR}` substitution), so each ejected
+file contains only resolved `JobSpec` fields — no templates, placeholders, or
+inheritance remain. Loading any ejected file back through the single-file workflow
+loader produces the same job spec it had inside the plan. The `--out` directory is
+created if it does not exist. Accepts the same `--only`/`--exclude`/`--profile`/`--env-file`
+selectors as `plan render`. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
 
 Changed the plan file? `POST /plan/reload` re-reads it and upserts the resolved jobs
 in-process — no restart — sharing the startup loader (a single bad job is reported,
@@ -510,7 +534,7 @@ Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [ADAPTIVE](docs/ADAPTIVE.md) ·
 [BACKENDS](docs/BACKENDS.md) (aiohttp vs obscura vs playwright vs selenium) ·
 [PERFORMANCE](docs/PERFORMANCE.md) · [CONSUMERS](docs/CONSUMERS.md)
 (downstream submodule contracts) · [API](docs/API.md) · [JOBS](docs/JOBS.md) ·
-[WORKFLOWS](docs/WORKFLOWS.md) · [INGEST_PLAN](docs/INGEST_PLAN.md) (many jobs from one mounted file) · [PLUGINS](docs/PLUGINS.md) ·
+[WORKFLOWS](docs/WORKFLOWS.md) · [INGEST_PLAN](docs/INGEST_PLAN.md) (many jobs from one mounted file) · [external-config recipe](docs/recipes/external-config-flow.md) · [PLUGINS](docs/PLUGINS.md) ·
 [LIST_TRANSFORMS](docs/LIST_TRANSFORMS.md) (filter/flatten/sort/limit/rename/aggregate/unique/fill/csv) ·
 [MARKETPLACE](docs/MARKETPLACE.md) (generic engine; site profiles supplied externally) ·
 [BROWSER](docs/BROWSER.md) · [MCP](docs/MCP.md) · [CHANGELOG](CHANGELOG.md)

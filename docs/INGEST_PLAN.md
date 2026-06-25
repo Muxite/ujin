@@ -1012,6 +1012,49 @@ exits non-zero with a clean `ujin: …` message and no traceback.
 variable, builds a `JobSpec`, or otherwise alters resolution — running it has no
 effect on how `jobs-serve`/`plan render` later resolve the same plan.
 
+## Ejecting resolved jobs — `plan eject`
+
+Use `ujin plan eject` to **materialize** every fully-resolved job from a plan (or
+a workflows directory) into a directory of standalone single-job YAML files — one
+`<id>.yaml` per expanded job.  All six resolution layers are applied first (`defaults:`
+deep-merge, `include:`/`use:` fragments, `matrix:`/`for_each:` fan-out, `profiles:`
+overlays, `vars:` defaults, and `${VAR}` substitution), so the ejected files contain
+no templates, placeholders, or inheritance:
+
+```bash
+ujin plan eject ./ingest-plan.yaml --out ./ejected/
+ujin plan eject ./workflows/ --out ./ejected/          # also works for a workflows dir
+```
+
+Each file is named `<id>.yaml` and contains only the fully-resolved `JobSpec` fields.
+Loading any ejected file back through the single-file workflow loader produces the
+**same job spec** it had inside the plan:
+
+```bash
+ujin plan eject examples/ingest-plan.yaml --out /tmp/ejected/
+# Writes: /tmp/ejected/crossref.yaml, /tmp/ejected/feed-tech.yaml,
+#         /tmp/ejected/feed-science.yaml  (one per matrix row)
+
+# Verify round-trip — should print identical spec:
+ujin plan render /tmp/ejected/feed-tech.yaml
+```
+
+The `--out` directory is created (including parents) if it does not yet exist;
+existing files are overwritten.  `plan eject` accepts the same filtering and
+resolution flags as `plan render`:
+
+```bash
+ujin plan eject ./ingest-plan.yaml --out ./ejected/ --only 'feed-*'
+ujin plan eject ./ingest-plan.yaml --out ./ejected/ --exclude feed-tech
+ujin plan eject ./ingest-plan.yaml --out ./ejected/ --profile fast
+ujin plan eject ./ingest-plan.yaml --out ./ejected/ --env-file .env
+```
+
+`plan eject` exits zero when all jobs resolve; non-zero with a clean `ujin: …`
+message (no traceback) on a missing/unreadable path or any failed job.  It is
+strictly additive — all existing `plan` subcommands, single-file loading, and output
+formats are byte-for-byte unchanged.
+
 ## Job-id selection — `--only` and `--exclude`
 
 All three plan-aware commands (`plan render`, `plan validate`, and `jobs-serve`)
