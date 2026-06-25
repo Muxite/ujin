@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **bench(plan): add end-to-end plan-expansion throughput benchmark covering all six resolution layers.** A new `test_expand_full_plan_120` benchmark in `benchmarks/test_plan_expansion.py` measures `_load_ingest_plan` on a 120-job plan that exercises every layer — top-level `defaults:` deep-merge, `include:` fragment splicing, `matrix:` fan-out, per-entry `{{ var }}` substitution, and `JobSpec.from_dict` construction — and reports jobs/sec and ms/job using the same `abench` methodology as `test_extract_throughput.py`. Measured ~7 400 jobs/sec (~0.13 ms/job). Documented the per-job expansion cost and a practical large-fan-out guideline (comfortable up to ~5 000 jobs; expansion stays sub-second to 10 000+) in a new "Plan expansion" section of `docs/PERFORMANCE.md`. No production code changed.
+
 ## 0.45.0 — 2026-06-25
 
 - **feat(plan/validate): `--strict` flag and redundant-defaults advisory warning.** `ujin plan validate --strict` now exits non-zero when the plan produces any advisory warning, making it suitable for CI gating (unknown/misspelled keys fail the build). Without `--strict` the exit code and output are byte-for-byte unchanged. A new redundancy advisory warning fires when a `defaults:` key is overridden by every job in a multi-job plan (the default value is never inherited); it is advisory by default and only fails under `--strict`. Documented `--strict` and its CI usage in `docs/INGEST_PLAN.md`. Added 6 offline deterministic tests: clean plan exits 0 with and without `--strict`, and a plan that triggers the new redundancy warning exits 0 by default but non-zero under `--strict`.
