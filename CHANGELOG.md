@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **feat(plan): enrich `POST /plan/reload` response with `added`/`already_present` classification.** The reload summary now partitions the `loaded` job ids into `added` (ids not previously registered — genuinely new this reload) and `already_present` (ids re-upserted from an earlier load), in addition to the existing `pruned` and `failed` fields. A concise `log.info` line (`plan applied: added=N present=N pruned=N failed=N`) is emitted on every apply (startup, manual reload, and `--watch-plan` auto-reload). Upsert/prune mechanics and the startup path are unchanged — only the reporting layer is extended. Existing reload and `GET /plan` introspection tests pass unchanged; two new offline tests (`test_reload_diff_classifies_added_vs_already_present`, `test_reload_diff_noop_reports_empty_diff`) cover the added/present/pruned classification across two successive reloads and confirm a no-op reload reports no additions or removals. Documented the new fields in `docs/INGEST_PLAN.md` and `docs/JOBS.md`.
+
 ## 0.44.0 — 2026-06-25
 
 - **docs(sync): complete 0.43 documentation pass.** Added `ujin plan eject` to the CLI quick-reference table in `README.md`. Added a `### tags:` subsection to `docs/WORKFLOWS.md` explaining the `tags:` key, how it composes with `matrix:`/`for_each:` fan-out (`{{ var }}` substitutes per entry), and the replace-not-merge semantics vs. `defaults: tags:`. Added §9 to `docs/recipes/external-config-flow.md` demonstrating per-job tag declaration, matrix-templated tags, and `--tag`/`--exclude-tag` selector usage with `plan validate`, `plan render`, `plan eject`, and `jobs-serve`. No production code changed.

@@ -1502,12 +1502,16 @@ def _apply_ingest_plan(
 
     Shared by startup and ``POST /plan/reload`` so both go through the identical
     :func:`_load_ingest_plan` resolution (defaults/include/matrix/``${VAR}``),
-    :func:`_select_jobs` selection, and error handling. Returns the same
-    ``{"path", "loaded", "failed"}`` summary that ``GET /health`` exposes: a
-    loader/file-level or per-job problem fails only that record (with a
-    ``ujin: …`` message) while the remaining jobs upsert by their stable ids.
-    Every upserted job is tagged with ``"plan"`` provenance so prune can find them.
-    Re-applying is idempotent — same ids upsert the same jobs.
+    :func:`_select_jobs` selection, and error handling. Returns a summary dict
+    with ``{"path", "loaded", "added", "already_present", "failed"}`` (and
+    ``"pruned"`` when *prune* is set): ``added`` lists ids that were not
+    previously registered in *manager* (genuinely new this reload), while
+    ``already_present`` lists ids that were re-upserted from an earlier load.
+    ``GET /health`` exposes this same summary. A loader/file-level or per-job
+    problem fails only that record (with a ``ujin: …`` message) while the
+    remaining jobs upsert by their stable ids. Every upserted job is tagged with
+    ``"plan"`` provenance so prune can find them. Re-applying is idempotent —
+    same ids upsert the same jobs (and move to ``already_present``).
 
     With *prune* set, plan-owned jobs whose ids are no longer declared by the
     re-read plan are removed from *manager* and reported in a ``"pruned"`` list
@@ -1524,6 +1528,7 @@ def _apply_ingest_plan(
     """
     plan_status: dict[str, list] = {
         "path": str(plan_src), "loaded": [], "failed": [],
+        "added": [], "already_present": [],
     }
     # `present` collects the ids the plan currently declares (built or not); it
     # stays empty on a file-level read failure, which gates prune below.
@@ -1535,8 +1540,13 @@ def _apply_ingest_plan(
         plan_specs = _select_jobs(plan_specs, only, exclude, tags, exclude_tags)
     for spec in plan_specs:
         try:
+            is_new = spec.id not in manager.jobs
             manager.create(spec, origin="plan")
             plan_status["loaded"].append(spec.id)
+            if is_new:
+                plan_status["added"].append(spec.id)
+            else:
+                plan_status["already_present"].append(spec.id)
         except Exception as exc:  # noqa: BLE001
             log.warning("plan job %s failed: %s", spec.id, exc)
             plan_status["failed"].append({"id": spec.id, "error": f"ujin: {exc}"})
@@ -1554,6 +1564,13 @@ def _apply_ingest_plan(
                     manager.delete(jid)
                     pruned.append(jid)
         plan_status["pruned"] = sorted(pruned)
+    log.info(
+        "plan applied: added=%d present=%d pruned=%d failed=%d",
+        len(plan_status["added"]),
+        len(plan_status["already_present"]),
+        len(plan_status.get("pruned", [])),
+        len(plan_status["failed"]),
+    )
     return plan_status
 
 
