@@ -49,7 +49,7 @@ def extract_feeds(html: str, base_url: Optional[str] = None) -> list[dict]:
     try:
         parser.feed(html)
         parser.close()
-    except Exception:  # noqa: BLE001 — parser failure must not propagate  # pragma: no cover
+    except Exception:  # noqa: BLE001 — parser failure must not propagate
         pass
 
     seen: set[str] = set()
@@ -103,6 +103,6 @@ def _resolve(value: str, base_url: Optional[str]) -> str:
     if base_url:
         try:
             return urljoin(base_url, value)
-        except Exception:  # noqa: BLE001 — join failure keeps the raw value  # pragma: no cover
+        except Exception:  # noqa: BLE001 — join failure keeps the raw value
             return value
     return value

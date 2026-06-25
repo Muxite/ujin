@@ -1,6 +1,6 @@
 # ujin
 
-The **ultimate scraper-poller**. Three parts that share one toolkit:
+The **ultimate scraper-poller**. Two halves that share one toolkit:
 
 1. **Adaptive multi-role poller** — poll *anything* (HTTP pages, RSS, JSON APIs,
    GraphQL endpoints, shell commands, Python callables, scoped page regions, or
@@ -11,20 +11,6 @@ The **ultimate scraper-poller**. Three parts that share one toolkit:
    fingerprinted change detection, structured-data + HTML-table + image +
    head-metadata + feed-URL extraction, and optional social/trends sources —
    all behind a small HTTP API.
-3. **Declarative jobs control plane** — `source → transforms → sinks → schedule`
-   driven by REST or file-based config: shared `defaults:` deep-merged under
-   every job, reusable `include:`/`use:` fragment files, `vars:` placeholder
-   defaults and `${VAR}` / `${VAR:-default}` / `${VAR:?message}` env
-   substitution, named `profiles:` overlays, and `matrix:`/`for_each:` fan-out to
-   turn one template into N jobs; or mount an **INGEST-PLAN** with
-   `--plan` / `$UJIN_INGEST_PLAN` — a single file *or a directory of plan files* —
-   for multi-job deploys.
-   Validate and inspect offline with `ujin plan validate` / `ujin plan render`,
-   diff two plans by resolved job id with `ujin plan diff`, list the environment
-   variables a plan needs with `ujin plan env`, and export the file-format JSON
-   Schema with `ujin plan schema`, before committing to a deploy.
-   See the [external-config walkthrough](docs/recipes/external-config-flow.md) for
-   an end-to-end example, and [INGEST_PLAN.md](docs/INGEST_PLAN.md) for the full reference.
 
 It bundles the [obscura](https://github.com/Muxite/obscura) headless renderer as
 a submodule, and stays a **pure-python pip install** (the renderer is built
@@ -104,204 +90,6 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
   -d '{"urls":["https://apnews.com","https://www.reuters.com/world/"],"mode":"links"}'
 ```
 
-## Quick start — jobs and file-driven config
-
-`--plan` / `$UJIN_INGEST_PLAN` mounts a YAML file — or **a directory of plan files**,
-whose `*.y*ml` files are loaded in sorted order and aggregated into one job set — that
-declares many jobs at once, kept DRY with `defaults:` deep-merge, `include:`/`use:`
-fragments, `vars:` placeholder defaults, named `profiles:` overlays, and
-`matrix:`/`for_each:` fan-out. A directory and a single equivalent file resolve to the
-same jobs; two files that resolve to the same job id raise a clear duplicate-id error.
-See the [external-config walkthrough](docs/recipes/external-config-flow.md) for an
-end-to-end example.
-
-```bash
-ujin plan init                                      # writes a starter ingest-plan.yaml (3 jobs, all layers)
-ujin plan init my-plan.yaml                        # custom destination path
-ujin jobs-serve --plan examples/ingest-plan.yaml   # :8902 — many jobs from one file
-ujin jobs-serve --plan ./plan.d/                    # …or a directory of plan files
-ujin plan validate examples/ingest-plan.yaml        # validate plan before deploying (exit 0 = ok)
-ujin plan validate examples/ingest-plan.yaml --schema   # also check document shape vs the JSON Schema
-ujin plan render   examples/ingest-plan.yaml        # print fully-expanded job specs (--json for CI)
-ujin plan render   examples/ingest-plan.yaml --summary  # concise overview: job count + one line per job
-
-# Inject secrets without committing them — file supplies vars not already in the environment:
-ujin plan validate examples/ingest-plan.yaml --env-file .env
-ujin plan render   examples/ingest-plan.yaml --env-file .env
-ujin jobs-serve    --plan examples/ingest-plan.yaml --env-file .env
-
-# Profiles — overlay a named variation of `defaults:` (flag wins over $UJIN_PLAN_PROFILE):
-ujin plan render  examples/profiles.yaml --profile fast                # apply the `fast` overlay
-UJIN_PLAN_PROFILE=slow ujin jobs-serve --plan examples/profiles.yaml   # env fallback
-
-# Job selectors — filter after full resolution (defaults, includes, matrix fan-out):
-ujin plan render  examples/ingest-plan.yaml --only 'feed-*'            # matching ids only
-ujin plan render  examples/ingest-plan.yaml --only 'feed-*' --exclude feed-tech
-ujin jobs-serve   --plan examples/ingest-plan.yaml --only 'feed-*'     # preload subset
-ujin plan render  examples/ingest-plan-tags.yaml --tag prod           # by `tags:` label, not id
-ujin plan render  examples/ingest-plan-tags.yaml --tag prod --only 'feed-*'  # selectors AND together
-
-# Provenance — show which source file and matrix row produced each expanded job:
-ujin plan render  examples/ingest-plan.yaml --explain                  # `# source:` / `# matrix:` comments
-ujin plan render  examples/ingest-plan.yaml --explain --json           # machine-readable provenance
-
-# Diff two plans by resolved job id — what was added, removed, or changed:
-ujin plan diff    old-plan.yaml examples/ingest-plan.yaml              # `+`/`-`/`~` per job id
-ujin plan diff    old-plan.yaml examples/ingest-plan.yaml --json       # machine-readable (CI)
-ujin plan diff    old-plan.yaml examples/ingest-plan.yaml --exit-code  # exit 1 if any diff (CI gate)
-
-# Export the file-format JSON Schema (draft 2020-12) — for editor linting or CI:
-ujin plan schema                                       # print the schema to stdout
-ujin plan schema --out ingest-plan.schema.json         # …or write it to a file
-
-# List the ${VAR} environment variables a plan needs (default / required / set):
-ujin plan env     examples/ingest-plan.yaml            # human table
-ujin plan env     examples/ingest-plan.yaml --json     # machine-readable (CI)
-ujin plan env     examples/ingest-plan.yaml --env-file .env  # count .env vars as set
-
-# Eject resolved jobs to standalone single-job YAML files (one <id>.yaml per job):
-ujin plan eject   examples/ingest-plan.yaml --out ./ejected/
-ujin plan eject   examples/ingest-plan.yaml --out ./ejected/ --only 'feed-*'
-ujin plan eject   examples/ingest-plan.yaml --out ./ejected/ --profile fast
-```
-
-`--plan` (or `$UJIN_INGEST_PLAN`) mounts a single YAML file that declares many jobs
-at once. A few additive layers keep large plans DRY:
-
-- **`defaults:`** — a top-level mapping deep-merged under every job; per-job keys win.
-- **`include:`/`use:`** — pull in a fragment file for a shared sink, schedule, or
-  transform pipeline; paths resolve relative to the plan file, then `$UJIN_WORKFLOWS_DIR`.
-- **`matrix:`/`for_each:`** — fan one template into many jobs. The value is a list of
-  variable maps (inline, or a `{ from: <path> }` data file resolved like an `include:`
-  fragment), **or** a mapping of axis-name → list-of-values fanned into the cartesian
-  product (one job per combination — two axes of sizes M and N give M·N jobs). ujin
-  substitutes each row into `{{ var }}` placeholders across the
-  source/transforms/sinks/schedule, emitting one job per row with a stable,
-  deterministic id so reloads upsert rather than duplicate. A matrix mapping may also
-  carry optional `exclude:` (drop combinations matching a partial variable map) and
-  `include:` (append explicit extra combinations) filter lists — see
-  `examples/matrix-exclude.yaml`.
-- **`vars:`** — a top-level mapping of variable name → default value
-  (e.g. `vars: { region: us-east }`) that backfills any `{{ var }}` placeholder the
-  environment and matrix leave unset. Precedence for a `{{ NAME }}`: a matrix per-entry
-  value wins, then the process environment (variable `NAME`, if set), then the
-  file-level `vars: NAME` default; a plan with no `vars:` key resolves byte-for-byte
-  as before.
-- **`profiles:`** — a top-level mapping of profile name → overlay, each deep-merged
-  *over* `defaults:` before the per-job merge when selected with `--profile NAME`
-  (or `$UJIN_PLAN_PROFILE`; the flag wins). A profile key replaces the same key in
-  `defaults:`, but a per-job key still wins over the profile, so precedence is
-  per-job > profile > `defaults:`. With no profile selected resolution is
-  byte-for-byte unchanged; an unknown name exits non-zero with a clean `ujin: …`
-  message listing the available profiles.
-- **`${VAR}` / `${VAR:-default}` / `${VAR:?message}`** — environment substitution
-  expanded at file-read time. `${VAR:?message}` raises a clear error (naming the
-  variable and including `message`) when `VAR` is unset or empty, so missing secrets
-  are caught early rather than silently expanding to an empty string.
-
-Any job may also carry an optional **`tags:`** key — a single string or a list of
-strings — purely as free-form labels (`tags: prod` or `tags: [prod, eu]`). Tags never
-change how a job runs; they follow the same merge/fan-out precedence as every other
-key (a per-job `tags:` overrides the `defaults:` one; a `{{ var }}` inside a tag
-substitutes per matrix entry) and a job with no `tags:` resolves byte-for-byte as
-before. Each resolved job's tags surface in `plan render --json` and the `GET /plan`
-introspection response.
-
-`ujin plan validate`, `ujin plan render`, and `ujin plan eject` accept
-`--only PATTERN[,PATTERN…]` / `--exclude PATTERN[,PATTERN…]` to filter the resolved
-jobs by **id**, and `--tag PATTERN[,PATTERN…]` / `--exclude-tag PATTERN[,PATTERN…]`
-to filter by **`tags:`** (all fnmatch-style globs, comma-separated or repeatable),
-**after** all resolution layers. The id and tag selectors compose (AND together).
-`jobs-serve --plan` accepts the same four flags and reflects only the selected jobs in
-`GET /health`. A `--only` pattern that matches no id, or a `--tag` no job carries,
-exits non-zero with a clean `ujin: …` message.
-
-`ujin plan validate` checks a plan file **or** a workflows directory with the same
-loaders as `jobs-serve` — identical ids and error messages — without starting the
-server. Add `--schema` to *additionally* check the **unresolved** document against the
-JSON Schema `ujin plan schema` emits, reporting structural shape violations (a scalar
-document, a non-list `jobs:`, a string `source:`) with the offending JSON path (e.g.
-`$.jobs[0].source`); it complements the loader and `--strict` checks and is off by
-default, so output and exit codes are byte-for-byte unchanged without it. It also emits
-**advisory** `WARN`s for plan hygiene — misspelled keys, redundant `defaults:`, a
-`vars:` default no `{{ var }}` references (dead config), and a `{{ placeholder }}` left
-unsubstituted after `vars:`/`matrix:` resolution (likely a typo) — that never change the
-default exit code; `--strict` promotes every advisory to a `FAIL` for CI. `ujin plan
-render` prints every fully-expanded `JobSpec` after all resolution layers so you can
-verify matrix fan-out and defaults merges before deploying. Add `--explain` to annotate
-each job with its provenance — the originating source file and, for matrix/for_each-expanded
-jobs, the matrix entry index and variable map that produced it (as `#` comments in YAML,
-or a `provenance` object with `--json`); the default render output is unchanged without
-the flag.
-
-`ujin plan diff OLD NEW` resolves two plans (or workflows directories) with the same
-loaders and reports, keyed by final job id, which jobs were **added** in `NEW` (`+`),
-**removed** in `NEW` (`-`), and **changed** (`~`, present in both but with a differing
-resolved spec). It exits zero whenever both inputs resolve — an identical pair prints
-`no changes`. Pass `--exit-code` (alias `--check`) to flip this for CI: non-zero when
-any jobs differ, zero when identical. `--json` emits the same information as a
-structured object with distinct `added`/`removed`/`changed` groupings (added/removed
-carry each job's `spec`; changed carries `old` and `new`), and its shape is unaffected
-by `--exit-code`. `--env-file` is accepted as with the other plan subcommands. An
-unreadable or schema-invalid input exits non-zero with a clean `ujin: …` message and
-no traceback.
-
-`ujin plan schema` prints a **JSON Schema** (draft 2020-12) describing the
-INGEST-PLAN / workflow file format itself — the per-job shape, the top-level
-`defaults:` block, `include:`/`use:`, `matrix:`/`for_each:`, `vars:`, and
-`profiles:` — to stdout, or to a file with `--out PATH`. Feed it to an editor for
-autocompletion/linting, or to a draft-2020-12 validator for a CI well-formedness
-check before `plan validate` runs the loaders (or run `plan validate --schema` to
-perform that same check inline, no external validator needed). It describes the *unresolved* file,
-so it is deliberately permissive (a job may omit keys that `defaults:` or the
-filename stem supply) but still rejects a structurally-malformed plan (a scalar
-document, a non-list `jobs:`, a string `source:`). The command is read-only and
-resolves nothing; output is deterministic. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
-
-`ujin plan env` reports the **environment variables a plan needs** — it resolves
-`include:`/`use:` fragments, then collects every `${VAR}` reference and lists, per
-variable, the default declared by its `${VAR:-default}` form, whether any occurrence
-is required (`${VAR:?message}`), and whether it is currently set in the environment.
-It reuses the same `${VAR}`-scanning and fragment-resolution machinery as the
-loaders but never expands or alters anything (strictly read-only). `--json` emits a
-machine-readable object and `--env-file PATH` feeds the set/unset check (process env
-wins); a plan with no `${VAR}` references succeeds and reports an empty set. Use it
-to see, before deploying, which secrets/config a mounted plan still needs.
-
-`ujin plan eject <path> --out <dir>` **materializes** every fully-resolved job from a
-plan (or a workflows directory) into a directory of standalone single-job YAML files —
-one `<id>.yaml` per expanded job. All six resolution layers are applied first
-(`defaults:` deep-merge, `include:`/`use:` fragments, `matrix:`/`for_each:` fan-out,
-`profiles:` overlays, `vars:` defaults, and `${VAR}` substitution), so each ejected
-file contains only resolved `JobSpec` fields — no templates, placeholders, or
-inheritance remain. Loading any ejected file back through the single-file workflow
-loader produces the same job spec it had inside the plan. The `--out` directory is
-created if it does not exist. Accepts the same `--only`/`--exclude`/`--tag`/`--exclude-tag`/`--profile`/`--env-file`
-selectors as `plan render`. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
-
-Changed the plan file? `POST /plan/reload` re-reads it and upserts the resolved jobs
-in-process — no restart — sharing the startup loader (a single bad job is reported,
-the rest reload) and refreshing the `/health` plan status; with no plan configured
-it is a safe no-op. Add `?prune=true` (or a `{"prune": true}` body) to also remove
-plan-owned jobs dropped from the file (returned in a `pruned` list); API- and
-preload-created jobs are never pruned. Add `?dry_run=true` (or a `{"dry_run": true}`
-body) to preview the reload without touching the manager — the response reports the
-ids that would be `added`/`updated`/`unchanged` (and `removed` with `prune`) while
-`GET /jobs` stays identical. To skip the manual POST entirely, start
-`jobs-serve --watch-plan` (or `UJIN_WATCH_PLAN=1`; tune the poll interval with
-`--watch-interval` / `$UJIN_WATCH_INTERVAL`, default `2.0`s): a stdlib-only
-background poller re-applies the **same** reload-with-prune automatically whenever
-the `--plan` file changes on disk — added/changed jobs appear and removed plan-owned
-jobs are pruned with no restart. Off by default (a no-config deploy is unchanged); a
-malformed save is skipped (jobs kept, error reported in `failed`), API/preload jobs
-are never pruned, and it is race-free with the manual endpoint. Want to see what the
-active plan/workflows resolve to
-without touching anything? `GET /plan` is the read-only, live counterpart to
-`ujin plan render --explain`: it returns every currently-resolved job id with its
-provenance — the originating plan/workflow file, plus the matrix entry for
-fanned-out jobs. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md), [docs/WORKFLOWS.md](docs/WORKFLOWS.md),
-and the [external-config recipe](docs/recipes/external-config-flow.md).
-
 ## Watch a page for change
 
 ```bash
@@ -337,32 +125,10 @@ curl -X POST localhost:8902/jobs -H 'content-type: application/json' -d '{
 ```
 
 Prefer files over API calls? Drop workflow definitions into the mounted
-workflows directory (`$UJIN_WORKFLOWS_DIR`, default `/workflows`; override per run
-with `--workflows`) — each file is one workflow, the **filename stem is its id**,
-and ujin sets it up on startup, runs it, and hands back what it obtained at
-`GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). Keep
-many similar workflows DRY with an optional top-level `defaults:` block (deep-merged
-under each job, per-job keys win) and `include:`/`use:` fragment files for shared
-sinks, schedules, or transform pipelines; or fan one template into many with a
-`matrix:`/`for_each:` key — a list of variable maps (inline, or a `{ from: <path> }`
-data file), or a mapping of axis-name → list-of-values fanned into the cartesian
-product (one job per combination), each substituted into the
-`source`/`transforms`/`sinks`/`schedule`, with a stable per-row id so reloads upsert
-rather than duplicate. An optional top-level `vars:` block (variable name → default
-value) backfills any `{{ var }}` placeholder the environment and matrix leave unset.
-An optional top-level `profiles:` block declares named overlays over `defaults:`,
-selected with `--profile NAME` or `$UJIN_PLAN_PROFILE` (flag wins; a file with no
-`profiles:` key is left unchanged, so only files that declare the block are affected).
-See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
-
-Prefer one file over a directory? Mount a single **INGEST-PLAN** declaring many
-jobs at once — a top-level list of jobs, or a mapping with `jobs:` plus a shared
-`defaults:` block — and point ujin at it with `--plan` or `$UJIN_INGEST_PLAN`. It
-reuses the same `defaults:`/`include:`/`matrix:`/`vars:` layers and stable ids (plus
-an optional `profiles:` map of named overlays selected with `--profile` /
-`$UJIN_PLAN_PROFILE`), so
-re-loading upserts; a malformed plan or job is reported in `GET /health` without
-aborting startup. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
+`./workflows` directory — each file is one workflow, the **filename stem is its
+id**, and ujin sets it up on startup, runs it, and hands back what it obtained at
+`GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). See
+[docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
 Need something the built-ins don't cover? Drop a Python file into the mounted
 `/plugins` volume and it becomes a `plugin:<name>` source/transform/sink — see
@@ -407,12 +173,6 @@ ujin serve targets.yaml      # run the poll engine as a daemon
 ujin api [targets.yaml]      # poller control service (REST + WS) on :8900
 ujin scrape-serve            # rich scrape HTTP service on :8901
 ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
-ujin plan validate <path>    # validate a plan/workflows dir (--json; --strict CI gate; --schema shape check; --env-file; --only/--exclude; --tag/--exclude-tag; --profile)
-ujin plan render <path>      # resolve and print every expanded job (--json; --summary; --explain provenance; --env-file; --only/--exclude; --tag/--exclude-tag; --profile)
-ujin plan diff OLD NEW       # diff two plans/dirs by resolved job id (--json; --exit-code/--check non-zero on any diff; --env-file)
-ujin plan schema             # print the INGEST-PLAN/workflow JSON Schema, draft 2020-12 (--out PATH to a file)
-ujin plan env <path>         # list the ${VAR} env vars a plan needs (default/required/set; --json; --env-file)
-ujin plan eject <path> --out <dir>  # materialize fully-resolved jobs to standalone YAML files (--only/--exclude; --tag/--exclude-tag; --profile; --env-file)
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
 ujin learned site_state.db   # inspect the durable per-host learned state (--json)
@@ -439,13 +199,8 @@ Three FastAPI apps — run any combination. Full reference in
 - **Jobs control plane** (`:8902`): `POST /jobs` (source→transforms→sinks→schedule),
   `GET/DELETE /jobs/{id}`, `/jobs/{id}/run|pause|resume|runs|events`,
   `/jobs/{id}/content` + `/jobs/{id}/results` (hand out obtained data), `WS /jobs/events`,
-  `/kinds`, `/metrics`, `POST /plugins/reload`, `GET /plan` (read-only: the jobs the
-  active plan/workflows resolve to, each with provenance), `POST /plan/reload` (re-read
-  the INGEST-PLAN, no restart; `?prune=true` also drops plan-owned jobs gone from the
-  file, `?dry_run=true` previews the effect without mutating anything). Durable +
-  plugin-extensible.
-  File-driven workflows load from `./workflows` (with `matrix:`/`for_each:` template
-  fan-out) — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
+  `/kinds`, `/metrics`, `POST /plugins/reload`. Durable + plugin-extensible.
+  File-driven workflows load from `./workflows` — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 - **Poller control** (`:8900`): `GET /health /metrics /targets`,
   `GET /content?key=…` (reuse the body ujin last fetched), `POST /targets`,
   `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.
@@ -560,7 +315,7 @@ Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [ADAPTIVE](docs/ADAPTIVE.md) ·
 [BACKENDS](docs/BACKENDS.md) (aiohttp vs obscura vs playwright vs selenium) ·
 [PERFORMANCE](docs/PERFORMANCE.md) · [CONSUMERS](docs/CONSUMERS.md)
 (downstream submodule contracts) · [API](docs/API.md) · [JOBS](docs/JOBS.md) ·
-[WORKFLOWS](docs/WORKFLOWS.md) · [INGEST_PLAN](docs/INGEST_PLAN.md) (many jobs from one mounted file) · [external-config recipe](docs/recipes/external-config-flow.md) · [PLUGINS](docs/PLUGINS.md) ·
+[WORKFLOWS](docs/WORKFLOWS.md) · [PLUGINS](docs/PLUGINS.md) ·
 [LIST_TRANSFORMS](docs/LIST_TRANSFORMS.md) (filter/flatten/sort/limit/rename/aggregate/unique/fill/csv) ·
 [MARKETPLACE](docs/MARKETPLACE.md) (generic engine; site profiles supplied externally) ·
 [BROWSER](docs/BROWSER.md) · [MCP](docs/MCP.md) · [CHANGELOG](CHANGELOG.md)

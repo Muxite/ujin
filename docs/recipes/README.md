@@ -4,7 +4,6 @@ Task-oriented walkthroughs. Each is a complete, copy-pasteable job or scrape cal
 
 | Recipe | What it shows |
 |--------|---------------|
-| [external-config-flow.md](external-config-flow.md) | **End-to-end external-config flow**: `defaults:` + `include:` fragments + `matrix:` fan-out, mounted as a single INGEST-PLAN; validate with `ujin plan validate` / inspect with `ujin plan render`. |
 | [load-more-academic-profile.md](load-more-academic-profile.md) | Harvest **every** publication behind a "Load more" button (the Sidney Fels case). |
 | [feed-an-llm-with-chunking.md](feed-an-llm-with-chunking.md) | Hand a large result set to an LLM in digestible chunks (`chunk` transform + paginated `/scrape`). |
 | [paginated-api-harvest.md](paginated-api-harvest.md) | Pull a big link-set N-at-a-time with `page_size` + `cursor`. |

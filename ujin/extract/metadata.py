@@ -51,7 +51,7 @@ def extract_metadata(html: str, base_url: Optional[str] = None) -> dict:
     try:
         parser.feed(html)
         parser.close()
-    except Exception:  # noqa: BLE001 — a parser failure must not propagate  # pragma: no cover
+    except Exception:  # noqa: BLE001 — a parser failure must not propagate
         pass
 
     out: dict = {}
@@ -158,7 +158,7 @@ def _resolve(value: str, base_url: Optional[str]) -> str:
     if base_url:
         try:
             return urljoin(base_url, value)
-        except Exception:  # noqa: BLE001 — a join failure keeps the raw value  # pragma: no cover
+        except Exception:  # noqa: BLE001 — a join failure keeps the raw value
             return value
     return value
 

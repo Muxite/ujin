@@ -93,30 +93,13 @@ def test_main_scrape_serve_dispatch(monkeypatch):
 def test_main_jobs_serve_dispatch(monkeypatch):
     called = {}
 
-    def fake_serve(host, port, config_path, workflows_dir, plan_path, only=None,
-                   exclude=None, tags=None, exclude_tags=None, watch_plan=False,
-                   watch_interval=None, profile=None):
-        called.update(port=port, workflows_dir=workflows_dir, plan_path=plan_path,
-                      watch_plan=watch_plan, watch_interval=watch_interval,
-                      profile=profile)
+    def fake_serve(host, port, config_path, workflows_dir):
+        called.update(port=port, workflows_dir=workflows_dir)
 
-    # Stub the plan loader so the preflight doesn't try to read a non-existent file.
-    monkeypatch.setattr("ujin.jobs.app._load_ingest_plan",
-                        lambda *a, **kw: [object()])
     monkeypatch.setattr("ujin.jobs.app.serve", fake_serve)
-    rc = cli.main(["jobs-serve", "--workflows", "/wf", "--plan", "/p.yaml"])
+    rc = cli.main(["jobs-serve", "--workflows", "/wf"])
     assert rc == 0
     assert called["workflows_dir"] == "/wf"
-    assert called["plan_path"] == "/p.yaml"
-    # Watcher is off unless --watch-plan is passed.
-    assert called["watch_plan"] is False and called["watch_interval"] is None
-
-    # …and the watch flags thread through to serve() when given.
-    called.clear()
-    rc = cli.main(["jobs-serve", "--plan", "/p.yaml", "--watch-plan",
-                   "--watch-interval", "0.5"])
-    assert rc == 0
-    assert called["watch_plan"] is True and called["watch_interval"] == 0.5
 
 
 def test_main_serve_dispatch(monkeypatch, tmp_path):

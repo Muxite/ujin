@@ -55,7 +55,6 @@ dev = [
     "pytest-cov>=5.0",
     "coverage[toml]>=7.4",
     "pytest-benchmark>=4.0",
-    "jsonschema>=4.0",
 ]
 
 [project.scripts]

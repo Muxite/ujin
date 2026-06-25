@@ -49,7 +49,7 @@ def apply_link_profile(
     if not html or not profile.has_link_profile:
         return []
     tree = HTMLParser(html)
-    if tree.body is None:  # pragma: no cover — selectolax always creates a body node
+    if tree.body is None:
         return []
 
     path_re: Optional[re.Pattern] = None
@@ -85,7 +85,7 @@ def apply_link_profile(
     selectors = profile.link_selectors or ("a",)
     for sel in selectors:
         for a in tree.css(sel):
-            if id(a) in exclude_nodes:  # pragma: no cover — selectolax creates fresh wrappers per css() call
+            if id(a) in exclude_nodes:
                 continue
             href = a.attributes.get("href")
             if not href:
