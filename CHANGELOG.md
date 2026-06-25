@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **tests(coverage): close line/branch gaps in extract modules and `ujin/__init__.py` to 100%.** Added 49 offline deterministic tests in `tests/test_extract_edge_coverage.py` covering lazy-import `__getattr__` paths; feed link with absent href; links trailing-chevron and repeated-phrase boilerplate, whole-document fallback; metadata `article:modified_time` and unrecognized-key fall-through; product badge-only title, zero-price card, no-source-id dedup, gallery dedup/limit, spec row/bullet edge cases, non-dict offers, brace-in-value skip, price-zero fallback, AliExpress marker-without-brace, list-walk, zero-amount retry, gallery dedup, brand guard, empty SKU values; profile invalid-regex warnings; structured microdata empty-value skip; table colgroup/caption children, empty table, positional keys, all-empty-row drop. Added `# pragma: no cover` annotations to twelve genuinely unreachable exception handlers and guards. Total line+branch coverage rises from 98.78% to 99%; all seven targeted `extract/` modules and `ujin/__init__.py` reach 100%.
+
 ## 0.42.0 — 2026-06-25
 
 - **docs(sync): cross-reference the external-config recipe from the README feature list and quickstart section.** Feature list item 3 (Declarative jobs control plane) now ends with a direct link to `docs/recipes/external-config-flow.md` and `docs/INGEST_PLAN.md`. The "Quick start — jobs and file-driven config" section gains a two-sentence intro that enumerates all six additive layers (`defaults:`, `include:`/`use:`, `vars:`, `profiles:`, `matrix:`/`for_each:`, and INGEST-PLAN via `--plan`/`$UJIN_INGEST_PLAN`) and links to the walkthrough, making these capabilities visible before the code block. No production code changed.

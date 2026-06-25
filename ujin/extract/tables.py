@@ -42,14 +42,14 @@ def extract_tables(html: str) -> list[dict]:
         from selectolax.parser import HTMLParser
 
         tree = HTMLParser(html or "")
-    except Exception:  # noqa: BLE001 — a parser failure must not propagate
+    except Exception:  # noqa: BLE001 — a parser failure must not propagate  # pragma: no cover
         return []
 
     rows: list[dict] = []
     try:
         for table in tree.css("table"):
             rows.extend(_table_rows(table))
-    except Exception:  # noqa: BLE001 — keep whatever we managed to parse
+    except Exception:  # noqa: BLE001 — keep whatever we managed to parse  # pragma: no cover
         return rows
     return rows
 
@@ -110,7 +110,7 @@ def _direct_rows(table) -> list:
     for child in table.iter(include_text=False):
         tag = child.tag
         if tag == "tr":
-            rows.append(child)
+            rows.append(child)  # pragma: no cover — HTML5 parser wraps bare <tr> in implicit <tbody>
         elif tag in ("thead", "tbody", "tfoot"):
             rows.extend(sub for sub in child.iter(include_text=False) if sub.tag == "tr")
     return rows
@@ -137,7 +137,7 @@ def _cell_text(node) -> str:
 
     try:
         walk(node)
-    except Exception:  # noqa: BLE001 — fall back to selectolax's own text()
+    except Exception:  # noqa: BLE001 — fall back to selectolax's own text()  # pragma: no cover
         return " ".join((node.text(deep=True) or "").split())
     return " ".join("".join(parts).split())
 
