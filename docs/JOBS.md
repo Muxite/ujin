@@ -104,7 +104,7 @@ GET    /jobs/{id}/results?limit=N  recent buffer of obtained results (per change
 WS     /jobs/events             live change stream (all jobs)
 POST   /plugins/reload          re-import plugins -> {loaded, failed}
 GET    /plan                    read-only: jobs the active plan/workflows resolve to + provenance
-POST   /plan/reload             re-read the INGEST-PLAN -> {reloaded, path, loaded, failed}
+POST   /plan/reload             re-read the INGEST-PLAN -> {reloaded, path, loaded, added, already_present, failed}
 POST   /plan/reload?prune=true   …also remove plan-owned jobs gone from the file -> +{pruned}
 POST   /plan/reload?dry_run=true preview only -> {reloaded:false, dry_run:true, added, updated, unchanged}
 ```
@@ -141,14 +141,16 @@ them. See [INGEST_PLAN.md](INGEST_PLAN.md#introspecting-the-active-plan-get-plan
 `POST /plan/reload` re-reads the configured plan file and upserts its jobs by their
 stable ids — picking up added/changed jobs without restarting the server — then
 refreshes the `/health` plan status. It shares the startup loader, so a single
-malformed job is reported in `failed` while the rest reload. With no plan configured
-it is a safe no-op (`{"reloaded": false, "detail": "no plan configured", …}`). Like
-every mutating route it sits behind the optional API-key auth. Add `?prune=true`
-(or a `{"prune": true}` body) to also **remove** plan-owned jobs whose ids vanished
-from the file (returned in a `pruned` list); jobs created via the API or the
-positional preload are never pruned. Add `?dry_run=true` (or a `{"dry_run": true}`
-body) to **preview** the reload instead: the plan resolves exactly as a real reload
-would, but nothing is upserted or pruned — the response reports which ids would be
+malformed job is reported in `failed` while the rest reload. The response classifies
+each loaded job id into `added` (new this reload) or `already_present` (re-upserted),
+and a server log line is emitted with the counts. With no plan configured it is a safe
+no-op (`{"reloaded": false, "detail": "no plan configured", …}`). Like every mutating
+route it sits behind the optional API-key auth. Add `?prune=true` (or a
+`{"prune": true}` body) to also **remove** plan-owned jobs whose ids vanished from the
+file (returned in a `pruned` list); jobs created via the API or the positional preload
+are never pruned. Add `?dry_run=true` (or a `{"dry_run": true}` body) to **preview**
+the reload instead: the plan resolves exactly as a real reload would, but nothing is
+upserted or pruned — the response reports which ids would be
 `added`/`updated`/`unchanged` (plus `removed` when combined with `prune`), and
 `GET /jobs` is identical before and after. See
 [INGEST_PLAN.md](INGEST_PLAN.md#reloading-a-plan-without-restarting).

@@ -480,16 +480,25 @@ re-runs the **identical** resolution and error handling as startup
 (`defaults:`/`include:`/`matrix:`/`${VAR}`), and upserts the resolved jobs by their
 stable ids into the running job manager — so added or changed jobs become visible via
 `GET /jobs` and the refreshed `GET /health` plan block with no downtime. The response
-mirrors the startup plan-status shape, plus a `reloaded` flag:
+includes a `reloaded` flag and classifies each successfully loaded job id:
 
 ```json
 {
   "reloaded": true,
   "path": "/data/ingest-plan.yaml",
   "loaded": ["crossref", "feed-tech", "feed-science"],
+  "added": ["crossref"],
+  "already_present": ["feed-tech", "feed-science"],
   "failed": [{"id": "feed-business", "error": "ujin: plan job feed-business: …"}]
 }
 ```
+
+`added` lists job ids that were not previously registered — genuinely new this
+reload. `already_present` lists ids that existed before and were re-upserted
+(a no-op if the spec is unchanged, or a spec update if it differs). Together they
+partition `loaded` so you can tell at a glance what the reload actually changed.
+A server log line is also emitted summarising the counts:
+`plan applied: added=1 present=2 pruned=0 failed=1`.
 
 A single malformed job is reported in `failed` while the rest reload (a reload never
 aborts). By default reload only **upserts** — it never deletes jobs dropped from the file

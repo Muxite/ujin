@@ -912,6 +912,36 @@ def _report_warnings(messages: "list[str]", warnings: "list | None") -> None:
             warnings.append(msg)
 
 
+def _redundant_defaults_warnings(
+    defaults: dict, entries: list, context: str
+) -> "list[str]":
+    """Advisory message for each defaults: scalar/list key that every job overrides.
+
+    When every dict job entry also explicitly sets a non-dict key declared in
+    defaults:, that defaults value is never inherited by any job — a redundancy
+    the user may not intend. Dict defaults are skipped because _deep_merge only
+    replaces them key-by-key, so a per-job mapping is typically a partial
+    override that meaningfully extends the default. Only checked when there are
+    two or more entries; a sole job restating its own default is unremarkable.
+    Skips non-dict entries (those fail at build time under a separate path).
+    """
+    if not defaults or len(entries) < 2:
+        return []
+    dict_entries = [e for e in entries if isinstance(e, dict)]
+    if not dict_entries:
+        return []
+    out: list[str] = []
+    for key, default_val in defaults.items():
+        if isinstance(default_val, dict):
+            continue  # deep-merged: a per-job mapping is usually a partial override
+        if all(key in entry for entry in dict_entries):
+            out.append(
+                f"ujin: {context}: defaults key {key!r} is overridden by every job"
+                f"; remove it from 'defaults:' to silence this warning"
+            )
+    return out
+
+
 # ── profile overlays (`profiles:` + --profile / $UJIN_PLAN_PROFILE) ─────────── #
 #
 # A top-level `profiles:` mapping declares named overlays — each one deep-merged
@@ -1428,6 +1458,13 @@ def _load_ingest_plan(
         warnings,
     )
 
+    # Advisory redundancy check: a defaults: key that every job entry already
+    # overrides is never actually inherited — likely a copy-paste leftover.
+    _report_warnings(
+        _redundant_defaults_warnings(defaults, entries, f"plan {path.name}"),
+        warnings,
+    )
+
     # File-level `vars:` defaults (validated as a mapping by `_plan_entries` above,
     # so a non-mapping already failed the whole plan). Env-overlaid here and threaded
     # into matrix expansion so a `{{ var }}` left unset by env/matrix resolves from
@@ -1502,12 +1539,16 @@ def _apply_ingest_plan(
 
     Shared by startup and ``POST /plan/reload`` so both go through the identical
     :func:`_load_ingest_plan` resolution (defaults/include/matrix/``${VAR}``),
-    :func:`_select_jobs` selection, and error handling. Returns the same
-    ``{"path", "loaded", "failed"}`` summary that ``GET /health`` exposes: a
-    loader/file-level or per-job problem fails only that record (with a
-    ``ujin: …`` message) while the remaining jobs upsert by their stable ids.
-    Every upserted job is tagged with ``"plan"`` provenance so prune can find them.
-    Re-applying is idempotent — same ids upsert the same jobs.
+    :func:`_select_jobs` selection, and error handling. Returns a summary dict
+    with ``{"path", "loaded", "added", "already_present", "failed"}`` (and
+    ``"pruned"`` when *prune* is set): ``added`` lists ids that were not
+    previously registered in *manager* (genuinely new this reload), while
+    ``already_present`` lists ids that were re-upserted from an earlier load.
+    ``GET /health`` exposes this same summary. A loader/file-level or per-job
+    problem fails only that record (with a ``ujin: …`` message) while the
+    remaining jobs upsert by their stable ids. Every upserted job is tagged with
+    ``"plan"`` provenance so prune can find them. Re-applying is idempotent —
+    same ids upsert the same jobs (and move to ``already_present``).
 
     With *prune* set, plan-owned jobs whose ids are no longer declared by the
     re-read plan are removed from *manager* and reported in a ``"pruned"`` list
@@ -1524,6 +1565,7 @@ def _apply_ingest_plan(
     """
     plan_status: dict[str, list] = {
         "path": str(plan_src), "loaded": [], "failed": [],
+        "added": [], "already_present": [],
     }
     # `present` collects the ids the plan currently declares (built or not); it
     # stays empty on a file-level read failure, which gates prune below.
@@ -1535,8 +1577,13 @@ def _apply_ingest_plan(
         plan_specs = _select_jobs(plan_specs, only, exclude, tags, exclude_tags)
     for spec in plan_specs:
         try:
+            is_new = spec.id not in manager.jobs
             manager.create(spec, origin="plan")
             plan_status["loaded"].append(spec.id)
+            if is_new:
+                plan_status["added"].append(spec.id)
+            else:
+                plan_status["already_present"].append(spec.id)
         except Exception as exc:  # noqa: BLE001
             log.warning("plan job %s failed: %s", spec.id, exc)
             plan_status["failed"].append({"id": spec.id, "error": f"ujin: {exc}"})
@@ -1554,6 +1601,13 @@ def _apply_ingest_plan(
                     manager.delete(jid)
                     pruned.append(jid)
         plan_status["pruned"] = sorted(pruned)
+    log.info(
+        "plan applied: added=%d present=%d pruned=%d failed=%d",
+        len(plan_status["added"]),
+        len(plan_status["already_present"]),
+        len(plan_status.get("pruned", [])),
+        len(plan_status["failed"]),
+    )
     return plan_status
 
 
