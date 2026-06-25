@@ -419,8 +419,10 @@ FAIL  bad-job: ujin: plan job bad-job in plan.yaml: missing required 'source:' k
 FAIL  plan     ujin: plan.yaml: include fragment not found: 'missing.yaml' (looked in: …)
 ```
 
-Use `ujin plan validate --strict` to also promote schema warnings (unrecognized or
-misspelled keys) to failures — useful in CI.
+Use `ujin plan validate --strict` to also promote advisory warnings — unrecognized or
+misspelled keys, redundant `defaults:`, unused `vars:` defaults, and unsubstituted
+`{{ placeholder }}`s — to failures (useful in CI). See
+[Advisory plan lints](#advisory-plan-lints--dead-vars--unsubstituted-placeholders).
 
 ## Introspecting the active plan (`GET /plan`)
 
@@ -526,7 +528,7 @@ curl -X POST localhost:8902/plan/reload -H 'content-type: application/json' \
      -d '{"prune": true}'
 ```
 
-The removed ids are returned in a `pruned` list alongside `loaded`/`failed`, and the
+The removed ids are returned in a `pruned` list alongside `loaded`/`added`/`already_present`/`failed`, and the
 pruned jobs disappear from `GET /jobs` and the refreshed `/health` plan block:
 
 ```json
@@ -534,6 +536,8 @@ pruned jobs disappear from `GET /jobs` and the refreshed `/health` plan block:
   "reloaded": true,
   "path": "/data/ingest-plan.yaml",
   "loaded": ["crossref", "feed-tech"],
+  "added": [],
+  "already_present": ["crossref", "feed-tech"],
   "failed": [],
   "pruned": ["feed-science"]
 }
@@ -710,6 +714,37 @@ appear in a `warnings` array and `--strict` is reflected in `ok` and a `strict` 
 ujin plan validate ./ingest-plan.yaml --strict        # CI: unknown keys fail the build
 ujin plan validate ./ingest-plan.yaml --strict --json
 ```
+
+### Advisory plan lints — dead `vars:` & unsubstituted placeholders
+
+Two further **advisory** checks help keep large multi-job plans clean. Like the
+misspelled-key warning above (and the 0.45 redundant-`defaults:` advisory), they are
+printed as `WARN`, **never change which jobs load or the exit code by default**, and
+are promoted to `FAIL` (non-zero exit) only under `--strict`. They run on the *fully
+resolved* plan, after `defaults:` merge, `include:` splicing, `vars:`/`profiles:`
+overlays, and `matrix:`/`for_each:` fan-out.
+
+* **Unused `vars:` default** — a top-level `vars:` key declares a fallback for a
+  `{{ name }}` placeholder. When *no* job (nor the shared `defaults:`) references that
+  name anywhere, the default is dead config — usually a leftover or a misspelling. The
+  warning names the unused key. A name supplied only by `matrix:` rows still counts as
+  referenced, so a matrix-only variable is never flagged.
+
+* **Unsubstituted placeholder** — a `{{ name }}` that survives `vars:` and
+  `matrix:`/`for_each:` resolution is left verbatim (the loader is permissive), but is
+  most likely a typo or a missing matrix column. The warning names the placeholder and
+  the affected job id. (Best-effort; one message per distinct name per job.)
+
+```
+ok  feed-tech
+WARN  ujin: plan ingest-plan.yaml: vars key 'reigon' is declared but never referenced by any {{ reigon }} placeholder; remove it from 'vars:' to silence this warning
+WARN  ujin: plan ingest-plan.yaml: job 'crossref' has unsubstituted placeholder {{ regon }} (typo or missing matrix/vars value?)
+```
+
+With `--json` both appear in the same `warnings` array as the misspelled-key warnings,
+and `--strict` reflects them in `ok`/`strict` and the exit code. A plan with no `vars:`
+block and no leftover placeholders emits neither warning, so output and exit codes stay
+byte-for-byte unchanged.
 
 ### Checking document shape — `--schema`
 
@@ -1155,6 +1190,85 @@ ujin: --tag 'ghost': no jobs carry a matching tag (5 job(s) resolved)
 ```
 
 With no selector flags, all four commands are **byte-for-byte unchanged**.
+
+## CLI quick reference
+
+All plan subcommands share the same loaders as `jobs-serve` and accept a plan file
+or a workflows directory as their first positional argument.
+
+### `ujin plan validate <path>`
+
+Check a plan without starting the server. Exit 0 = all ok; non-zero = any failure.
+
+| Flag | Effect |
+|------|--------|
+| `--json` | Machine-readable JSON (`ok`, `resolved`, `failed`, `warnings`, `strict`) |
+| `--strict` | Promote unrecognized/misspelled keys from advisory `WARN` to `FAIL` (non-zero exit) — CI gate |
+| `--schema` | Also check the *unresolved* document against the JSON Schema `plan schema` emits; reports shape violations with offending JSON path (e.g. `$.jobs[0].source`) |
+| `--env-file PATH` | Load `KEY=VALUE` pairs from a dotenv file for `${VAR}` substitution |
+| `--only PATTERN` | Validate only jobs whose id matches (fnmatch; comma-separated or repeatable) |
+| `--exclude PATTERN` | Exclude matching ids (subtracts from `--only`) |
+| `--tag PATTERN` | Validate only jobs carrying a matching `tags:` value |
+| `--exclude-tag PATTERN` | Exclude jobs carrying a matching `tags:` value |
+| `--profile NAME` | Apply named overlay from `profiles:` over `defaults:` |
+
+### `ujin plan render <path>`
+
+Print every fully-expanded `JobSpec` after all six resolution layers. Exit 0 = all ok.
+
+| Flag | Effect |
+|------|--------|
+| `--json` | JSON array (same shape as `GET /jobs/{id}`) instead of YAML |
+| `--summary` | Compact overview: job count + one line per job (id, source kind/url, schedule, sink count) |
+| `--explain` | Annotate each job with its provenance — originating source file and, for matrix jobs, the entry index and variable map |
+| `--env-file PATH` | Load `KEY=VALUE` pairs from a dotenv file for `${VAR}` substitution |
+| `--only PATTERN` | Render only matching ids |
+| `--exclude PATTERN` | Exclude matching ids |
+| `--tag PATTERN` | Render only jobs with a matching tag |
+| `--exclude-tag PATTERN` | Exclude jobs with a matching tag |
+| `--profile NAME` | Apply named overlay from `profiles:` |
+
+### `ujin plan diff OLD NEW`
+
+Diff two plans (or workflows dirs) keyed by final job id. Exit 0 = both resolved (regardless of diff).
+
+| Flag | Effect |
+|------|--------|
+| `--json` | Machine-readable JSON with distinct `added`/`removed`/`changed` groupings |
+| `--exit-code` / `--check` | Flip exit convention: non-zero when any jobs differ, zero when identical — CI gate |
+| `--env-file PATH` | Load `KEY=VALUE` pairs for `${VAR}` substitution in both plans |
+
+### `ujin plan schema`
+
+Print the JSON Schema (draft 2020-12) for the INGEST-PLAN / workflow file format. Always exits 0.
+
+| Flag | Effect |
+|------|--------|
+| `--out PATH` | Write to a file instead of stdout |
+
+### `ujin plan env <path>`
+
+Report the `${VAR}` env vars a plan needs — their defaults, whether required, and whether set.
+
+| Flag | Effect |
+|------|--------|
+| `--json` | Machine-readable JSON (`path`, `vars[]` with `name`/`default`/`required`/`set`) |
+| `--env-file PATH` | Load `KEY=VALUE` pairs to count as set in the report (process env wins) |
+
+### `ujin plan eject <path> --out <dir>`
+
+Materialize every fully-resolved job to a standalone `<id>.yaml` file — all resolution layers applied,
+no templates or `${VAR}` placeholders remain. Exit 0 = all ok.
+
+| Flag | Effect |
+|------|--------|
+| `--out DIR` | **(required)** Target directory — created (with parents) if absent; existing files overwritten |
+| `--env-file PATH` | Load `KEY=VALUE` pairs for `${VAR}` substitution |
+| `--only PATTERN` | Eject only matching ids |
+| `--exclude PATTERN` | Exclude matching ids |
+| `--tag PATTERN` | Eject only jobs with a matching tag |
+| `--exclude-tag PATTERN` | Exclude jobs with a matching tag |
+| `--profile NAME` | Apply named overlay from `profiles:` |
 
 ## Example
 

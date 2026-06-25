@@ -14,7 +14,8 @@ The **ultimate scraper-poller**. Three parts that share one toolkit:
 3. **Declarative jobs control plane** — `source → transforms → sinks → schedule`
    driven by REST or file-based config: shared `defaults:` deep-merged under
    every job, reusable `include:`/`use:` fragment files, `vars:` placeholder
-   defaults, named `profiles:` overlays, and `matrix:`/`for_each:` fan-out to
+   defaults and `${VAR}` / `${VAR:-default}` / `${VAR:?message}` env
+   substitution, named `profiles:` overlays, and `matrix:`/`for_each:` fan-out to
    turn one template into N jobs; or mount a single **INGEST-PLAN** file with
    `--plan` / `$UJIN_INGEST_PLAN` for one-file multi-job deploys.
    Validate and inspect offline with `ujin plan validate` / `ujin plan render`,
@@ -214,7 +215,11 @@ server. Add `--schema` to *additionally* check the **unresolved** document again
 JSON Schema `ujin plan schema` emits, reporting structural shape violations (a scalar
 document, a non-list `jobs:`, a string `source:`) with the offending JSON path (e.g.
 `$.jobs[0].source`); it complements the loader and `--strict` checks and is off by
-default, so output and exit codes are byte-for-byte unchanged without it. `ujin plan
+default, so output and exit codes are byte-for-byte unchanged without it. It also emits
+**advisory** `WARN`s for plan hygiene — misspelled keys, redundant `defaults:`, a
+`vars:` default no `{{ var }}` references (dead config), and a `{{ placeholder }}` left
+unsubstituted after `vars:`/`matrix:` resolution (likely a typo) — that never change the
+default exit code; `--strict` promotes every advisory to a `FAIL` for CI. `ujin plan
 render` prints every fully-expanded `JobSpec` after all resolution layers so you can
 verify matrix fan-out and defaults merges before deploying. Add `--explain` to annotate
 each job with its provenance — the originating source file and, for matrix/for_each-expanded
@@ -395,12 +400,12 @@ ujin serve targets.yaml      # run the poll engine as a daemon
 ujin api [targets.yaml]      # poller control service (REST + WS) on :8900
 ujin scrape-serve            # rich scrape HTTP service on :8901
 ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
-ujin plan validate <path>    # validate a plan file or workflows dir (--json/--strict for CI; --schema checks document shape)
-ujin plan render <path>      # resolve and print every expanded job (--json for CI; --summary for concise overview)
-ujin plan diff OLD NEW       # diff two plans/dirs by resolved job id (--json; --exit-code/--check exits non-zero on any diff)
+ujin plan validate <path>    # validate a plan/workflows dir (--json; --strict CI gate; --schema shape check; --env-file; --only/--exclude; --tag/--exclude-tag; --profile)
+ujin plan render <path>      # resolve and print every expanded job (--json; --summary; --explain provenance; --env-file; --only/--exclude; --tag/--exclude-tag; --profile)
+ujin plan diff OLD NEW       # diff two plans/dirs by resolved job id (--json; --exit-code/--check non-zero on any diff; --env-file)
 ujin plan schema             # print the INGEST-PLAN/workflow JSON Schema, draft 2020-12 (--out PATH to a file)
 ujin plan env <path>         # list the ${VAR} env vars a plan needs (default/required/set; --json; --env-file)
-ujin plan eject <path> --out <dir>  # materialize fully-resolved jobs to standalone YAML files (--only/--tag/--profile)
+ujin plan eject <path> --out <dir>  # materialize fully-resolved jobs to standalone YAML files (--only/--exclude; --tag/--exclude-tag; --profile; --env-file)
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
 ujin learned site_state.db   # inspect the durable per-host learned state (--json)
