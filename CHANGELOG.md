@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **feat(plan/validate): advisory lints for dead `vars:` defaults and unsubstituted `{{ placeholder }}`s.** `ujin plan validate` (and the shared `_load_ingest_plan`) now emit two further **advisory** warnings, consistent with the 0.45 redundant-`defaults:` advisory and its `--strict` gating. The primary lint fires when a top-level `vars:` default is declared but no `{{ var }}` references it anywhere in the fully-resolved plan (dead config), naming the unused key; a variable supplied only by `matrix:` rows still counts as referenced. The optional secondary lint fires when a `{{ placeholder }}` survives `vars:`/`matrix:`/`for_each:` resolution (likely a typo or a missing matrix column), naming the placeholder and the affected job id. Both are advisory by default — clean-plan and existing-plan exit codes and non-warning output are byte-for-byte unchanged — and fail (non-zero exit) only under `--strict`. Documented the new warnings and their `--strict` behavior in `docs/INGEST_PLAN.md` and `README.md`. Added 11 offline deterministic tests in `tests/test_plan_lint_unused.py`.
+
 ## 0.45.0 — 2026-06-25
 
 - **feat(plan/validate): `--strict` flag and redundant-defaults advisory warning.** `ujin plan validate --strict` now exits non-zero when the plan produces any advisory warning, making it suitable for CI gating (unknown/misspelled keys fail the build). Without `--strict` the exit code and output are byte-for-byte unchanged. A new redundancy advisory warning fires when a `defaults:` key is overridden by every job in a multi-job plan (the default value is never inherited); it is advisory by default and only fails under `--strict`. Documented `--strict` and its CI usage in `docs/INGEST_PLAN.md`. Added 6 offline deterministic tests: clean plan exits 0 with and without `--strict`, and a plan that triggers the new redundancy warning exits 0 by default but non-zero under `--strict`.

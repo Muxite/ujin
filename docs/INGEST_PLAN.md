@@ -419,8 +419,10 @@ FAIL  bad-job: ujin: plan job bad-job in plan.yaml: missing required 'source:' k
 FAIL  plan     ujin: plan.yaml: include fragment not found: 'missing.yaml' (looked in: …)
 ```
 
-Use `ujin plan validate --strict` to also promote schema warnings (unrecognized or
-misspelled keys) to failures — useful in CI.
+Use `ujin plan validate --strict` to also promote advisory warnings — unrecognized or
+misspelled keys, redundant `defaults:`, unused `vars:` defaults, and unsubstituted
+`{{ placeholder }}`s — to failures (useful in CI). See
+[Advisory plan lints](#advisory-plan-lints--dead-vars--unsubstituted-placeholders).
 
 ## Introspecting the active plan (`GET /plan`)
 
@@ -710,6 +712,37 @@ appear in a `warnings` array and `--strict` is reflected in `ok` and a `strict` 
 ujin plan validate ./ingest-plan.yaml --strict        # CI: unknown keys fail the build
 ujin plan validate ./ingest-plan.yaml --strict --json
 ```
+
+### Advisory plan lints — dead `vars:` & unsubstituted placeholders
+
+Two further **advisory** checks help keep large multi-job plans clean. Like the
+misspelled-key warning above (and the 0.45 redundant-`defaults:` advisory), they are
+printed as `WARN`, **never change which jobs load or the exit code by default**, and
+are promoted to `FAIL` (non-zero exit) only under `--strict`. They run on the *fully
+resolved* plan, after `defaults:` merge, `include:` splicing, `vars:`/`profiles:`
+overlays, and `matrix:`/`for_each:` fan-out.
+
+* **Unused `vars:` default** — a top-level `vars:` key declares a fallback for a
+  `{{ name }}` placeholder. When *no* job (nor the shared `defaults:`) references that
+  name anywhere, the default is dead config — usually a leftover or a misspelling. The
+  warning names the unused key. A name supplied only by `matrix:` rows still counts as
+  referenced, so a matrix-only variable is never flagged.
+
+* **Unsubstituted placeholder** — a `{{ name }}` that survives `vars:` and
+  `matrix:`/`for_each:` resolution is left verbatim (the loader is permissive), but is
+  most likely a typo or a missing matrix column. The warning names the placeholder and
+  the affected job id. (Best-effort; one message per distinct name per job.)
+
+```
+ok  feed-tech
+WARN  ujin: plan ingest-plan.yaml: vars key 'reigon' is declared but never referenced by any {{ reigon }} placeholder; remove it from 'vars:' to silence this warning
+WARN  ujin: plan ingest-plan.yaml: job 'crossref' has unsubstituted placeholder {{ regon }} (typo or missing matrix/vars value?)
+```
+
+With `--json` both appear in the same `warnings` array as the misspelled-key warnings,
+and `--strict` reflects them in `ok`/`strict` and the exit code. A plan with no `vars:`
+block and no leftover placeholders emits neither warning, so output and exit codes stay
+byte-for-byte unchanged.
 
 ### Checking document shape — `--schema`
 

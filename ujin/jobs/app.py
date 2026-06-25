@@ -942,6 +942,75 @@ def _redundant_defaults_warnings(
     return out
 
 
+def _collect_var_refs(node: Any) -> "set[str]":
+    """Set of every ``{{ name }}`` placeholder name referenced anywhere in *node*.
+
+    Walks the mapping/list/string structure and collects the variable name of each
+    ``{{ var }}`` placeholder (the same ``_VAR_REF`` syntax :func:`_subst_vars`
+    resolves). Drives the advisory lints below: which ``vars:`` defaults a plan
+    actually uses, and which placeholders survive resolution. Read-only — it never
+    mutates *node* nor changes how anything loads.
+    """
+    refs: set[str] = set()
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            stack.extend(cur.values())
+        elif isinstance(cur, list):
+            stack.extend(cur)
+        elif isinstance(cur, str):
+            refs.update(_VAR_REF.findall(cur))
+    return refs
+
+
+def _unused_vars_warnings(
+    var_defaults: dict, defaults: dict, entries: list, context: str
+) -> "list[str]":
+    """Advisory message for each ``vars:`` default no ``{{ var }}`` ever references.
+
+    A top-level ``vars:`` key declares a fallback for a ``{{ name }}`` placeholder;
+    when nothing in the resolved plan references that name, the default is dead
+    config — most likely a leftover or a misspelling. The referenced set is taken
+    from the resolved ``defaults:`` (any profile overlay already merged) and every
+    job entry — exactly the templates :func:`_subst_vars` fills — so a name supplied
+    only by ``matrix:`` rows still counts as referenced. Empty *var_defaults* (no
+    ``vars:`` block) yields nothing, so resolution is byte-for-byte unchanged.
+    """
+    if not var_defaults:
+        return []
+    referenced = _collect_var_refs(defaults) | _collect_var_refs(entries)
+    out: list[str] = []
+    for key in var_defaults:
+        if key not in referenced:
+            out.append(
+                f"ujin: {context}: vars key {key!r} is declared but never referenced "
+                f"by any {{{{ {key} }}}} placeholder; remove it from 'vars:' to "
+                "silence this warning"
+            )
+    return out
+
+
+def _unsubstituted_var_warnings(
+    resolved: dict, job_id: str, context: str
+) -> "list[str]":
+    """Advisory message for each ``{{ name }}`` still present in a *resolved* job.
+
+    After matrix/``for_each`` fan-out and ``vars:`` resolution, a surviving
+    ``{{ name }}`` placeholder is dead — nothing downstream substitutes it — so it
+    is most likely a typo or a missing matrix column. Names the placeholder and the
+    affected *job_id*; one message per distinct name (sorted for deterministic
+    output). Best-effort and advisory: the job still loads exactly as before.
+    """
+    out: list[str] = []
+    for name in sorted(_collect_var_refs(resolved)):
+        out.append(
+            f"ujin: {context}: job {job_id!r} has unsubstituted placeholder "
+            f"{{{{ {name} }}}} (typo or missing matrix/vars value?)"
+        )
+    return out
+
+
 # ── profile overlays (`profiles:` + --profile / $UJIN_PLAN_PROFILE) ─────────── #
 #
 # A top-level `profiles:` mapping declares named overlays — each one deep-merged
@@ -1473,6 +1542,14 @@ def _load_ingest_plan(
         data.get("vars") if isinstance(data, dict) else None
     )
 
+    # Advisory dead-config check: a `vars:` default that no `{{ var }}` placeholder
+    # anywhere in the resolved plan references is never used — likely a leftover or a
+    # typo. Reported (and, under --strict, failing) but never changes which jobs load.
+    _report_warnings(
+        _unused_vars_warnings(var_defaults, defaults, entries, f"plan {path.name}"),
+        warnings,
+    )
+
     # ── per-job resolution: isolate matrix/build errors so one bad job is
     # reported while the rest still load. Ids stay stable across reloads. ──
     seen: set = set()
@@ -1505,6 +1582,13 @@ def _load_ingest_plan(
                 d = dict(raw)
                 d.setdefault("id", base if len(fanned) == 1 else f"{base}-{j}")
                 d.setdefault("name", d["id"])
+                # Advisory typo check: a `{{ ... }}` still present after matrix/vars
+                # resolution is dead (nothing substitutes it downstream). Reported,
+                # never changes which job loads.
+                _report_warnings(
+                    _unsubstituted_var_warnings(d, d["id"], f"plan {path.name}"),
+                    warnings,
+                )
                 if d["id"] in seen:
                     raise ValueError(
                         f"duplicate job id {d['id']!r} (give the entry an explicit "
