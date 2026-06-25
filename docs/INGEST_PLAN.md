@@ -1158,6 +1158,85 @@ ujin: --tag 'ghost': no jobs carry a matching tag (5 job(s) resolved)
 
 With no selector flags, all four commands are **byte-for-byte unchanged**.
 
+## CLI quick reference
+
+All plan subcommands share the same loaders as `jobs-serve` and accept a plan file
+or a workflows directory as their first positional argument.
+
+### `ujin plan validate <path>`
+
+Check a plan without starting the server. Exit 0 = all ok; non-zero = any failure.
+
+| Flag | Effect |
+|------|--------|
+| `--json` | Machine-readable JSON (`ok`, `resolved`, `failed`, `warnings`, `strict`) |
+| `--strict` | Promote unrecognized/misspelled keys from advisory `WARN` to `FAIL` (non-zero exit) — CI gate |
+| `--schema` | Also check the *unresolved* document against the JSON Schema `plan schema` emits; reports shape violations with offending JSON path (e.g. `$.jobs[0].source`) |
+| `--env-file PATH` | Load `KEY=VALUE` pairs from a dotenv file for `${VAR}` substitution |
+| `--only PATTERN` | Validate only jobs whose id matches (fnmatch; comma-separated or repeatable) |
+| `--exclude PATTERN` | Exclude matching ids (subtracts from `--only`) |
+| `--tag PATTERN` | Validate only jobs carrying a matching `tags:` value |
+| `--exclude-tag PATTERN` | Exclude jobs carrying a matching `tags:` value |
+| `--profile NAME` | Apply named overlay from `profiles:` over `defaults:` |
+
+### `ujin plan render <path>`
+
+Print every fully-expanded `JobSpec` after all six resolution layers. Exit 0 = all ok.
+
+| Flag | Effect |
+|------|--------|
+| `--json` | JSON array (same shape as `GET /jobs/{id}`) instead of YAML |
+| `--summary` | Compact overview: job count + one line per job (id, source kind/url, schedule, sink count) |
+| `--explain` | Annotate each job with its provenance — originating source file and, for matrix jobs, the entry index and variable map |
+| `--env-file PATH` | Load `KEY=VALUE` pairs from a dotenv file for `${VAR}` substitution |
+| `--only PATTERN` | Render only matching ids |
+| `--exclude PATTERN` | Exclude matching ids |
+| `--tag PATTERN` | Render only jobs with a matching tag |
+| `--exclude-tag PATTERN` | Exclude jobs with a matching tag |
+| `--profile NAME` | Apply named overlay from `profiles:` |
+
+### `ujin plan diff OLD NEW`
+
+Diff two plans (or workflows dirs) keyed by final job id. Exit 0 = both resolved (regardless of diff).
+
+| Flag | Effect |
+|------|--------|
+| `--json` | Machine-readable JSON with distinct `added`/`removed`/`changed` groupings |
+| `--exit-code` / `--check` | Flip exit convention: non-zero when any jobs differ, zero when identical — CI gate |
+| `--env-file PATH` | Load `KEY=VALUE` pairs for `${VAR}` substitution in both plans |
+
+### `ujin plan schema`
+
+Print the JSON Schema (draft 2020-12) for the INGEST-PLAN / workflow file format. Always exits 0.
+
+| Flag | Effect |
+|------|--------|
+| `--out PATH` | Write to a file instead of stdout |
+
+### `ujin plan env <path>`
+
+Report the `${VAR}` env vars a plan needs — their defaults, whether required, and whether set.
+
+| Flag | Effect |
+|------|--------|
+| `--json` | Machine-readable JSON (`path`, `vars[]` with `name`/`default`/`required`/`set`) |
+| `--env-file PATH` | Load `KEY=VALUE` pairs to count as set in the report (process env wins) |
+
+### `ujin plan eject <path> --out <dir>`
+
+Materialize every fully-resolved job to a standalone `<id>.yaml` file — all resolution layers applied,
+no templates or `${VAR}` placeholders remain. Exit 0 = all ok.
+
+| Flag | Effect |
+|------|--------|
+| `--out DIR` | **(required)** Target directory — created (with parents) if absent; existing files overwritten |
+| `--env-file PATH` | Load `KEY=VALUE` pairs for `${VAR}` substitution |
+| `--only PATTERN` | Eject only matching ids |
+| `--exclude PATTERN` | Exclude matching ids |
+| `--tag PATTERN` | Eject only jobs with a matching tag |
+| `--exclude-tag PATTERN` | Exclude jobs with a matching tag |
+| `--profile NAME` | Apply named overlay from `profiles:` |
+
 ## Example
 
 A ready-to-mount plan demonstrating `defaults:` + a shared `include:` + a

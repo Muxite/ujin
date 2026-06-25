@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **docs(sync): complete external-config / ingest-plan documentation pass against 0.45.** Added `${VAR}` / `${VAR:-default}` / `${VAR:?message}` env substitution to the README feature list bullet (item 3) alongside `vars:` placeholder defaults. Expanded each `plan` subcommand in the README CLI table to include all shipped flags (`--strict`, `--schema`, `--explain`, `--env-file`, `--only`/`--exclude`, `--tag`/`--exclude-tag`, `--profile` where applicable). Added a `## CLI quick reference` section to `docs/INGEST_PLAN.md` with a per-subcommand flag table covering `validate`, `render`, `diff`, `schema`, `env`, and `eject` — matching the live `--help` output exactly. No production code changed.
+
 - **docs(sync): correct two response-shape drifts against shipped 0.45 code.** The `POST /plan/reload?prune=true` response example in `docs/INGEST_PLAN.md` was missing the `added` and `already_present` fields that `_apply_ingest_plan` always returns alongside `loaded`/`failed`/`pruned`; the example now includes both fields. The `GET /plan` response example in `docs/JOBS.md` was missing the `tags` field that `_introspect_active_plan` always emits per job alongside `id` and `provenance`; the example now includes `tags`. No production code changed.
 
 ## 0.45.0 — 2026-06-25
