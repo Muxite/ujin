@@ -284,7 +284,7 @@ def price_to_cents(text: str | float | int | None) -> int | None:
         return None
     try:
         return int(round(float(m.group(0)) * 100))
-    except ValueError:
+    except ValueError:  # pragma: no cover — _PRICE_RE guarantees a valid numeric literal
         return None
 
 
@@ -677,7 +677,7 @@ def _clean_pos_int(raw) -> int | None:
         return None
     try:
         n = int(m.group(0).replace(",", ""))
-    except ValueError:
+    except ValueError:  # pragma: no cover — _DIGITS_RE guarantees pure digits after comma-strip
         return None
     return n if n >= 0 else None
 
@@ -745,7 +745,7 @@ def extract_product_detail(
         if m:
             try:
                 rating = float(m.group(1))
-            except ValueError:
+            except ValueError:  # pragma: no cover — _RATING_RE guarantees [\d.]+ is a valid float
                 rating = None
 
     review_count: int | None = None
