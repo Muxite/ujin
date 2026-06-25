@@ -107,7 +107,7 @@ class ObscuraFetcher:
         """POST to an obscura HTTP service (``obscura serve``)."""
         try:
             import aiohttp
-        except ImportError as exc:
+        except ImportError as exc:  # pragma: no cover - aiohttp always installed
             raise ObscuraError("aiohttp required for obscura HTTP mode") from exc
 
         endpoint = service_url.rstrip("/") + "/render"
