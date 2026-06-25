@@ -100,6 +100,9 @@ def test_main_jobs_serve_dispatch(monkeypatch):
                       watch_plan=watch_plan, watch_interval=watch_interval,
                       profile=profile)
 
+    # Stub the plan loader so the preflight doesn't try to read a non-existent file.
+    monkeypatch.setattr("ujin.jobs.app._load_ingest_plan",
+                        lambda *a, **kw: [object()])
     monkeypatch.setattr("ujin.jobs.app.serve", fake_serve)
     rc = cli.main(["jobs-serve", "--workflows", "/wf", "--plan", "/p.yaml"])
     assert rc == 0

@@ -400,6 +400,7 @@ ujin plan render <path>      # resolve and print every expanded job (--json for 
 ujin plan diff OLD NEW       # diff two plans/dirs by resolved job id (--json; --exit-code/--check exits non-zero on any diff)
 ujin plan schema             # print the INGEST-PLAN/workflow JSON Schema, draft 2020-12 (--out PATH to a file)
 ujin plan env <path>         # list the ${VAR} env vars a plan needs (default/required/set; --json; --env-file)
+ujin plan eject <path> --out <dir>  # materialize fully-resolved jobs to standalone YAML files (--only/--tag/--profile)
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
 ujin learned site_state.db   # inspect the durable per-host learned state (--json)

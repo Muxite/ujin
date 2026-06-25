@@ -398,13 +398,21 @@ file, job id, and key — never a bare Python traceback:
 | `matrix:`/`for_each:` is a scalar (e.g. `42` or `"bad"`) | per-job | `must be a list of variable maps or a mapping of axis-name -> value-list, got <type>` |
 | `matrix:` axis value is not a non-empty list | per-job | `` `matrix:` axis '<name>' must be a non-empty list of values `` |
 | `include:`/`use:` path does not resolve | file-level | `include fragment not found: '<path>' (looked in: …)` |
+| `${VAR:?message}` and `VAR` is unset | file-level | `required variable 'VAR' is unset or empty — message` |
+| Two entries share the same explicit `id:` | per-job | `duplicate job id '<id>'` |
 | Top-level document is a bare scalar (workflow file) | file-level | `top-level must be a job mapping or a list of jobs, got <type>` |
 | Top-level document is a bare scalar (plan file) | file-level | `must be a list of jobs or a mapping with a \`jobs:\` list, got <type>` |
 | Job mapping is missing its `source:` key | per-job | `missing required 'source:' key` |
+| Plan file resolves to zero jobs (empty file or `jobs: []`) | file-level | `no jobs defined` |
 
 `ujin plan validate` surfaces these as `FAIL  <job-id>: ujin: …` lines (or in the
 `failed` array with `--json`) and exits non-zero. The error always names the
 originating file so you can locate the problem immediately:
+
+The `jobs-serve --plan` preflight also checks all of the above before binding a
+port: a malformed plan, missing include, unresolvable `${VAR:?}`, bad matrix,
+duplicate id, or zero-job plan all cause a non-zero exit with a `ujin: …` message
+on stderr — no traceback, no server started.
 
 ```
 FAIL  bad-job: ujin: plan job bad-job in plan.yaml: missing required 'source:' key

@@ -329,3 +329,60 @@ ujin jobs-serve --plan ./ingest-plan.yaml
 See [WORKFLOWS.md](../WORKFLOWS.md) for the directory-driven version of this
 example (`examples/workflows/site-feeds.yaml` + `marketplace-search.yaml`), and
 [INGEST_PLAN.md](../INGEST_PLAN.md) for the full reference.
+
+---
+
+## 9. Per-job `tags:` and `--tag`/`--exclude-tag` selectors
+
+Add an optional `tags:` key to any job (or to `defaults:`) to attach free-form
+labels. Tags compose with `matrix:` fan-out — `{{ var }}` inside a tag substitutes
+per entry — and do not change polling or sink behaviour.
+
+```yaml
+# ingest-plan.yaml — extend the plan from §2 with tags
+defaults:
+  tags: content            # all jobs inherit unless they set their own tags:
+
+jobs:
+  - id: crossref
+    tags: [content, api]   # per-job list: replaces defaults: tags:
+    source:
+      config:
+        url: "https://api.crossref.org/works?rows=50"
+
+  - id: "feed-{{ slug }}"
+    tags: ["feed", "feed-{{ slug }}"]   # {{ slug }} substitutes per matrix entry
+    matrix:
+      - { slug: tech }
+      - { slug: science }
+      - { slug: business }
+    source:
+      config:
+        url: "https://feeds.example.com/{{ slug }}?rows=50"
+```
+
+After fan-out the plan carries four jobs with these tags:
+
+| id | tags |
+|----|------|
+| `crossref` | `content`, `api` |
+| `feed-tech` | `feed`, `feed-tech` |
+| `feed-science` | `feed`, `feed-science` |
+| `feed-business` | `feed`, `feed-business` |
+
+Validate, render, or eject only the `feed` subset:
+
+```bash
+ujin plan validate ./ingest-plan.yaml --tag feed
+ujin plan render   ./ingest-plan.yaml --tag feed
+ujin plan eject    ./ingest-plan.yaml --tag feed --out ./feed-jobs/
+```
+
+Start the server serving only `content`-tagged jobs while excluding a specific tag:
+
+```bash
+ujin jobs-serve --plan ./ingest-plan.yaml --tag content --exclude-tag ops
+```
+
+See [INGEST_PLAN.md](../INGEST_PLAN.md#tags--free-form-labels-for-tag-based-selection) for the full
+selector reference and the `GET /plan` response shape with `tags` included.

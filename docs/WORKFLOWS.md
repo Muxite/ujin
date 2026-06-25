@@ -444,6 +444,48 @@ See `examples/profiles.yaml` for a runnable `profiles:` example, and
 [INGEST_PLAN.md](INGEST_PLAN.md#profiles--named-overlays-over-defaults) for the
 full reference including selection flags, env fallback, and precedence rules.
 
+### `tags:` — free-form labels
+
+An optional `tags:` key on any job (or in `defaults:`) attaches one or more
+free-form string labels. Tags are purely metadata — they do not affect polling
+behaviour, scheduling, or event routing — but they enable `--tag`/`--exclude-tag`
+selectors on every `plan` subcommand and on `jobs-serve` so you can target a subset
+of jobs without editing the file.
+
+```yaml
+# /workflows/feeds.yaml
+defaults:
+  tags: content            # every job inherits this tag unless it overrides
+jobs:
+  - name: home
+    source: { kind: http, config: { url: "https://example.com/" } }
+    tags: [content, priority]  # per-job list replaces defaults: tags:
+  - name: status
+    source: { kind: http, config: { url: "https://example.com/status" } }
+    tags: ops              # single string; also valid as a one-item list
+```
+
+With `matrix:`/`for_each:` fan-out, `{{ var }}` inside a tag substitutes per entry:
+
+```yaml
+- id: "feed-{{ slug }}"
+  tags: ["feed", "feed-{{ slug }}"]
+  matrix:
+    - { slug: tech }
+    - { slug: science }
+# expands to: feed-tech (tags: [feed, feed-tech]) + feed-science (tags: [feed, feed-science])
+```
+
+**Key rules:**
+- `tags:` accepts a string or a list of strings.
+- Per-job `tags:` **replaces** (does not merge with) `defaults: tags:`.
+- A job with no `tags:` key is byte-for-byte unchanged — no tag metadata is emitted.
+- Filter at startup: `ujin jobs-serve --tag content --exclude-tag ops`
+- Filter offline: `ujin plan render ./workflows/ --tag priority`
+
+See [INGEST_PLAN.md](INGEST_PLAN.md#tags--free-form-labels-for-tag-based-selection) for the full
+reference including `--tag`/`--exclude-tag` semantics and the `GET /plan` response shape.
+
 ## Collect — the container does the job
 
 Each workflow is driven by the same [adaptive engine](../README.md#how-it-works)
