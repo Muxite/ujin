@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - **docs(sync): complete 0.43 documentation pass.** Added `ujin plan eject` to the CLI quick-reference table in `README.md`. Added a `### tags:` subsection to `docs/WORKFLOWS.md` explaining the `tags:` key, how it composes with `matrix:`/`for_each:` fan-out (`{{ var }}` substitutes per entry), and the replace-not-merge semantics vs. `defaults: tags:`. Added §9 to `docs/recipes/external-config-flow.md` demonstrating per-job tag declaration, matrix-templated tags, and `--tag`/`--exclude-tag` selector usage with `plan validate`, `plan render`, `plan eject`, and `jobs-serve`. No production code changed.
+- **tests(external-config-coverage): cover the two missing branches in `_cmd_plan_eject` to reach 100% line+branch coverage.** Added 5 offline deterministic tests in `tests/test_eject_cmd_coverage.py` covering `plan eject --env-file <bad>` (missing file returns 1 cleanly, malformed KEY=VALUE line returns 1 cleanly), `plan eject --env-file <good>` (env vars loaded and job ejected successfully), and `plan eject <directory>` (resolves workflows via `_load_workflows_dir` and writes one file per job, with subdirectory fragments correctly excluded). Total suite coverage rises from 99.93% to 100%. No production-code changes.
 
 ## 0.43.0 — 2026-06-25
 
