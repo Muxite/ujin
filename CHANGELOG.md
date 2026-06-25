@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **feat(plan/validate): `--strict` flag and redundant-defaults advisory warning.** `ujin plan validate --strict` now exits non-zero when the plan produces any advisory warning, making it suitable for CI gating (unknown/misspelled keys fail the build). Without `--strict` the exit code and output are byte-for-byte unchanged. A new redundancy advisory warning fires when a `defaults:` key is overridden by every job in a multi-job plan (the default value is never inherited); it is advisory by default and only fails under `--strict`. Documented `--strict` and its CI usage in `docs/INGEST_PLAN.md`. Added 6 offline deterministic tests: clean plan exits 0 with and without `--strict`, and a plan that triggers the new redundancy warning exits 0 by default but non-zero under `--strict`.
+
 ## 0.44.0 — 2026-06-25
 
 - **docs(sync): complete 0.43 documentation pass.** Added `ujin plan eject` to the CLI quick-reference table in `README.md`. Added a `### tags:` subsection to `docs/WORKFLOWS.md` explaining the `tags:` key, how it composes with `matrix:`/`for_each:` fan-out (`{{ var }}` substitutes per entry), and the replace-not-merge semantics vs. `defaults: tags:`. Added §9 to `docs/recipes/external-config-flow.md` demonstrating per-job tag declaration, matrix-templated tags, and `--tag`/`--exclude-tag` selector usage with `plan validate`, `plan render`, `plan eject`, and `jobs-serve`. No production code changed.

@@ -912,6 +912,36 @@ def _report_warnings(messages: "list[str]", warnings: "list | None") -> None:
             warnings.append(msg)
 
 
+def _redundant_defaults_warnings(
+    defaults: dict, entries: list, context: str
+) -> "list[str]":
+    """Advisory message for each defaults: scalar/list key that every job overrides.
+
+    When every dict job entry also explicitly sets a non-dict key declared in
+    defaults:, that defaults value is never inherited by any job — a redundancy
+    the user may not intend. Dict defaults are skipped because _deep_merge only
+    replaces them key-by-key, so a per-job mapping is typically a partial
+    override that meaningfully extends the default. Only checked when there are
+    two or more entries; a sole job restating its own default is unremarkable.
+    Skips non-dict entries (those fail at build time under a separate path).
+    """
+    if not defaults or len(entries) < 2:
+        return []
+    dict_entries = [e for e in entries if isinstance(e, dict)]
+    if not dict_entries:
+        return []
+    out: list[str] = []
+    for key, default_val in defaults.items():
+        if isinstance(default_val, dict):
+            continue  # deep-merged: a per-job mapping is usually a partial override
+        if all(key in entry for entry in dict_entries):
+            out.append(
+                f"ujin: {context}: defaults key {key!r} is overridden by every job"
+                f"; remove it from 'defaults:' to silence this warning"
+            )
+    return out
+
+
 # ── profile overlays (`profiles:` + --profile / $UJIN_PLAN_PROFILE) ─────────── #
 #
 # A top-level `profiles:` mapping declares named overlays — each one deep-merged
@@ -1425,6 +1455,13 @@ def _load_ingest_plan(
     # mapping plan has top-level keys; a top-level list plan has none.
     _report_warnings(
         _key_problems(data, _PLAN_TOP_KEYS, f"plan {path.name}", top=True),
+        warnings,
+    )
+
+    # Advisory redundancy check: a defaults: key that every job entry already
+    # overrides is never actually inherited — likely a copy-paste leftover.
+    _report_warnings(
+        _redundant_defaults_warnings(defaults, entries, f"plan {path.name}"),
         warnings,
     )
 

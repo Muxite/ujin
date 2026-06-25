@@ -230,6 +230,29 @@ def test_exit_nonzero_on_missing_path(tmp_path, capsys):
     assert main(["plan", "validate", str(tmp_path / "ghost.yaml")]) != 0
 
 
+# ── --strict: clean plan exits zero with and without flag ───────────────────── #
+
+def test_clean_plan_strict_exits_zero(tmp_path, capsys):
+    # A plan with no advisory warnings must exit 0 even under --strict.
+    plan = tmp_path / "clean.yaml"
+    _write(plan, [
+        {"id": "alpha", **_minimal_job("https://a/")},
+        {"id": "beta",  **_minimal_job("https://b/")},
+    ])
+    assert main(["plan", "validate", str(plan)]) == 0
+    assert main(["plan", "validate", str(plan), "--strict"]) == 0
+
+
+def test_clean_plan_strict_json_ok(tmp_path, capsys):
+    plan = tmp_path / "clean.yaml"
+    _write(plan, [{"id": "j", **_minimal_job()}])
+    main(["plan", "validate", str(plan), "--strict", "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is True
+    assert data["warnings"] == []
+    assert data["strict"] is True
+
+
 # ── schema validation: unrecognized / misspelled keys ───────────────────────── #
 #
 # A misspelled key is reported (a `WARN` line, or `warnings` in --json) but is
@@ -334,6 +357,98 @@ def test_workflow_dir_misspelled_top_level_key(tmp_path, capsys):
     assert "ok  page" in out
     assert "retreis" in out
     assert main(["plan", "validate", str(tmp_path), "--strict"]) != 0
+
+
+# ── redundant defaults: key overridden by every job ──────────────────────────── #
+#
+# When every job entry in a plan explicitly sets a key that defaults: also
+# declares, that defaults value is never inherited — an advisory redundancy
+# warning. Advisory by default (exit 0), non-zero under --strict.
+
+def _plan_with_defaults(defaults: dict, jobs: list) -> dict:
+    return {"defaults": defaults, "jobs": jobs}
+
+
+def test_redundant_defaults_key_warns_advisory(tmp_path, capsys):
+    # `enabled: false` in defaults but every job sets `enabled: true` — advisory.
+    # `enabled` is a boolean (non-dict) so the per-job value fully replaces it.
+    plan = tmp_path / "plan.yaml"
+    _write(plan, _plan_with_defaults(
+        {"enabled": False, "schedule": {"mode": "once"}},
+        [
+            {"id": "a", **_minimal_job("https://a/"), "enabled": True},
+            {"id": "b", **_minimal_job("https://b/"), "enabled": True},
+        ],
+    ))
+    rc = main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert rc == 0                    # advisory — does not fail by default
+    assert "ok  a" in out
+    assert "ok  b" in out
+    assert "enabled" in out           # names the redundant key
+    assert "WARN" in out
+
+
+def test_redundant_defaults_key_strict_fails(tmp_path, capsys):
+    plan = tmp_path / "plan.yaml"
+    _write(plan, _plan_with_defaults(
+        {"enabled": False, "schedule": {"mode": "once"}},
+        [
+            {"id": "a", **_minimal_job("https://a/"), "enabled": True},
+            {"id": "b", **_minimal_job("https://b/"), "enabled": True},
+        ],
+    ))
+    rc = main(["plan", "validate", str(plan), "--strict"])
+    out = capsys.readouterr().out
+    assert rc != 0
+    assert "FAIL" in out
+    assert "enabled" in out
+
+
+def test_redundant_defaults_key_not_warned_when_one_job_inherits(tmp_path, capsys):
+    # Job b does NOT override `enabled`, so the default IS used — no warning.
+    plan = tmp_path / "plan.yaml"
+    _write(plan, _plan_with_defaults(
+        {"enabled": True, "schedule": {"mode": "once"}},
+        [
+            {"id": "a", **_minimal_job("https://a/"), "enabled": False},
+            {"id": "b", **_minimal_job("https://b/")},  # no enabled: — inherits True
+        ],
+    ))
+    rc = main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "WARN" not in out  # no redundancy warning because b inherits enabled
+
+
+def test_redundant_defaults_dict_key_not_warned(tmp_path, capsys):
+    # Dict default values are deep-merged, so per-job partial overrides are
+    # intentional — no redundancy warning for dict-typed defaults keys.
+    plan = tmp_path / "plan.yaml"
+    _write(plan, _plan_with_defaults(
+        {"schedule": {"mode": "once"}},  # dict value
+        [
+            {"id": "a", **_minimal_job("https://a/"), "schedule": {"mode": "poll", "base": 30}},
+            {"id": "b", **_minimal_job("https://b/"), "schedule": {"mode": "poll", "base": 60}},
+        ],
+    ))
+    rc = main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "WARN" not in out  # dict default — no redundancy warning
+
+
+def test_redundant_defaults_key_single_job_no_warning(tmp_path, capsys):
+    # A sole job overriding defaults is unremarkable — no warning emitted.
+    plan = tmp_path / "plan.yaml"
+    _write(plan, _plan_with_defaults(
+        {"enabled": False, "schedule": {"mode": "once"}},
+        [{"id": "only", **_minimal_job(), "enabled": True}],
+    ))
+    rc = main(["plan", "validate", str(plan)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "WARN" not in out
 
 
 # ── required-variable: ${VAR:?message} in plan validate ──────────────────────── #
