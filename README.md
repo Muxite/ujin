@@ -126,10 +126,12 @@ ujin jobs-serve    --plan examples/ingest-plan.yaml --env-file .env
 ujin plan render  examples/profiles.yaml --profile fast                # apply the `fast` overlay
 UJIN_PLAN_PROFILE=slow ujin jobs-serve --plan examples/profiles.yaml   # env fallback
 
-# Job-id selectors — filter after full resolution (defaults, includes, matrix fan-out):
+# Job selectors — filter after full resolution (defaults, includes, matrix fan-out):
 ujin plan render  examples/ingest-plan.yaml --only 'feed-*'            # matching ids only
 ujin plan render  examples/ingest-plan.yaml --only 'feed-*' --exclude feed-tech
 ujin jobs-serve   --plan examples/ingest-plan.yaml --only 'feed-*'     # preload subset
+ujin plan render  examples/ingest-plan-tags.yaml --tag prod           # by `tags:` label, not id
+ujin plan render  examples/ingest-plan-tags.yaml --tag prod --only 'feed-*'  # selectors AND together
 
 # Provenance — show which source file and matrix row produced each expanded job:
 ujin plan render  examples/ingest-plan.yaml --explain                  # `# source:` / `# matrix:` comments
@@ -189,11 +191,22 @@ at once. A few additive layers keep large plans DRY:
   variable and including `message`) when `VAR` is unset or empty, so missing secrets
   are caught early rather than silently expanding to an empty string.
 
-`ujin plan validate` and `ujin plan render` accept `--only PATTERN[,PATTERN…]` and
-`--exclude PATTERN[,PATTERN…]` (fnmatch-style globs, comma-separated or repeatable)
-to filter the resolved jobs **after** all resolution layers. `jobs-serve --plan` also
-accepts both flags and reflects only the selected jobs in `GET /health`. A `--only`
-pattern that matches nothing exits non-zero with a clean `ujin: …` message.
+Any job may also carry an optional **`tags:`** key — a single string or a list of
+strings — purely as free-form labels (`tags: prod` or `tags: [prod, eu]`). Tags never
+change how a job runs; they follow the same merge/fan-out precedence as every other
+key (a per-job `tags:` overrides the `defaults:` one; a `{{ var }}` inside a tag
+substitutes per matrix entry) and a job with no `tags:` resolves byte-for-byte as
+before. Each resolved job's tags surface in `plan render --json` and the `GET /plan`
+introspection response.
+
+`ujin plan validate`, `ujin plan render`, and `ujin plan eject` accept
+`--only PATTERN[,PATTERN…]` / `--exclude PATTERN[,PATTERN…]` to filter the resolved
+jobs by **id**, and `--tag PATTERN[,PATTERN…]` / `--exclude-tag PATTERN[,PATTERN…]`
+to filter by **`tags:`** (all fnmatch-style globs, comma-separated or repeatable),
+**after** all resolution layers. The id and tag selectors compose (AND together).
+`jobs-serve --plan` accepts the same four flags and reflects only the selected jobs in
+`GET /health`. A `--only` pattern that matches no id, or a `--tag` no job carries,
+exits non-zero with a clean `ujin: …` message.
 
 `ujin plan validate` checks a plan file **or** a workflows directory with the same
 loaders as `jobs-serve` — identical ids and error messages — without starting the
@@ -251,7 +264,7 @@ one `<id>.yaml` per expanded job. All six resolution layers are applied first
 file contains only resolved `JobSpec` fields — no templates, placeholders, or
 inheritance remain. Loading any ejected file back through the single-file workflow
 loader produces the same job spec it had inside the plan. The `--out` directory is
-created if it does not exist. Accepts the same `--only`/`--exclude`/`--profile`/`--env-file`
+created if it does not exist. Accepts the same `--only`/`--exclude`/`--tag`/`--exclude-tag`/`--profile`/`--env-file`
 selectors as `plan render`. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
 
 Changed the plan file? `POST /plan/reload` re-reads it and upserts the resolved jobs

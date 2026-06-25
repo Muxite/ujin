@@ -36,6 +36,7 @@ class JobCreate(BaseModel):
     sinks: list[SpecItem] = Field(default_factory=list)
     schedule: Schedule = Field(default_factory=Schedule)
     enabled: bool = True
+    tags: list[str] = Field(default_factory=list)
 
     def to_spec(self) -> JobSpec:
         return JobSpec(
@@ -46,6 +47,7 @@ class JobCreate(BaseModel):
             sinks=[SinkSpec(kind=s.kind, config=s.config) for s in self.sinks],
             schedule=ScheduleSpec(**self.schedule.model_dump()),
             enabled=self.enabled,
+            tags=list(self.tags),
         )
 
 
@@ -73,10 +75,11 @@ class JobProvenance(BaseModel):
 
 
 class PlanJob(BaseModel):
-    """One resolved job id paired with its provenance."""
+    """One resolved job id paired with its provenance and its declared tags."""
 
     id: str
     provenance: JobProvenance
+    tags: list[str] = Field(default_factory=list)  # the job's resolved `tags:` (post fan-out/merge)
 
 
 class PlanFailure(BaseModel):

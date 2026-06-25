@@ -227,16 +227,19 @@ def _cmd_jobs_serve(args: argparse.Namespace) -> int:
 
     only = _parse_patterns(getattr(args, "only", None))
     exclude = _parse_patterns(getattr(args, "exclude", None))
+    tags = _parse_patterns(getattr(args, "tag", None))
+    exclude_tags = _parse_patterns(getattr(args, "exclude_tag", None))
     profile = _resolve_profile(getattr(args, "profile", None))
 
-    # Pre-flight: if --only given with --plan, check for a match before launching
-    # uvicorn so the CLI exits non-zero with a clean message (no traceback).
-    if only and args.plan:
+    # Pre-flight: if --only/--tag given with --plan, check for a match before
+    # launching uvicorn so the CLI exits non-zero with a clean message (no
+    # traceback). An empty --tag (no job carries it) is caught here too.
+    if (only or tags) and args.plan:
         from ujin.jobs.app import _load_ingest_plan, _select_jobs
         pre_failed: list = []
         pre_specs = _load_ingest_plan(Path(args.plan), failed=pre_failed, profile=profile)
         try:
-            _select_jobs(pre_specs, only, exclude)
+            _select_jobs(pre_specs, only, exclude, tags, exclude_tags)
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 1
@@ -257,6 +260,7 @@ def _cmd_jobs_serve(args: argparse.Namespace) -> int:
     serve(host=args.host, port=args.port, config_path=args.jobs,
           workflows_dir=args.workflows, plan_path=args.plan,
           only=only or None, exclude=exclude or None,
+          tags=tags or None, exclude_tags=exclude_tags or None,
           watch_plan=getattr(args, "watch_plan", False),
           watch_interval=getattr(args, "watch_interval", None),
           profile=profile)
@@ -333,6 +337,8 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
     strict = getattr(args, "strict", False)
     only = _parse_patterns(getattr(args, "only", None))
     exclude = _parse_patterns(getattr(args, "exclude", None))
+    tags = _parse_patterns(getattr(args, "tag", None))
+    exclude_tags = _parse_patterns(getattr(args, "exclude_tag", None))
     profile = _resolve_profile(getattr(args, "profile", None))
 
     if not path.exists():
@@ -353,11 +359,13 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
         specs = _load_ingest_plan(path, failed=failed, warnings=warnings,
                                   profile=profile)
 
-    # Apply --only/--exclude selection after full resolution so patterns match
-    # the final expanded job ids (post defaults-merge, includes, matrix fan-out).
-    if only or exclude:
+    # Apply --only/--exclude/--tag/--exclude-tag selection after full resolution
+    # so patterns match the final expanded job ids and resolved tags (post
+    # defaults-merge, includes, matrix fan-out).
+    if only or exclude or tags or exclude_tags:
         try:
-            specs = _select_jobs(specs, only or None, exclude or None)
+            specs = _select_jobs(specs, only or None, exclude or None,
+                                 tags or None, exclude_tags or None)
         except ValueError as exc:
             msg = str(exc)
             if args.json:
@@ -480,6 +488,8 @@ def _cmd_plan_render(args: argparse.Namespace) -> int:
     path = Path(args.path)
     only = _parse_patterns(getattr(args, "only", None))
     exclude = _parse_patterns(getattr(args, "exclude", None))
+    tags = _parse_patterns(getattr(args, "tag", None))
+    exclude_tags = _parse_patterns(getattr(args, "exclude_tag", None))
     explain = getattr(args, "explain", False)
     summary = getattr(args, "summary", False)
     profile = _resolve_profile(getattr(args, "profile", None))
@@ -499,11 +509,13 @@ def _cmd_plan_render(args: argparse.Namespace) -> int:
         specs = _load_ingest_plan(path, failed=failed, provenance=provenance,
                                   profile=profile)
 
-    # Apply --only/--exclude selection after full resolution so patterns match
-    # the final expanded job ids (post defaults-merge, includes, matrix fan-out).
-    if only or exclude:
+    # Apply --only/--exclude/--tag/--exclude-tag selection after full resolution
+    # so patterns match the final expanded job ids and resolved tags (post
+    # defaults-merge, includes, matrix fan-out).
+    if only or exclude or tags or exclude_tags:
         try:
-            specs = _select_jobs(specs, only or None, exclude or None)
+            specs = _select_jobs(specs, only or None, exclude or None,
+                                 tags or None, exclude_tags or None)
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 1
@@ -814,6 +826,8 @@ def _cmd_plan_eject(args: argparse.Namespace) -> int:
     path = Path(args.path)
     only = _parse_patterns(getattr(args, "only", None))
     exclude = _parse_patterns(getattr(args, "exclude", None))
+    tags = _parse_patterns(getattr(args, "tag", None))
+    exclude_tags = _parse_patterns(getattr(args, "exclude_tag", None))
     profile = _resolve_profile(getattr(args, "profile", None))
     out_dir = Path(args.out)
 
@@ -827,9 +841,10 @@ def _cmd_plan_eject(args: argparse.Namespace) -> int:
     else:
         specs = _load_ingest_plan(path, failed=failed, profile=profile)
 
-    if only or exclude:
+    if only or exclude or tags or exclude_tags:
         try:
-            specs = _select_jobs(specs, only or None, exclude or None)
+            specs = _select_jobs(specs, only or None, exclude or None,
+                                 tags or None, exclude_tags or None)
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 1
@@ -1255,6 +1270,14 @@ def main(argv: list[str] | None = None) -> int:
         help="exclude plan jobs whose id matches this fnmatch pattern "
              "(comma-separated or repeatable; subtracts from --only)")
     p_jobs.add_argument(
+        "--tag", action="append", default=None, metavar="PATTERN",
+        help="load only plan jobs carrying a `tags:` value matching this fnmatch "
+             "pattern (comma-separated or repeatable; composes with --only/--exclude)")
+    p_jobs.add_argument(
+        "--exclude-tag", action="append", default=None, metavar="PATTERN",
+        help="exclude plan jobs carrying a `tags:` value matching this fnmatch "
+             "pattern (comma-separated or repeatable; subtracts from --tag)")
+    p_jobs.add_argument(
         "--env-file", default=None, metavar="PATH",
         help="load KEY=VALUE pairs from PATH and use them for ${VAR} substitution "
              "when resolving the plan/workflows directory (process env vars take "
@@ -1326,6 +1349,14 @@ def main(argv: list[str] | None = None) -> int:
         help="exclude jobs whose id matches this fnmatch pattern "
              "(comma-separated or repeatable; subtracts from --only)")
     p_plan_validate.add_argument(
+        "--tag", action="append", default=None, metavar="PATTERN",
+        help="validate only jobs carrying a `tags:` value matching this fnmatch "
+             "pattern (comma-separated or repeatable; composes with --only/--exclude)")
+    p_plan_validate.add_argument(
+        "--exclude-tag", action="append", default=None, metavar="PATTERN",
+        help="exclude jobs carrying a `tags:` value matching this fnmatch pattern "
+             "(comma-separated or repeatable; subtracts from --tag)")
+    p_plan_validate.add_argument(
         "--profile", default=None, metavar="NAME",
         help="apply the named overlay from the plan's `profiles:` block over "
              "`defaults:` before the per-job merge (default: $UJIN_PLAN_PROFILE; "
@@ -1381,6 +1412,14 @@ def main(argv: list[str] | None = None) -> int:
         "--exclude", action="append", default=None, metavar="PATTERN",
         help="exclude jobs whose id matches this fnmatch pattern "
              "(comma-separated or repeatable; subtracts from --only)")
+    p_plan_render.add_argument(
+        "--tag", action="append", default=None, metavar="PATTERN",
+        help="render only jobs carrying a `tags:` value matching this fnmatch "
+             "pattern (comma-separated or repeatable; composes with --only/--exclude)")
+    p_plan_render.add_argument(
+        "--exclude-tag", action="append", default=None, metavar="PATTERN",
+        help="exclude jobs carrying a `tags:` value matching this fnmatch pattern "
+             "(comma-separated or repeatable; subtracts from --tag)")
     p_plan_render.add_argument(
         "--profile", default=None, metavar="NAME",
         help="apply the named overlay from the plan's `profiles:` block over "
@@ -1542,6 +1581,14 @@ def main(argv: list[str] | None = None) -> int:
         "--exclude", action="append", default=None, metavar="PATTERN",
         help="exclude jobs whose id matches this fnmatch pattern "
              "(comma-separated or repeatable; subtracts from --only)")
+    p_plan_eject.add_argument(
+        "--tag", action="append", default=None, metavar="PATTERN",
+        help="eject only jobs carrying a `tags:` value matching this fnmatch "
+             "pattern (comma-separated or repeatable; composes with --only/--exclude)")
+    p_plan_eject.add_argument(
+        "--exclude-tag", action="append", default=None, metavar="PATTERN",
+        help="exclude jobs carrying a `tags:` value matching this fnmatch pattern "
+             "(comma-separated or repeatable; subtracts from --tag)")
     p_plan_eject.add_argument(
         "--profile", default=None, metavar="NAME",
         help="apply the named overlay from the plan's `profiles:` block over "

@@ -531,15 +531,23 @@ ujin plan render   ./workflows/ --only 'search-*' --json
 
 `--exclude` subtracts from the `--only` set; when both are omitted all workflows are
 processed unchanged. A `--only` pattern that matches no resolved id exits non-zero
-with a clean `ujin: …` message. `jobs-serve --plan` accepts the same flags and
-reflects only the selected jobs in `GET /health`; see
-[INGEST_PLAN.md](INGEST_PLAN.md#job-id-selection----only-and---exclude).
+with a clean `ujin: …` message. The same commands also accept `--tag PATTERN` /
+`--exclude-tag PATTERN`, which select on a job's optional [`tags:`](INGEST_PLAN.md#tags--free-form-labels-for-tag-based-selection)
+labels instead of its id and **compose** with `--only`/`--exclude` (a job survives
+only if it passes every active filter). `jobs-serve --plan` and `plan eject` accept
+all four flags and reflect only the selected jobs (in `GET /health` / on disk); see
+[INGEST_PLAN.md](INGEST_PLAN.md#job-selection----only--exclude-and---tag--exclude-tag).
+
+```bash
+ujin plan render ./workflows/ --tag prod                 # only jobs tagged prod
+ujin plan render ./workflows/ --tag prod --only 'search-*'  # AND: prod search-* jobs
+```
 
 ### Validation & common mistakes — misspelled keys
 
 After `include:`/`defaults:` resolution the loader checks each workflow against the
-recognized keys — `source`, `transforms`, `sinks`, `schedule`, `id`, `name`, `enabled`
-plus the additive `defaults:`, `matrix:`/`for_each:`, and `include:`/`use:` — and a
+recognized keys — `source`, `transforms`, `sinks`, `schedule`, `id`, `name`, `enabled`,
+`tags` plus the additive `defaults:`, `matrix:`/`for_each:`, and `include:`/`use:` — and a
 `jobs:` list for the multi-job form. A key outside that set — a typo such as
 `shedule:` for `schedule:` or `sinkz:` for `sinks:` — would otherwise be **silently
 ignored** (the workflow loads with that setting missing). `ujin plan validate` surfaces
