@@ -12,7 +12,7 @@
 #     dir, then $UJIN_WORKFLOWS_DIR)
 #   * a per-job `matrix:` fan-out — one job per variable map
 # The other three — `vars:` placeholder defaults, `profiles:` named overlays, and
-# `${VAR}`/`${VAR:-default}` env substitution — are shown in examples/vars-defaults.yaml,
+# env substitution (dollar-brace forms) — are shown in examples/vars-defaults.yaml,
 # examples/profiles.yaml, and docs/INGEST_PLAN.md.
 #
 # This file loads to four jobs: `crossref`, `feed-tech`, `feed-science`,
