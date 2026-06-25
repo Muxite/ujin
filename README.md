@@ -510,7 +510,7 @@ Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [ADAPTIVE](docs/ADAPTIVE.md) ·
 [BACKENDS](docs/BACKENDS.md) (aiohttp vs obscura vs playwright vs selenium) ·
 [PERFORMANCE](docs/PERFORMANCE.md) · [CONSUMERS](docs/CONSUMERS.md)
 (downstream submodule contracts) · [API](docs/API.md) · [JOBS](docs/JOBS.md) ·
-[WORKFLOWS](docs/WORKFLOWS.md) · [INGEST_PLAN](docs/INGEST_PLAN.md) (many jobs from one mounted file) · [PLUGINS](docs/PLUGINS.md) ·
+[WORKFLOWS](docs/WORKFLOWS.md) · [INGEST_PLAN](docs/INGEST_PLAN.md) (many jobs from one mounted file) · [external-config recipe](docs/recipes/external-config-flow.md) · [PLUGINS](docs/PLUGINS.md) ·
 [LIST_TRANSFORMS](docs/LIST_TRANSFORMS.md) (filter/flatten/sort/limit/rename/aggregate/unique/fill/csv) ·
 [MARKETPLACE](docs/MARKETPLACE.md) (generic engine; site profiles supplied externally) ·
 [BROWSER](docs/BROWSER.md) · [MCP](docs/MCP.md) · [CHANGELOG](CHANGELOG.md)

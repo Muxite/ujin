@@ -557,19 +557,23 @@ unaffected, so the change is additive. Pass `--strict` to promote them to failur
 
 ## Inspecting fully-resolved jobs
 
-Use `ujin plan render` to print every fully-expanded `JobSpec` — after
-`defaults:` merge, fragment resolution, `matrix:` fan-out, and variable
-substitution — in human-readable YAML, or as a JSON array with `--json`:
+Use `ujin plan render` to print every fully-expanded `JobSpec` — after all six
+resolution layers (`defaults:` merge, `include:`/`use:` fragments, `matrix:` fan-out,
+`vars:` defaults, `profiles:` overlays, and `${VAR}` substitution) — in human-readable
+YAML, or as a JSON array with `--json`. Add `--summary` for a concise one-line-per-job
+overview instead of the full specs:
 
 ```bash
 ujin plan render ./workflows/                  # YAML, one document per job
 ujin plan render ./workflows/ --json           # JSON array (same shape as GET /jobs)
+ujin plan render ./workflows/ --summary        # concise: job count + one line per job
 ```
 
 This is useful for verifying that matrix templates expand as expected and that
 defaults are merged the way you intended before committing to a deploy. Each YAML
 document is prefixed with `--- # <id>` so you can grep for a specific job id. The
-`--json` output uses the same spec shape as the REST `/jobs` endpoint. See
+`--json` output uses the same spec shape as the REST `/jobs` endpoint, and `--summary`
+composes with `--only`/`--exclude` and `--profile`. See
 [INGEST_PLAN.md](INGEST_PLAN.md) for full details and examples.
 
 Add `--explain` to annotate each job with its provenance — the workflow **file** it
