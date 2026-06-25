@@ -704,3 +704,32 @@ def test_reload_health_plan_block_refreshed(tmp_path, monkeypatch):
         _write(plan, [{"id": "j1", **_minimal_job()}, {"id": "j2", **_minimal_job()}])
         c.post("/plan/reload")
         assert sorted(c.get("/health").json()["plan"]["loaded"]) == ["j1", "j2"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _load_fragment with _cache=None — covers the False branch of
+# `if _cache is not None: _cache[fp] = result` (app.py line 235->237)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from ujin.jobs.app import _resolve_includes  # noqa: E402
+
+
+def test_resolve_includes_no_cache_resolves_fragment(tmp_path):
+    """_resolve_includes(_cache=None) resolves include: fragments without caching.
+
+    Covers the _load_fragment branch at line 235: when _cache is None the
+    `_cache[fp] = result` store is skipped and execution falls through to
+    `return result` directly (the 235->237 branch reported by coverage).
+    """
+    frag = tmp_path / "defaults.yaml"
+    frag.write_text("schedule:\n  mode: once\n", encoding="utf-8")
+
+    node = {
+        "include": "defaults.yaml",
+        "id": "cov-job",
+        "source": {"kind": "command", "config": {"argv": ["true"]}},
+    }
+
+    result = _resolve_includes(node, tmp_path, _cache=None)
+    assert result["id"] == "cov-job"
+    assert result["schedule"]["mode"] == "once"
