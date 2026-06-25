@@ -1196,6 +1196,26 @@ With no selector flags, all four commands are **byte-for-byte unchanged**.
 All plan subcommands share the same loaders as `jobs-serve` and accept a plan file
 or a workflows directory as their first positional argument.
 
+### `ujin plan init [path]`
+
+Scaffold a ready-to-edit INGEST-PLAN file that demonstrates the core external-config
+building blocks. The generated file validates cleanly with `ujin plan validate` and
+resolves to three jobs via `ujin plan render` out of the box.
+
+```bash
+ujin plan init                   # writes ingest-plan.yaml in the current directory
+ujin plan init my-plan.yaml      # custom destination path
+ujin plan init my-plan.yaml -f   # overwrite if the file already exists
+```
+
+| Flag | Effect |
+|------|--------|
+| `path` | Destination file (default: `ingest-plan.yaml` in the current directory) |
+| `-f` / `--force` | Overwrite the destination if it already exists |
+
+Refuses to clobber an existing file without `--force` — exits non-zero with a clean
+`ujin: …` message (no traceback). Mirrors `ujin init` for the targets-based engine.
+
 ### `ujin plan validate <path>`
 
 Check a plan without starting the server. Exit 0 = all ok; non-zero = any failure.

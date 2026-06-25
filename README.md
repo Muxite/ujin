@@ -112,6 +112,8 @@ See the [external-config walkthrough](docs/recipes/external-config-flow.md) for 
 end-to-end example.
 
 ```bash
+ujin plan init                                      # writes a starter ingest-plan.yaml (3 jobs, all layers)
+ujin plan init my-plan.yaml                        # custom destination path
 ujin jobs-serve --plan examples/ingest-plan.yaml   # :8902 — many jobs from one file
 ujin plan validate examples/ingest-plan.yaml        # validate plan before deploying (exit 0 = ok)
 ujin plan validate examples/ingest-plan.yaml --schema   # also check document shape vs the JSON Schema

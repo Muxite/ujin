@@ -898,6 +898,97 @@ def _cmd_plan_eject(args: argparse.Namespace) -> int:
     return 0
 
 
+_STARTER_PLAN = (
+    "# ujin ingest-plan — a declarative job plan.\n"
+    "#   ujin plan validate ingest-plan.yaml   # check without starting the server\n"
+    "#   ujin plan render   ingest-plan.yaml   # preview fully-expanded specs (3 jobs)\n"
+    "#   ujin jobs-serve --plan ingest-plan.yaml  # mount on the jobs control plane (:8902)\n"
+    "#\n"
+    "# Edit freely — this is a starting point.  See docs/INGEST_PLAN.md for the full\n"
+    "# reference on all six additive resolution layers.\n"
+    "\n"
+    "# 1. defaults: — deep-merged UNDER every job; per-job keys win.\n"
+    "defaults:\n"
+    "  schedule:\n"
+    "    mode: adaptive\n"
+    "    base: 3600        # start at hourly; adapts with change frequency\n"
+    "    min:  300\n"
+    "    max:  86400\n"
+    "\n"
+    "# 2. profiles: — named overlays applied OVER defaults: when --profile NAME is given.\n"
+    "#    Switch between a conservative production schedule and a fast dev/local one.\n"
+    "profiles:\n"
+    "  fast:\n"
+    "    schedule: { mode: adaptive, base: 60, min: 5, max: 600 }\n"
+    "\n"
+    "jobs:\n"
+    "  # A plain job — only the source overrides defaults: (schedule is inherited).\n"
+    "  #\n"
+    "  # ${BASE_URL:-https://example.com} is expanded at load time:\n"
+    "  #   if BASE_URL is set in the environment that value is used,\n"
+    "  #   otherwise the default https://example.com is substituted.\n"
+    "  - id: homepage\n"
+    "    source:\n"
+    "      kind: http\n"
+    "      config:\n"
+    '        url: "${BASE_URL:-https://example.com}"\n'
+    "\n"
+    "  # A matrix job — fans out into one job per entry below.\n"
+    "  # Result: two jobs with ids feed-tech and feed-science.\n"
+    "  # {{ slug }} and {{ url }} are substituted from each matrix row;\n"
+    "  # schedule is inherited from defaults:.\n"
+    '  - id: "feed-{{ slug }}"\n'
+    "    matrix:\n"
+    '      - { slug: tech,    url: "https://feeds.example.com/tech" }\n'
+    '      - { slug: science, url: "https://feeds.example.com/science" }\n'
+    "    source:\n"
+    "      kind: http\n"
+    "      config:\n"
+    '        url: "{{ url }}"\n'
+    "\n"
+    "# Other available layers (see docs/INGEST_PLAN.md for details):\n"
+    "#\n"
+    "# vars: — placeholder defaults for {{ var }} references.\n"
+    "#         Environment variables win over vars:; matrix per-entry values win over both.\n"
+    "#\n"
+    "#   vars:\n"
+    "#     region: us-east\n"
+    "#\n"
+    "# include:/use: — splice a shared fragment file (sink, schedule, transform).\n"
+    "#   Paths resolve relative to THIS file's directory, then $UJIN_WORKFLOWS_DIR.\n"
+    "#\n"
+    "#   sinks:\n"
+    "#     - include: workflows/fragments/webhook-sink.yaml\n"
+)
+
+
+def _cmd_plan_init(args: argparse.Namespace) -> int:
+    """Write a commented starter INGEST-PLAN file to a target path.
+
+    Mirrors ``ujin init`` (which scaffolds a ``targets.yaml``): writes a ready-to-edit
+    ``ingest-plan.yaml`` demonstrating ``defaults:`` deep-merge, ``profiles:`` named
+    overlays, ``matrix:``/``for_each:`` fan-out, and ``${VAR:-default}`` env substitution.
+    The generated file validates cleanly with ``ujin plan validate`` out of the box.
+
+    Refuses to overwrite an existing file unless ``--force`` is given; an unwritable
+    path exits non-zero with a clean ``ujin: …`` message and no traceback.
+    """
+    dest = Path(args.path)
+    if dest.exists() and not args.force:
+        print(f"ujin: {dest} already exists (use --force to overwrite)", file=sys.stderr)
+        return 1
+    try:
+        dest.write_text(_STARTER_PLAN, encoding="utf-8")
+    except OSError as exc:
+        print(f"ujin: cannot write {dest}: {exc.strerror}", file=sys.stderr)
+        return 1
+    print(f"wrote {dest}")
+    print(f"next: ujin plan validate {dest}     # check it (exits 0 = all ok)")
+    print(f"      ujin plan render   {dest}     # preview the 3 resolved jobs")
+    print(f"      ujin jobs-serve --plan {dest}  # mount on :8902")
+    return 0
+
+
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
     from ujin.mcp import serve
 
@@ -1622,6 +1713,32 @@ def main(argv: list[str] | None = None) -> int:
              "`defaults:` before the per-job merge (default: $UJIN_PLAN_PROFILE; "
              "the flag wins; unknown name exits non-zero)")
     p_plan_eject.set_defaults(func=_cmd_plan_eject)
+
+    p_plan_init = plan_sub.add_parser(
+        "init",
+        help="write a commented starter ingest-plan.yaml to a target path",
+        description="Scaffold a ready-to-edit INGEST-PLAN file demonstrating the "
+                    "six additive resolution layers: `defaults:` deep-merge, "
+                    "`profiles:` named overlays, `matrix:`/`for_each:` fan-out, "
+                    "and `${VAR:-default}` env substitution. The generated file "
+                    "validates cleanly with `ujin plan validate` and resolves to "
+                    "three jobs via `ujin plan render`. Mirrors `ujin init` for "
+                    "the targets-based engine.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="examples:\n"
+               "  ujin plan init                      # writes ./ingest-plan.yaml\n"
+               "  ujin plan init my-plan.yaml         # custom path\n"
+               "  ujin plan init my-plan.yaml --force # overwrite existing file",
+    )
+    p_plan_init.add_argument(
+        "path", nargs="?", default="ingest-plan.yaml",
+        help="destination file (default: ingest-plan.yaml in the current directory)",
+    )
+    p_plan_init.add_argument(
+        "-f", "--force", action="store_true",
+        help="overwrite the destination file if it already exists",
+    )
+    p_plan_init.set_defaults(func=_cmd_plan_init)
 
     p_watch = sub.add_parser(
         "watch", help="watch a URL's regions for change (adaptive, jittered)",
