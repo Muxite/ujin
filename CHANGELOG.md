@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **docs(sync): correct two response-shape drifts against shipped 0.45 code.** The `POST /plan/reload?prune=true` response example in `docs/INGEST_PLAN.md` was missing the `added` and `already_present` fields that `_apply_ingest_plan` always returns alongside `loaded`/`failed`/`pruned`; the example now includes both fields. The `GET /plan` response example in `docs/JOBS.md` was missing the `tags` field that `_introspect_active_plan` always emits per job alongside `id` and `provenance`; the example now includes `tags`. No production code changed.
+
 ## 0.45.0 — 2026-06-25
 
 - **feat(plan/validate): `--strict` flag and redundant-defaults advisory warning.** `ujin plan validate --strict` now exits non-zero when the plan produces any advisory warning, making it suitable for CI gating (unknown/misspelled keys fail the build). Without `--strict` the exit code and output are byte-for-byte unchanged. A new redundancy advisory warning fires when a `defaults:` key is overridden by every job in a multi-job plan (the default value is never inherited); it is advisory by default and only fails under `--strict`. Documented `--strict` and its CI usage in `docs/INGEST_PLAN.md`. Added 6 offline deterministic tests: clean plan exits 0 with and without `--strict`, and a plan that triggers the new redundancy warning exits 0 by default but non-zero under `--strict`.

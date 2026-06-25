@@ -526,7 +526,7 @@ curl -X POST localhost:8902/plan/reload -H 'content-type: application/json' \
      -d '{"prune": true}'
 ```
 
-The removed ids are returned in a `pruned` list alongside `loaded`/`failed`, and the
+The removed ids are returned in a `pruned` list alongside `loaded`/`added`/`already_present`/`failed`, and the
 pruned jobs disappear from `GET /jobs` and the refreshed `/health` plan block:
 
 ```json
@@ -534,6 +534,8 @@ pruned jobs disappear from `GET /jobs` and the refreshed `/health` plan block:
   "reloaded": true,
   "path": "/data/ingest-plan.yaml",
   "loaded": ["crossref", "feed-tech"],
+  "added": [],
+  "already_present": ["crossref", "feed-tech"],
   "failed": [],
   "pruned": ["feed-science"]
 }

@@ -127,9 +127,11 @@ job; it only reads. With neither a plan nor a populated workflows dir configured
   "plan_path": "/etc/ujin/ingest-plan.yaml",   // null when no --plan/$UJIN_INGEST_PLAN
   "workflows_dir": "/workflows",
   "jobs": [
-    {"id": "crossref",   "provenance": {"source": "/etc/ujin/ingest-plan.yaml", "matrix": null}},
-    {"id": "feed-tech",  "provenance": {"source": "/etc/ujin/ingest-plan.yaml",
-                                         "matrix": {"key": "matrix", "index": 0, "vars": {"slug": "tech"}}}}
+    {"id": "crossref",  "tags": [],
+     "provenance": {"source": "/etc/ujin/ingest-plan.yaml", "matrix": null}},
+    {"id": "feed-tech", "tags": ["feeds"],
+     "provenance": {"source": "/etc/ujin/ingest-plan.yaml",
+                    "matrix": {"key": "matrix", "index": 0, "vars": {"slug": "tech"}}}}
   ],
   "failed": []   // {id, error} per file/job that did not resolve, as in /health
 }
