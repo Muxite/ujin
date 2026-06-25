@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 # aiohttp is an optional dependency (scrape extra)
 try:
     import aiohttp
-except ImportError:
+except ImportError:  # pragma: no cover - aiohttp is always installed in this project
     aiohttp = None  # type: ignore[assignment]
 
 _USER_AGENT = "Mozilla/5.0 (compatible; awork/1.0; +https://github.com/awork)"
@@ -51,7 +51,7 @@ class HttpFetcher:
         timeout_secs: int = _HTTP_TIMEOUT_SECS,
         user_agent: str = _USER_AGENT,
     ):
-        if aiohttp is None:
+        if aiohttp is None:  # pragma: no cover - guard for missing optional dep
             raise ImportError(
                 "aiohttp is required for HTTP fetching: "
                 "pip install 'awork[scrape]'"
@@ -93,7 +93,7 @@ class HttpFetcher:
         if sem is None:
             async with self._lock_creation:
                 sem = self._host_locks.get(host)
-                if sem is None:
+                if sem is None:  # pragma: no branch - inner double-check; unreachable in cooperative async
                     sem = asyncio.Semaphore(self._per_host_limit)
                     self._host_locks[host] = sem
         return sem

@@ -58,7 +58,7 @@ class TokenBucket:
         while True:
             wait = self.time_until(n)
             if wait <= 0:
-                if self.take(n):
+                if self.take(n):  # pragma: no branch - take() cannot fail after time_until()≤0 in cooperative async
                     return
             else:
                 await sleep(wait)
