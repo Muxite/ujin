@@ -21,6 +21,8 @@ The **ultimate scraper-poller**. Three parts that share one toolkit:
    diff two plans by resolved job id with `ujin plan diff`, list the environment
    variables a plan needs with `ujin plan env`, and export the file-format JSON
    Schema with `ujin plan schema`, before committing to a deploy.
+   See the [external-config walkthrough](docs/recipes/external-config-flow.md) for
+   an end-to-end example, and [INGEST_PLAN.md](docs/INGEST_PLAN.md) for the full reference.
 
 It bundles the [obscura](https://github.com/Muxite/obscura) headless renderer as
 a submodule, and stays a **pure-python pip install** (the renderer is built
@@ -101,6 +103,12 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
 ```
 
 ## Quick start — jobs and file-driven config
+
+`--plan` / `$UJIN_INGEST_PLAN` mounts a single YAML file that declares many jobs at
+once, kept DRY with `defaults:` deep-merge, `include:`/`use:` fragments, `vars:`
+placeholder defaults, named `profiles:` overlays, and `matrix:`/`for_each:` fan-out.
+See the [external-config walkthrough](docs/recipes/external-config-flow.md) for an
+end-to-end example.
 
 ```bash
 ujin jobs-serve --plan examples/ingest-plan.yaml   # :8902 — many jobs from one file
