@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.47.0 — 2026-06-25
 
 - **feat(plan): `ujin plan init` — scaffold a starter INGEST-PLAN file.** A new `plan init` subcommand writes a commented `ingest-plan.yaml` to the requested path (defaulting to `ingest-plan.yaml` in the current directory), mirroring `ujin init` for the targets-based engine. The template demonstrates all four core external-config building blocks: a top-level `defaults:` schedule block deep-merged under every job, a `profiles:` named overlay (`fast`), a `matrix:` fan-out (`feed-{{ slug }}` → `feed-tech` + `feed-science`), and a `${BASE_URL:-https://example.com}` env-substitution reference with a built-in default. The generated file validates cleanly under `ujin plan validate --strict` and resolves to three jobs via `ujin plan render` out of the box. Safe by default: refuses to overwrite an existing file unless `--force` (`-f`) is given, and on refusal or an unwritable path exits non-zero with a clean `ujin: …` message (no traceback). Documented the command in `README.md` and `docs/INGEST_PLAN.md`. Added 22 offline deterministic tests in `tests/test_plan_init_cli.py`.
 
