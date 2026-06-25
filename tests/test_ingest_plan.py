@@ -889,3 +889,59 @@ def test_reload_dry_run_noop_when_no_plan_configured(tmp_path, monkeypatch):
                         "detail": "no plan configured", "loaded": [], "failed": []}
         # No plan key materializes on /health -> no-plan deploys stay unchanged.
         assert "plan" not in c.get("/health").json()
+
+
+# ── POST /plan/reload: added / already_present classification ───────────────── #
+def test_reload_diff_classifies_added_vs_already_present(tmp_path, monkeypatch):
+    # Two successive reloads: verify the added/already_present split.
+    # First reload — alpha and beta were loaded at startup, so both are already_present.
+    # Second reload — add gamma, drop beta (prune), so added=[gamma],
+    # already_present=[alpha], pruned=[beta].
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [_cmd_job("alpha", "a"), _cmd_job("beta", "b")])
+
+    with TestClient(create_jobs_app(run_engine=False, plan_path=str(plan))) as c:
+        assert {j["id"] for j in c.get("/jobs").json()} == {"alpha", "beta"}
+
+        # First reload: same plan, everything already present.
+        body1 = c.post("/plan/reload").json()
+        assert body1["reloaded"] is True
+        assert body1["added"] == []
+        assert sorted(body1["already_present"]) == ["alpha", "beta"]
+        assert body1["failed"] == []
+
+        # Second reload: add gamma, remove beta with prune.
+        _write(plan, [_cmd_job("alpha", "a"), _cmd_job("gamma", "g")])
+        body2 = c.post("/plan/reload?prune=true").json()
+        assert body2["reloaded"] is True
+        assert body2["added"] == ["gamma"]
+        assert body2["already_present"] == ["alpha"]
+        assert body2["pruned"] == ["beta"]
+        assert body2["failed"] == []
+        # Manager state is coherent: gamma is live, beta is gone.
+        assert {j["id"] for j in c.get("/jobs").json()} == {"alpha", "gamma"}
+
+
+def test_reload_diff_noop_reports_empty_diff(tmp_path, monkeypatch):
+    # Re-applying the exact same plan is idempotent: added=[], pruned=[],
+    # and all ids move to already_present.
+    TestClient = _client()
+    from ujin.jobs.app import create_jobs_app
+
+    monkeypatch.setenv("UJIN_JOBS_DB", str(tmp_path / "jobs.db"))
+    plan = tmp_path / "plan.yaml"
+    _write(plan, [_cmd_job("alpha", "a"), _cmd_job("beta", "b")])
+
+    with TestClient(create_jobs_app(run_engine=False, plan_path=str(plan))) as c:
+        body = c.post("/plan/reload?prune=true").json()
+        assert body["reloaded"] is True
+        assert body["added"] == []
+        assert sorted(body["already_present"]) == ["alpha", "beta"]
+        assert body["pruned"] == []
+        assert body["failed"] == []
+        # Running job set is unchanged.
+        assert {j["id"] for j in c.get("/jobs").json()} == {"alpha", "beta"}
