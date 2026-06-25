@@ -69,6 +69,22 @@ class ScheduleSpec:
     cron: str | None = None  # "*/5 * * * *" when mode == "cron"
 
 
+def _coerce_tags(value: Any) -> list[str]:
+    """Normalize a declared ``tags:`` value into a list of strings.
+
+    Accepts a single scalar (``tags: prod`` -> ``["prod"]``), a list
+    (``tags: [prod, eu]`` -> ``["prod", "eu"]``), or nothing (``None`` -> ``[]``).
+    Each item is coerced with ``str`` so a matrix-substituted non-string token
+    (e.g. a numeric ``{{ shard }}``) still yields a string tag. Additive: a job
+    with no ``tags:`` key resolves to ``[]``, exactly as before the key existed.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(t) for t in value]
+    return [str(value)]
+
+
 @dataclass
 class JobSpec:
     """A complete declarative job."""
@@ -80,11 +96,18 @@ class JobSpec:
     sinks: list[SinkSpec] = field(default_factory=list)
     schedule: ScheduleSpec = field(default_factory=ScheduleSpec)
     enabled: bool = True
+    tags: list[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
 
     # -- (de)serialization ------------------------------------------------- #
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        # Omit the additive `tags` key when empty so the serialized spec (eject
+        # output, `GET /jobs/{id}` spec, `plan render --json`) is byte-for-byte
+        # identical to before this key existed for every job that declares none.
+        if not self.tags:
+            d.pop("tags", None)
+        return d
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "JobSpec":
@@ -112,6 +135,7 @@ class JobSpec:
             sinks=sinks,
             schedule=schedule,
             enabled=data.get("enabled", True),
+            tags=_coerce_tags(data.get("tags")),
             created_at=data.get("created_at", time.time()),
         )
 

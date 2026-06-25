@@ -859,7 +859,7 @@ def _expand_matrix_entries(
 # the additive compose/fan-out keys consumed before the spec is built (`include:`/
 # `use:` splice, `matrix:`/`for_each:` fan-out).
 _JOB_KEYS = frozenset({
-    "name", "id", "source", "transforms", "sinks", "schedule", "enabled",
+    "name", "id", "source", "transforms", "sinks", "schedule", "enabled", "tags",
     "created_at", "matrix", "for_each", "include", "use",
 })
 
@@ -1015,36 +1015,57 @@ def _check_plan_profile(plan_src, profile: "str | None") -> None:
 # patterns the loader and health output are byte-for-byte unchanged.
 
 
-def _select_jobs(specs, only=None, exclude=None):
-    """Filter *specs* by fnmatch job-id patterns.
+def _select_jobs(specs, only=None, exclude=None, tags=None, exclude_tags=None):
+    """Filter *specs* by fnmatch job-id patterns and/or tag patterns.
 
-    ``only``    — keep jobs whose id matches ANY pattern; applied first.
-    ``exclude`` — remove jobs whose id matches ANY exclude pattern.
-    Both ``None`` and ``[]`` mean "no filter" — the list is returned unchanged.
-    Raises ``ValueError`` (clean ``ujin: …`` message) when ``only`` is given
-    but no job id matches, so callers can exit non-zero without a traceback.
+    ``only``         — keep jobs whose id matches ANY pattern; applied first.
+    ``exclude``      — remove jobs whose id matches ANY exclude pattern.
+    ``tags``         — keep jobs carrying ANY tag that matches ANY pattern.
+    ``exclude_tags`` — remove jobs carrying ANY tag that matches ANY pattern.
+
+    The id and tag selectors **compose** (AND together): a job survives only if it
+    passes every active filter. ``None``/``[]`` for all four means "no filter" — the
+    list is returned unchanged (strictly additive). Both include filters raise
+    ``ValueError`` (clean ``ujin: …`` message) when they are given but select nothing
+    — an ``--only`` pattern matching no id, or a ``--tag`` pattern no job carries —
+    so callers can exit non-zero without a traceback.
     """
     from fnmatch import fnmatch
 
-    if not only and not exclude:
+    if not only and not exclude and not tags and not exclude_tags:
         return specs
 
-    def _m(job_id, patterns):
-        return any(fnmatch(job_id, p) for p in patterns)
+    def _m(value, patterns):
+        return any(fnmatch(value, p) for p in patterns)
+
+    def _tag_m(spec, patterns):
+        return any(fnmatch(t, p) for t in spec.tags for p in patterns)
+
+    selected = list(specs)
 
     if only:
-        selected = [s for s in specs if _m(s.id, only)]
+        selected = [s for s in selected if _m(s.id, only)]
         if not selected:
             pats = ", ".join(repr(p) for p in only)
             raise ValueError(
                 f"ujin: --only {pats}: no job ids matched "
                 f"({len(specs)} job(s) resolved)"
             )
-    else:
-        selected = list(specs)
+
+    if tags:
+        selected = [s for s in selected if _tag_m(s, tags)]
+        if not selected:
+            pats = ", ".join(repr(p) for p in tags)
+            raise ValueError(
+                f"ujin: --tag {pats}: no jobs carry a matching tag "
+                f"({len(specs)} job(s) resolved)"
+            )
 
     if exclude:
         selected = [s for s in selected if not _m(s.id, exclude)]
+
+    if exclude_tags:
+        selected = [s for s in selected if not _tag_m(s, exclude_tags)]
 
     return selected
 
@@ -1474,7 +1495,8 @@ def _load_ingest_plan(
 
 
 def _apply_ingest_plan(
-    manager, plan_src, only=None, exclude=None, *, prune=False, profile=None
+    manager, plan_src, only=None, exclude=None, *, prune=False, profile=None,
+    tags=None, exclude_tags=None,
 ) -> "dict[str, list]":
     """Resolve *plan_src*, apply ``--only``/``--exclude``, upsert into *manager*.
 
@@ -1509,8 +1531,8 @@ def _apply_ingest_plan(
     plan_specs = _load_ingest_plan(
         plan_src, failed=plan_status["failed"], present=present, profile=profile
     )
-    if only is not None or exclude is not None:
-        plan_specs = _select_jobs(plan_specs, only, exclude)
+    if only is not None or exclude is not None or tags or exclude_tags:
+        plan_specs = _select_jobs(plan_specs, only, exclude, tags, exclude_tags)
     for spec in plan_specs:
         try:
             manager.create(spec, origin="plan")
@@ -1549,7 +1571,8 @@ def _spec_differs(current: "JobSpec", resolved: "JobSpec") -> bool:
 
 
 def _dryrun_ingest_plan(
-    manager, plan_src, only=None, exclude=None, *, prune=False, profile=None
+    manager, plan_src, only=None, exclude=None, *, prune=False, profile=None,
+    tags=None, exclude_tags=None,
 ) -> "dict[str, list]":
     """Preview a reload of *plan_src* WITHOUT mutating *manager*.
 
@@ -1579,8 +1602,8 @@ def _dryrun_ingest_plan(
     plan_specs = _load_ingest_plan(
         plan_src, failed=plan_status["failed"], present=present, profile=profile
     )
-    if only is not None or exclude is not None:
-        plan_specs = _select_jobs(plan_specs, only, exclude)
+    if only is not None or exclude is not None or tags or exclude_tags:
+        plan_specs = _select_jobs(plan_specs, only, exclude, tags, exclude_tags)
     added: list[str] = []
     updated: list[str] = []
     unchanged: list[str] = []
@@ -1609,7 +1632,8 @@ def _dryrun_ingest_plan(
 
 
 def _introspect_active_plan(
-    plan_src, wf_dir, only=None, exclude=None, profile=None
+    plan_src, wf_dir, only=None, exclude=None, profile=None,
+    tags=None, exclude_tags=None,
 ) -> "dict[str, Any]":
     """Resolve the active workflows dir + INGEST-PLAN into a read-only payload.
 
@@ -1630,10 +1654,15 @@ def _introspect_active_plan(
     """
     prov: list = []
     failed: list = []
+    # id -> resolved tags, used to surface each job's `tags:` alongside provenance.
+    tags_by_id: dict[str, list] = {}
     # Workflows directory: scanned unfiltered, matching the startup load order
     # (only the plan applies --only/--exclude). A non-existent dir yields nothing.
     if wf_dir:
-        _load_workflows_dir(wf_dir, failed=failed, provenance=prov, profile=profile)
+        wf_specs = _load_workflows_dir(
+            wf_dir, failed=failed, provenance=prov, profile=profile
+        )
+        tags_by_id.update({s.id: list(s.tags) for s in wf_specs})
     # INGEST-PLAN: resolve with provenance, then apply the same selection startup
     # would. A no-match --only is reported as zero selected, never raised (read-only).
     if plan_src:
@@ -1641,15 +1670,24 @@ def _introspect_active_plan(
         plan_specs = _load_ingest_plan(
             plan_src, failed=failed, provenance=plan_prov, profile=profile
         )
-        if only is not None or exclude is not None:
+        if only is not None or exclude is not None or tags or exclude_tags:
             try:
-                keep = {s.id for s in _select_jobs(plan_specs, only, exclude)}
+                keep = {
+                    s.id
+                    for s in _select_jobs(plan_specs, only, exclude, tags, exclude_tags)
+                }
             except ValueError:
                 keep = set()
             plan_prov = [p for p in plan_prov if p["id"] in keep]
+            plan_specs = [s for s in plan_specs if s.id in keep]
+        tags_by_id.update({s.id: list(s.tags) for s in plan_specs})
         prov.extend(plan_prov)
     jobs = [
-        {"id": p["id"], "provenance": {k: v for k, v in p.items() if k != "id"}}
+        {
+            "id": p["id"],
+            "provenance": {k: v for k, v in p.items() if k != "id"},
+            "tags": tags_by_id.get(p["id"], []),
+        }
         for p in prov
     ]
     return {
@@ -1733,13 +1771,15 @@ class _PlanWatcher:
 
     def __init__(
         self, app, manager, plan_src, only, exclude, interval, *, sleep=None,
-        profile=None,
+        profile=None, tags=None, exclude_tags=None,
     ):
         self.app = app
         self.manager = manager
         self.plan_src = plan_src
         self.only = only
         self.exclude = exclude
+        self.tags = tags
+        self.exclude_tags = exclude_tags
         self.interval = interval
         self.profile = profile
         self._sleep = sleep or asyncio.sleep
@@ -1776,6 +1816,7 @@ class _PlanWatcher:
         try:
             status = _apply_ingest_plan(
                 self.manager, self.plan_src, only=self.only, exclude=self.exclude,
+                tags=self.tags, exclude_tags=self.exclude_tags,
                 prune=True, profile=self.profile,
             )
         except ValueError as exc:
@@ -1823,6 +1864,8 @@ def create_jobs_app(
     run_engine: bool = True,
     only: list | None = None,
     exclude: list | None = None,
+    tags: list | None = None,
+    exclude_tags: list | None = None,
     watch_plan: bool = False,
     watch_interval: float | None = None,
     profile: str | None = None,
@@ -1917,6 +1960,7 @@ def create_jobs_app(
             try:
                 app.state.plan = _apply_ingest_plan(
                     manager, plan_src, only=only, exclude=exclude,
+                    tags=tags, exclude_tags=exclude_tags,
                     profile=profile_name,
                 )
             except ValueError as exc:
@@ -1944,7 +1988,7 @@ def create_jobs_app(
         if watch_enabled and plan_src:
             watcher = _PlanWatcher(
                 app, manager, plan_src, only, exclude, watch_secs,
-                profile=profile_name,
+                profile=profile_name, tags=tags, exclude_tags=exclude_tags,
             )
             app.state.plan_watcher = watcher
             tasks.append(asyncio.create_task(watcher.run()))
@@ -2044,7 +2088,8 @@ def create_jobs_app(
         """
         return PlanIntrospection(
             **_introspect_active_plan(
-                plan_src, wf_dir, only=only, exclude=exclude, profile=profile_name
+                plan_src, wf_dir, only=only, exclude=exclude,
+                tags=tags, exclude_tags=exclude_tags, profile=profile_name
             )
         )
 
@@ -2101,6 +2146,7 @@ def create_jobs_app(
             try:
                 preview = _dryrun_ingest_plan(
                     app.state.manager, plan_src, only=only, exclude=exclude,
+                    tags=tags, exclude_tags=exclude_tags,
                     prune=prune, profile=profile_name,
                 )
             except ValueError as exc:
@@ -2110,7 +2156,7 @@ def create_jobs_app(
         try:
             plan_status = _apply_ingest_plan(
                 app.state.manager, plan_src, only=only, exclude=exclude, prune=prune,
-                profile=profile_name,
+                tags=tags, exclude_tags=exclude_tags, profile=profile_name,
             )
         except ValueError as exc:
             # --only matched no job on reload: report, don't kill the server.
@@ -2237,6 +2283,8 @@ def serve(  # pragma: no cover -- launches uvicorn; not testable without a live 
     plan_path: str | None = None,
     only: list | None = None,
     exclude: list | None = None,
+    tags: list | None = None,
+    exclude_tags: list | None = None,
     watch_plan: bool = False,
     watch_interval: float | None = None,
     profile: str | None = None,
@@ -2245,7 +2293,8 @@ def serve(  # pragma: no cover -- launches uvicorn; not testable without a live 
 
     uvicorn.run(
         create_jobs_app(config_path, workflows_dir=workflows_dir, plan_path=plan_path,
-                        only=only, exclude=exclude, watch_plan=watch_plan,
+                        only=only, exclude=exclude, tags=tags,
+                        exclude_tags=exclude_tags, watch_plan=watch_plan,
                         watch_interval=watch_interval, profile=profile),
         host=host, port=port,
     )

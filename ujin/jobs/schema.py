@@ -105,6 +105,7 @@ def plan_schema() -> dict[str, Any]:
             "name": {"type": "string"},
             "id": {"type": "string"},
             "enabled": {"type": "boolean"},
+            "tags": {"$ref": "#/$defs/tags"},
             "created_at": {"type": "number"},
             "source": {"$ref": "#/$defs/specItem"},
             "transforms": {"type": "array", "items": {"$ref": "#/$defs/specItem"}},
@@ -116,6 +117,15 @@ def plan_schema() -> dict[str, Any]:
             "use": {"$ref": "#/$defs/fragmentRef"},
         },
         "additionalProperties": True,
+    }
+    tags = {
+        "description": (
+            "free-form labels for tag-based selection (--tag/--exclude-tag): a list "
+            "of strings, or a single string. Templated values (e.g. {{ region }}) "
+            "resolve per matrix/for_each entry."
+        ),
+        "type": ["array", "string"],
+        "items": {"type": "string"},
     }
     schema_root = {
         "$schema": SCHEMA_DIALECT,
@@ -155,6 +165,7 @@ def plan_schema() -> dict[str, Any]:
             "name": {"type": "string"},
             "id": {"type": "string"},
             "enabled": {"type": "boolean"},
+            "tags": {"$ref": "#/$defs/tags"},
             "created_at": {"type": "number"},
             "source": {"$ref": "#/$defs/specItem"},
             "transforms": {"type": "array", "items": {"$ref": "#/$defs/specItem"}},
@@ -171,6 +182,7 @@ def plan_schema() -> dict[str, Any]:
             "schedule": schedule,
             "matrix": matrix,
             "fragmentRef": fragment_ref,
+            "tags": tags,
         },
     }
     return schema_root
