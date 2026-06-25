@@ -231,18 +231,32 @@ def _cmd_jobs_serve(args: argparse.Namespace) -> int:
     exclude_tags = _parse_patterns(getattr(args, "exclude_tag", None))
     profile = _resolve_profile(getattr(args, "profile", None))
 
-    # Pre-flight: if --only/--tag given with --plan, check for a match before
-    # launching uvicorn so the CLI exits non-zero with a clean message (no
-    # traceback). An empty --tag (no job carries it) is caught here too.
-    if (only or tags) and args.plan:
+    # Pre-flight: when --plan is given, validate it before launching uvicorn so
+    # any malformed config exits non-zero with a clean ujin: … message rather
+    # than starting a server with silently-broken jobs.  File-level errors
+    # (missing file, bad YAML, unresolvable include, required ${VAR:?}),
+    # per-job errors (malformed matrix, duplicate id), and an empty/zero-job
+    # plan all cause an immediate non-zero exit here.  --only/--tag selection is
+    # folded into this one load so the plan is read only once in the preflight.
+    # Profile errors are NOT raised here (profile=None); _check_plan_profile
+    # below handles them via its dedicated, cleanly-formatted path.
+    if args.plan:
         from ujin.jobs.app import _load_ingest_plan, _select_jobs
         pre_failed: list = []
-        pre_specs = _load_ingest_plan(Path(args.plan), failed=pre_failed, profile=profile)
-        try:
-            _select_jobs(pre_specs, only, exclude, tags, exclude_tags)
-        except ValueError as exc:
-            print(str(exc), file=sys.stderr)
+        pre_specs = _load_ingest_plan(Path(args.plan), failed=pre_failed)
+        if pre_failed:
+            for entry in pre_failed:
+                print(entry["error"], file=sys.stderr)
             return 1
+        if not pre_specs:
+            print(f"ujin: {Path(args.plan).name}: no jobs defined", file=sys.stderr)
+            return 1
+        if only or tags:
+            try:
+                _select_jobs(pre_specs, only, exclude, tags, exclude_tags)
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
 
     # Pre-flight: a selected --profile/$UJIN_PLAN_PROFILE absent from the plan's
     # `profiles:` exits non-zero with a clean message before binding a port, instead
@@ -376,6 +390,19 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
             return 1
 
     resolved = [s.id for s in specs]
+
+    # An ingest-plan FILE that resolves to zero jobs is itself an error: an
+    # otherwise-valid plan with no declared jobs almost certainly means all entries
+    # failed, the file is empty, or a `jobs: []` stub was left in place.
+    # An empty workflows DIRECTORY is legitimate (freshly created, not yet populated)
+    # so the check is file-only; a directory with all-failed workflows already has
+    # non-empty `failed`.
+    if not failed and not resolved and path.is_file():
+        failed.append({
+            "id": path.stem,
+            "error": f"ujin: {path.name}: no jobs defined",
+        })
+
     # `--schema` additionally checks the UNRESOLVED document against the JSON Schema
     # `ujin plan schema` emits — a structural shape check that complements (does not
     # replace) the loader-level and --strict checks above. Off by default, so output
