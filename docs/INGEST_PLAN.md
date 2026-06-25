@@ -12,7 +12,8 @@ no plan configured behaves byte-for-byte as before.
 
 ## Pointing ujin at a plan
 
-Resolve the plan from an env var or a CLI flag (the flag wins):
+Resolve the plan from an env var or a CLI flag (the flag wins). The plan path may be
+**a single file or a directory of plan files**:
 
 ```bash
 # env var (mountable as a volume in a container)
@@ -20,11 +21,52 @@ UJIN_INGEST_PLAN=/data/ingest-plan.yaml ujin jobs-serve
 
 # --plan flag — overrides $UJIN_INGEST_PLAN
 ujin jobs-serve --plan ./ingest-plan.yaml
+
+# a directory: every *.y*ml file in it is loaded and the jobs aggregated
+ujin jobs-serve --plan ./plan.d/
+UJIN_INGEST_PLAN=/data/plans ujin jobs-serve
 ```
 
 The plan's jobs are created on startup and are visible like any other job — via
 `GET /jobs`, `GET /jobs/{id}`, and reflected in `GET /health` (see
 [Reporting](#reporting-and-errors)).
+
+### Plan path may be a directory of plan files
+
+Point the plan path at a **directory** and ujin loads the **union of jobs** declared
+across every `*.y*ml` file in it. The scan is non-recursive (top-level files only, so
+an `include:` fragment kept in a `fragments/` subdirectory is never loaded as a
+standalone plan) and runs in **sorted filename order** for a deterministic merge.
+Each file is resolved through the *identical* per-file pipeline — `include:`/`use:`
+fragments, `defaults:` deep-merge, `matrix:`/`for_each:` fan-out, `vars:` defaults,
+and the `profiles:` overlay — so a directory and a single equivalent file resolve to
+the same job set. Pointing at one file is unchanged: it keeps the existing behaviour
+byte-for-byte.
+
+```
+plan.d/
+├── feeds.yaml        # defaults: + a matrix: fan-out -> feed-tech, feed-science, …
+├── crossref.yaml     # a single job
+└── fragments/        # ignored by the scan (not top-level *.y*ml)
+    └── jsonl-sink.yaml
+```
+
+Error isolation is per file, exactly as for a single plan: a **file-level** problem
+(bad YAML, a shape that is neither a list nor a `jobs:` mapping, an unresolvable
+`include:`) or a **per-job** problem (a bad `matrix:`, a spec that won't build) fails
+*only that file's jobs* — reported in `plan.failed` (`GET /health`) — and never aborts
+the rest of the directory; the other files still load.
+
+**Duplicate ids across files are an error, not a silent overwrite.** If two files
+resolve a job to the *same* id, ujin keeps the first file's job and reports a clean
+`ujin: duplicate job id '<id>' declared in both <file-a> and <file-b>` record in
+`plan.failed` (naming both files) so you can give one an explicit unique `id:`. A
+duplicate id *within* a single file is still caught per file as before.
+
+Every served consumer treats a directory exactly like a single file: startup load,
+`POST /plan/reload` (including the prune keep-set and the `dry_run` preview), the
+`GET /plan` introspection view, and the `--watch-plan` watcher (which reacts to the
+add/modify/remove of any plan file in the directory).
 
 ### `--env-file PATH` — inject secrets without committing them
 
@@ -361,7 +403,9 @@ jobs sharing an id):
 1. jobs reloaded from the durable store (`$UJIN_JOBS_DB`);
 2. the optional positional `jobs.yaml` preload (`ujin jobs-serve jobs.yaml`);
 3. the workflows-dir scan (`--workflows` / `$UJIN_WORKFLOWS_DIR`);
-4. the **INGEST-PLAN** (`--plan` / `$UJIN_INGEST_PLAN`).
+4. the **INGEST-PLAN** (`--plan` / `$UJIN_INGEST_PLAN`) — a single plan file, or a
+   directory whose `*.y*ml` files are aggregated into one job set (see
+   [above](#plan-path-may-be-a-directory-of-plan-files)).
 
 ## Reporting and errors
 
@@ -400,6 +444,7 @@ file, job id, and key — never a bare Python traceback:
 | `include:`/`use:` path does not resolve | file-level | `include fragment not found: '<path>' (looked in: …)` |
 | `${VAR:?message}` and `VAR` is unset | file-level | `required variable 'VAR' is unset or empty — message` |
 | Two entries share the same explicit `id:` | per-job | `duplicate job id '<id>'` |
+| Two files in a plan **directory** resolve to the same id | per-job | `duplicate job id '<id>' declared in both <file-a> and <file-b>` |
 | Top-level document is a bare scalar (workflow file) | file-level | `top-level must be a job mapping or a list of jobs, got <type>` |
 | Top-level document is a bare scalar (plan file) | file-level | `must be a list of jobs or a mapping with a \`jobs:\` list, got <type>` |
 | Job mapping is missing its `source:` key | per-job | `missing required 'source:' key` |
@@ -631,6 +676,11 @@ The same safety guarantees as the manual prune apply:
 - **Race-free with the manual endpoint** — the reload is applied atomically, and
   re-applying the same ids is idempotent, so the watcher and a concurrent
   `POST /plan/reload` never conflict or double-apply harmfully.
+
+When the plan path is a **directory** the watcher reacts to the **add, modify, or
+removal of any `*.y*ml` file** in it (not just one file's mtime): a newly-added file's
+jobs appear, an edited file's jobs are re-registered, and a removed file's jobs are
+pruned — all with no restart.
 
 The watcher mirrors `POST /plan/reload`, which is plan-only: `--watch-plan` with no
 `--plan`/`$UJIN_INGEST_PLAN` configured is inactive (logged once at startup).
@@ -1195,6 +1245,26 @@ With no selector flags, all four commands are **byte-for-byte unchanged**.
 
 All plan subcommands share the same loaders as `jobs-serve` and accept a plan file
 or a workflows directory as their first positional argument.
+
+### `ujin plan init [path]`
+
+Scaffold a ready-to-edit INGEST-PLAN file that demonstrates the core external-config
+building blocks. The generated file validates cleanly with `ujin plan validate` and
+resolves to three jobs via `ujin plan render` out of the box.
+
+```bash
+ujin plan init                   # writes ingest-plan.yaml in the current directory
+ujin plan init my-plan.yaml      # custom destination path
+ujin plan init my-plan.yaml -f   # overwrite if the file already exists
+```
+
+| Flag | Effect |
+|------|--------|
+| `path` | Destination file (default: `ingest-plan.yaml` in the current directory) |
+| `-f` / `--force` | Overwrite the destination if it already exists |
+
+Refuses to clobber an existing file without `--force` — exits non-zero with a clean
+`ujin: …` message (no traceback). Mirrors `ujin init` for the targets-based engine.
 
 ### `ujin plan validate <path>`
 

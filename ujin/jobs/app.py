@@ -1438,6 +1438,74 @@ def _plan_entries(data: Any, name: str) -> "tuple[dict, list]":
     )
 
 
+def _aggregate_plan_dir(
+    path: Path,
+    *,
+    failed: list | None = None,
+    warnings: list | None = None,
+    present: list | None = None,
+    provenance: list | None = None,
+    profile: "str | None" = None,
+) -> list:
+    """Aggregate every ``*.y*ml`` plan file in directory *path* into one job set.
+
+    Each file is resolved through the **identical** per-file
+    :func:`_load_ingest_plan` pipeline (``include:``/``use:`` fragments, ``defaults:``
+    deep-merge, ``matrix:``/``for_each:`` fan-out, ``vars:`` defaults, and the
+    ``profiles:`` overlay), then the resulting jobs are concatenated in sorted
+    filename order so the merge is deterministic. A single-file path never reaches
+    here, so its resolution stays byte-for-byte unchanged.
+
+    The scan is **non-recursive** (``*.y*ml``, not ``**/*.y*ml``), matching
+    :func:`_load_workflows_dir`, so an ``include:`` fragment kept in a subdirectory
+    is never loaded as a standalone plan.
+
+    Error isolation matches the single-file loader: a **file-level** problem (bad
+    YAML, a shape that is neither a list nor a ``jobs:`` mapping, an unresolvable
+    include) or a **per-job** problem (a bad ``matrix:``, a spec that won't build)
+    fails only that file's jobs — reported in *failed* — and never aborts the
+    directory; the remaining files still load.
+
+    A **cross-file duplicate** resolved id — the same id declared by two different
+    files — is reported as one ``failed`` record naming the id and both files (the
+    first file's job is kept, the colliding one skipped) so one job never silently
+    overwrites another. Within-file duplicates are still caught per file by
+    :func:`_load_ingest_plan`.
+
+    *failed*, *warnings*, and *present* are threaded straight into each per-file
+    call, so the union of declared ids (the prune keep-set), advisory warnings, and
+    failure records aggregate across the whole directory. *provenance* is collected
+    per file and appended in lock-step with the jobs actually kept.
+    """
+    specs: list = []
+    # resolved id -> name of the first file that declared it (cross-file dup report).
+    owner: "dict[str, str]" = {}
+    for fp in sorted(p for p in path.glob("*.y*ml") if p.is_file()):
+        file_prov: "list | None" = [] if provenance is not None else None
+        file_specs = _load_ingest_plan(
+            fp, failed=failed, warnings=warnings, present=present,
+            provenance=file_prov, profile=profile,
+        )
+        for i, spec in enumerate(file_specs):
+            if spec.id in owner:
+                # Cross-file collision: keep the first file's job, report the second.
+                if failed is not None:
+                    failed.append({
+                        "id": spec.id,
+                        "error": (
+                            f"ujin: duplicate job id {spec.id!r} declared in both "
+                            f"{owner[spec.id]} and {fp.name} (give one an explicit "
+                            "unique `id:`)"
+                        ),
+                    })
+                continue
+            owner[spec.id] = fp.name
+            specs.append(spec)
+            if provenance is not None:
+                provenance.append(file_prov[i])
+    return specs
+
+
 def _load_ingest_plan(
     path,
     failed: list | None = None,
@@ -1447,6 +1515,13 @@ def _load_ingest_plan(
     profile: "str | None" = None,
 ) -> list:
     """Load an INGEST-PLAN file into JobSpecs, deriving stable per-job ids.
+
+    When *path* is a **directory** every ``*.y*ml`` file in it is loaded (in sorted
+    filename order) through this same per-file pipeline and the resulting jobs are
+    aggregated — see :func:`_aggregate_plan_dir` for the merge order, the per-file
+    error isolation, and the cross-file duplicate-id check. A directory and a single
+    file resolve to the same merged job set; a single-file path keeps the exact
+    code path below, byte-for-byte unchanged.
 
     Each resulting job gets a stable id (explicit ``id`` wins; otherwise
     ``<plan-stem>-<index>``, with a per-entry ``matrix:`` suffix) so re-loading the
@@ -1497,6 +1572,14 @@ def _load_ingest_plan(
     from .model import JobSpec
 
     path = Path(path)
+    # A directory path aggregates every `*.y*ml` plan file in it (sorted) through this
+    # same per-file pipeline; a file path falls straight through to the unchanged
+    # single-file resolution below, so existing single-file behaviour is identical.
+    if path.is_dir():
+        return _aggregate_plan_dir(
+            path, failed=failed, warnings=warnings, present=present,
+            provenance=provenance, profile=profile,
+        )
     stem = path.stem
     specs: list = []
 
@@ -1620,6 +1703,10 @@ def _apply_ingest_plan(
     tags=None, exclude_tags=None,
 ) -> "dict[str, list]":
     """Resolve *plan_src*, apply ``--only``/``--exclude``, upsert into *manager*.
+
+    *plan_src* may be a single plan file or a directory of plan files; both resolve
+    through :func:`_load_ingest_plan` to the same merged job set, so the prune
+    keep-set (the union of ids the plan declares) spans every file in a directory.
 
     Shared by startup and ``POST /plan/reload`` so both go through the identical
     :func:`_load_ingest_plan` resolution (defaults/include/matrix/``${VAR}``),
@@ -1897,14 +1984,18 @@ def _resolve_watch(
 
 
 class _PlanWatcher:
-    """Background poller that re-applies the INGEST-PLAN when its file changes.
+    """Background poller that re-applies the INGEST-PLAN when its source changes.
 
-    Stats *plan_src* every *interval* seconds; on a changed signature (mtime + size)
-    re-runs :func:`_apply_ingest_plan` with ``prune=True`` and refreshes
-    ``app.state.plan`` — the same effect as ``POST /plan/reload?prune=true`` with no
-    restart. Construction snapshots the current file signature, so only edits made
-    *after* startup trigger a reload. Drive :meth:`poll_once` directly for a
-    deterministic, offline test, or schedule :meth:`run` as a background task.
+    Stats *plan_src* every *interval* seconds; on a changed signature re-runs
+    :func:`_apply_ingest_plan` with ``prune=True`` and refreshes ``app.state.plan``
+    — the same effect as ``POST /plan/reload?prune=true`` with no restart. The
+    signature is ``(mtime + size)`` for a single plan file and the set of
+    ``(name, mtime, size)`` for every ``*.y*ml`` file when *plan_src* is a
+    directory, so adding, modifying, or removing any plan file in a watched
+    directory triggers a reload (see :meth:`_signature`). Construction snapshots the
+    current signature, so only changes made *after* startup trigger a reload. Drive
+    :meth:`poll_once` directly for a deterministic, offline test, or schedule
+    :meth:`run` as a background task.
     """
 
     def __init__(
@@ -1924,12 +2015,31 @@ class _PlanWatcher:
         self._sig = self._signature()
 
     def _signature(self):
-        """``(mtime_ns, size)`` of the plan file, or ``None`` if it can't be stat-ed.
+        """Change signature of the watched plan, or ``None`` if it can't be stat-ed.
 
-        ``None`` (a missing/unreadable file) is treated as "no actionable change":
-        a transiently-absent plan must never trigger a reload that wipes jobs.
+        For a **file** the signature is ``(mtime_ns, size)`` — byte-for-byte the
+        single-file behaviour. For a **directory** it is the sorted tuple of
+        ``(name, mtime_ns, size)`` for every ``*.y*ml`` plan file in it, so the
+        add, modify, or removal of *any* plan file changes the signature and
+        triggers a reload (a removed file's jobs are then pruned).
+
+        ``None`` (a missing/unreadable file, or a directory that no longer exists)
+        is treated as "no actionable change": a transiently-absent plan must never
+        trigger a reload that wipes jobs. An empty but present directory signs as an
+        empty tuple — distinct from ``None`` — so emptying a plan directory correctly
+        prunes its jobs.
         """
         try:
+            p = Path(self.plan_src)
+            if p.is_dir():
+                files = []
+                for fp in sorted(p.glob("*.y*ml")):
+                    try:
+                        st = fp.stat()
+                    except OSError:
+                        continue
+                    files.append((fp.name, st.st_mtime_ns, st.st_size))
+                return tuple(files)
             st = os.stat(self.plan_src)
         except OSError:
             return None

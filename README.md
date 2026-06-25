@@ -16,8 +16,9 @@ The **ultimate scraper-poller**. Three parts that share one toolkit:
    every job, reusable `include:`/`use:` fragment files, `vars:` placeholder
    defaults and `${VAR}` / `${VAR:-default}` / `${VAR:?message}` env
    substitution, named `profiles:` overlays, and `matrix:`/`for_each:` fan-out to
-   turn one template into N jobs; or mount a single **INGEST-PLAN** file with
-   `--plan` / `$UJIN_INGEST_PLAN` for one-file multi-job deploys.
+   turn one template into N jobs; or mount an **INGEST-PLAN** with
+   `--plan` / `$UJIN_INGEST_PLAN` — a single file *or a directory of plan files* —
+   for multi-job deploys.
    Validate and inspect offline with `ujin plan validate` / `ujin plan render`,
    diff two plans by resolved job id with `ujin plan diff`, list the environment
    variables a plan needs with `ujin plan env`, and export the file-format JSON
@@ -105,14 +106,20 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
 
 ## Quick start — jobs and file-driven config
 
-`--plan` / `$UJIN_INGEST_PLAN` mounts a single YAML file that declares many jobs at
-once, kept DRY with `defaults:` deep-merge, `include:`/`use:` fragments, `vars:`
-placeholder defaults, named `profiles:` overlays, and `matrix:`/`for_each:` fan-out.
+`--plan` / `$UJIN_INGEST_PLAN` mounts a YAML file — or **a directory of plan files**,
+whose `*.y*ml` files are loaded in sorted order and aggregated into one job set — that
+declares many jobs at once, kept DRY with `defaults:` deep-merge, `include:`/`use:`
+fragments, `vars:` placeholder defaults, named `profiles:` overlays, and
+`matrix:`/`for_each:` fan-out. A directory and a single equivalent file resolve to the
+same jobs; two files that resolve to the same job id raise a clear duplicate-id error.
 See the [external-config walkthrough](docs/recipes/external-config-flow.md) for an
 end-to-end example.
 
 ```bash
+ujin plan init                                      # writes a starter ingest-plan.yaml (3 jobs, all layers)
+ujin plan init my-plan.yaml                        # custom destination path
 ujin jobs-serve --plan examples/ingest-plan.yaml   # :8902 — many jobs from one file
+ujin jobs-serve --plan ./plan.d/                    # …or a directory of plan files
 ujin plan validate examples/ingest-plan.yaml        # validate plan before deploying (exit 0 = ok)
 ujin plan validate examples/ingest-plan.yaml --schema   # also check document shape vs the JSON Schema
 ujin plan render   examples/ingest-plan.yaml        # print fully-expanded job specs (--json for CI)
