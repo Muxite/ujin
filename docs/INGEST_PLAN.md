@@ -436,23 +436,28 @@ identical before and after:
   "plan_path": "/data/ingest-plan.yaml",
   "workflows_dir": "/workflows",
   "jobs": [
-    {"id": "crossref", "provenance": {"source": "/data/ingest-plan.yaml", "matrix": null}},
-    {"id": "feed-tech", "provenance": {"source": "/data/ingest-plan.yaml",
-                                        "matrix": {"key": "matrix", "index": 0, "vars": {"slug": "tech"}}}},
-    {"id": "feed-science", "provenance": {"source": "/data/ingest-plan.yaml",
-                                           "matrix": {"key": "matrix", "index": 1, "vars": {"slug": "science"}}}}
+    {"id": "crossref", "tags": ["prod", "api"],
+     "provenance": {"source": "/data/ingest-plan.yaml", "matrix": null}},
+    {"id": "feed-tech", "tags": ["feeds", "region-eu"],
+     "provenance": {"source": "/data/ingest-plan.yaml",
+                    "matrix": {"key": "matrix", "index": 0, "vars": {"slug": "tech"}}}},
+    {"id": "feed-science", "tags": ["feeds", "region-us"],
+     "provenance": {"source": "/data/ingest-plan.yaml",
+                    "matrix": {"key": "matrix", "index": 1, "vars": {"slug": "science"}}}}
   ],
   "failed": []
 }
 ```
 
 `plan_path` is `null` when no `--plan`/`$UJIN_INGEST_PLAN` is configured (jobs then
-come only from `workflows_dir`); with neither configured, `jobs` is empty. Files or
-jobs that fail to resolve are reported in `failed` (`{id, error}`) exactly as the
+come only from `workflows_dir`); with neither configured, `jobs` is empty. Each job's
+resolved [`tags:`](#tags--free-form-labels-for-tag-based-selection) are surfaced in
+its `tags` field (`[]` for a job that declares none). Files or jobs that fail to
+resolve are reported in `failed` (`{id, error}`) exactly as the
 [`GET /health` plan block](#reporting-and-errors) lists them. If the server was
-started with [`--only`/`--exclude`](#job-id-selection----only-and---exclude), the
-plan jobs are filtered by the same selectors, matching what actually loaded. This is
-the live counterpart to the offline `ujin plan render --explain` CLI.
+started with [`--only`/`--exclude` or `--tag`/`--exclude-tag`](#job-selection----only--exclude-and---tag--exclude-tag),
+the plan jobs are filtered by the same selectors, matching what actually loaded. This
+is the live counterpart to the offline `ujin plan render --explain` CLI.
 
 ## Reloading a plan without restarting
 
@@ -481,7 +486,7 @@ mirrors the startup plan-status shape, plus a `reloaded` flag:
 A single malformed job is reported in `failed` while the rest reload (a reload never
 aborts). By default reload only **upserts** — it never deletes jobs dropped from the file
 (see [prune mode](#pruning-jobs-dropped-from-the-plan) to opt into removal). If the
-server was started with [`--only`/`--exclude`](#job-id-selection----only-and---exclude)
+server was started with [`--only`/`--exclude`](#job-selection----only--exclude-and---tag--exclude-tag)
 selectors, reload applies the **same** filters, so it never loads jobs the startup
 filter excluded; unlike startup, a `--only` pattern that now matches nothing is reported
 (`{"reloaded": false, "detail": "ujin: --only …: no job ids matched", …}`) rather than
@@ -1055,47 +1060,91 @@ message (no traceback) on a missing/unreadable path or any failed job.  It is
 strictly additive — all existing `plan` subcommands, single-file loading, and output
 formats are byte-for-byte unchanged.
 
-## Job-id selection — `--only` and `--exclude`
+### `tags:` — free-form labels for tag-based selection
 
-All three plan-aware commands (`plan render`, `plan validate`, and `jobs-serve`)
-accept `--only` and `--exclude` to filter which jobs are actually processed.
-Selection runs **after full resolution** — after `defaults:` deep-merge,
-`include:`/`use:` fragment inlining, `matrix:`/`for_each:` fan-out, and `${VAR}`
-substitution — so patterns always match the **final expanded job id**.
+Any job may carry an optional `tags:` key — a single string or a list of strings —
+purely as labels. Tags never change how a job runs; they only add a tag dimension
+to the [`--only`/`--exclude`](#job-selection----only--exclude-and---tag--exclude-tag)
+id selectors below. It is just another per-job key, so it follows the same rules as
+every other:
+
+- a per-job `tags:` overrides the `defaults:` `tags:` (no concatenation — the job's
+  list wins outright, exactly like `source:` or `schedule:`);
+- a `{{ var }}` inside a tag substitutes per `matrix:`/`for_each:` entry, so each
+  fanned-out job can carry a distinct templated tag;
+- a job with no `tags:` resolves to no tags — strictly additive, byte-for-byte
+  identical to before the key existed.
+
+```yaml
+defaults:
+  tags: prod                       # deep-merged under every job; a per-job tags: wins
+jobs:
+  - id: crossref
+    tags: [prod, api]              # a list (overrides the inherited `prod`)
+    source: { kind: api, config: { url: "https://api.crossref.org/works" } }
+  - id: "feed-{{ slug }}"
+    matrix:
+      - { slug: tech, region: eu }
+      - { slug: science, region: us }
+    tags: [feeds, "region-{{ region }}"]   # `{{ region }}` resolves per entry
+    source: { kind: api, config: { url: "https://feeds.example.com/{{ slug }}" } }
+```
+
+Each resolved job's tags are surfaced in the
+[`GET /plan`](#introspecting-the-active-plan-get-plan) introspection response and in
+`plan render --json` (a job with no tags omits the field).
+
+## Job selection — `--only`/`--exclude` and `--tag`/`--exclude-tag`
+
+All four plan-aware commands (`plan render`, `plan validate`, `plan eject`, and
+`jobs-serve --plan`) accept `--only`/`--exclude` (by id) and `--tag`/`--exclude-tag`
+(by [`tags:`](#tags--free-form-labels-for-tag-based-selection)) to filter which jobs
+are actually processed. Selection runs **after full resolution** — after `defaults:`
+deep-merge, `include:`/`use:` fragment inlining, `matrix:`/`for_each:` fan-out, and
+`${VAR}` substitution — so patterns always match the **final expanded job id** and
+its **resolved tags**.
 
 ```bash
 # render only jobs whose id starts with "feed-"
 ujin plan render  ./ingest-plan.yaml --only 'feed-*'
 
-# comma-separated or repeatable patterns
-ujin plan render  ./ingest-plan.yaml --only 'feed-tech,feed-science'
-ujin plan render  ./ingest-plan.yaml --only 'feed-tech' --only 'feed-science'
+# render only jobs carrying a tag (comma-separated or repeatable, like --only)
+ujin plan render  ./ingest-plan-tags.yaml --tag prod
+ujin plan render  ./ingest-plan-tags.yaml --tag 'feeds,api'
 
-# --exclude subtracts from the --only set
-ujin plan render  ./ingest-plan.yaml --only 'feed-*' --exclude feed-tech
+# --exclude-tag subtracts from the --tag set (and from --only/--exclude survivors)
+ujin plan render  ./ingest-plan-tags.yaml --tag prod --exclude-tag 'region-eu'
 
-# validate only the selected subset
-ujin plan validate ./ingest-plan.yaml --only 'feed-*' --json
+# selectors AND together: among the prod jobs, keep only those with id feed-*
+ujin plan render  ./ingest-plan-tags.yaml --tag prod --only 'feed-*'
 
-# preload only matching jobs; /health plan.loaded reflects the filtered set
-ujin jobs-serve   --plan ./ingest-plan.yaml --only 'feed-*'
+# validate / eject / preload honor the same tag selectors
+ujin plan validate ./ingest-plan-tags.yaml --tag prod --json
+ujin plan eject    ./ingest-plan-tags.yaml --out ./ejected/ --tag prod
+ujin jobs-serve    --plan ./ingest-plan-tags.yaml --tag prod   # /health reflects it
 ```
 
 Patterns are **fnmatch-style globs** (`*` matches any string, `?` matches one
-character, `[seq]` matches a character in the set) matched case-sensitively
-against each fully-expanded job id. When both flags are given, `--exclude`
-subtracts from the `--only` set. A `--only` pattern that matches no resolved
-job exits non-zero immediately with a clean `ujin: …` message and no traceback:
+character, `[seq]` matches a character in the set), matched case-sensitively — `--only`/`--exclude`
+against each fully-expanded job id, `--tag`/`--exclude-tag` against each of a job's
+tags (a job is kept by `--tag` when **any** of its tags matches **any** pattern). All
+four selectors **compose** (AND together): a job survives only if it passes every
+active filter. A `--only` pattern that matches no id, or a `--tag` pattern no job
+carries, exits non-zero immediately with a clean `ujin: …` message and no traceback:
 
 ```
 ujin: --only 'no-such-*': no job ids matched (5 job(s) resolved)
+ujin: --tag 'ghost': no jobs carry a matching tag (5 job(s) resolved)
 ```
 
-With no selector flags, all three commands are **byte-for-byte unchanged**.
+With no selector flags, all four commands are **byte-for-byte unchanged**.
 
 ## Example
 
 A ready-to-mount plan demonstrating `defaults:` + a shared `include:` + a
 `matrix:` fan-out across several jobs ships at
 [`examples/ingest-plan.yaml`](../examples/ingest-plan.yaml) (it reuses the
-fragments under `examples/workflows/fragments/`).
+fragments under `examples/workflows/fragments/`). A second plan,
+[`examples/ingest-plan-tags.yaml`](../examples/ingest-plan-tags.yaml), demonstrates
+the [`tags:`](#tags--free-form-labels-for-tag-based-selection) key (including a
+matrix-templated tag) and the `--tag`/`--exclude-tag` selectors.
