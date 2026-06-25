@@ -214,7 +214,11 @@ server. Add `--schema` to *additionally* check the **unresolved** document again
 JSON Schema `ujin plan schema` emits, reporting structural shape violations (a scalar
 document, a non-list `jobs:`, a string `source:`) with the offending JSON path (e.g.
 `$.jobs[0].source`); it complements the loader and `--strict` checks and is off by
-default, so output and exit codes are byte-for-byte unchanged without it. `ujin plan
+default, so output and exit codes are byte-for-byte unchanged without it. It also emits
+**advisory** `WARN`s for plan hygiene — misspelled keys, redundant `defaults:`, a
+`vars:` default no `{{ var }}` references (dead config), and a `{{ placeholder }}` left
+unsubstituted after `vars:`/`matrix:` resolution (likely a typo) — that never change the
+default exit code; `--strict` promotes every advisory to a `FAIL` for CI. `ujin plan
 render` prints every fully-expanded `JobSpec` after all resolution layers so you can
 verify matrix fan-out and defaults merges before deploying. Add `--explain` to annotate
 each job with its provenance — the originating source file and, for matrix/for_each-expanded
