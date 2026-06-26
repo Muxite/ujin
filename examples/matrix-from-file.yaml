@@ -1,0 +1,47 @@
+# A *file-backed matrix* plan: the list of variable maps lives in a SEPARATE data
+# file instead of being written inline under `matrix:`.
+#
+#   UJIN_INGEST_PLAN=/path/matrix-from-file.yaml ujin jobs-serve
+#   ujin jobs-serve --plan /path/matrix-from-file.yaml
+#   ujin plan validate examples/matrix-from-file.yaml      # offline check
+#   ujin plan render   examples/matrix-from-file.yaml      # see the 3 expanded jobs
+#
+# `matrix: { from: <path> }` names the data file. The path is resolved exactly the
+# way an `include:`/`use:` fragment is — relative to THIS file's directory, then
+# `$UJIN_WORKFLOWS_DIR`. The data file (examples/data/marketplace-searches.yaml)
+# holds a non-empty list of variable maps; ujin loads ONE job per row.
+#
+# This plan loads to three jobs — `search-laptop`, `search-gpu`, `search-monitor`
+# — byte-for-byte identical to inlining those same rows under `matrix:` (compare
+# examples/workflows/marketplace-search.yaml). The `id:` template references
+# `{{ slug }}`, so each job gets a stable, distinct id and reloading upserts the
+# same three jobs instead of duplicating them. See docs/INGEST_PLAN.md and
+# docs/WORKFLOWS.md ("file-backed matrix").
+
+jobs:
+  - id: "search-{{ slug }}"
+    matrix:
+      from: data/marketplace-searches.yaml
+    source:
+      kind: api
+      config:
+        url: "https://api.example.com/search?q={{ query }}&min_price={{ floor }}"
+        method: GET
+        json_path: results
+    transforms:
+      - kind: select
+        config:
+          path: payload
+          fields: [id, title, price, url]
+      - kind: dedupe
+        config: { key: id }
+    sinks:
+      - kind: sqlite          # record change events durably
+      - kind: jsonl
+        config: { path: "/data/{{ slug }}.jsonl" }
+    schedule:
+      mode: adaptive
+      base: 1800
+      min: 300
+      max: 21600
+      jitter: decorrelated

@@ -104,6 +104,40 @@ workloads and is only justified for sustained crawl bursts.**
   worker process per ~140 pages/sec of fetch capacity would be needed. → **GO
   only above ~140 pages/sec (full extraction) or ~815 pages/sec (links-only).**
 
+## Plan expansion (ingest-plan, many jobs)
+
+Measured by `benchmarks/test_plan_expansion.py` on the same machine as the
+baseline above (Linux, Python 3.12). The `plan_expand_full_120` benchmark
+exercises every resolution layer in a single `_load_ingest_plan` call:
+top-level `defaults:` deep-merge, `include:` fragment splicing, `matrix:`
+fan-out, per-entry `{{ var }}` substitution, and `JobSpec.from_dict`
+construction — fanning out to **120 resolved JobSpecs**.
+
+| Benchmark | Median (120 jobs) | Jobs/sec | ms/job | Layers exercised |
+|---|---|---|---|---|
+| `plan_expand_full_120` | ~15.7 ms | ~7 400 | ~0.13 | defaults + include + matrix + `{{ var }}` |
+| `test_expand_matrix_inline_120` | ~14.8 ms | ~8 100 | ~0.12 | defaults + matrix + `{{ var }}` |
+| `test_expand_shared_include_120` | ~25.0 ms | ~4 800 | ~0.21 | 120 jobs, shared fragment |
+
+**Per-job expansion cost: ~0.13 ms** (all layers combined).
+
+**Practical large-fan-out guideline:** Plan expansion is a one-shot operation
+(startup and explicit reload only — never on the polling hot path). At the
+measured ~0.13 ms/job ceiling:
+
+- **100 jobs** → ~13 ms — effectively instant.
+- **1 000 jobs** → ~130 ms — comfortably within a startup budget; no special
+  concern.
+- **5 000 jobs** → ~650 ms — still acceptable for a service startup; consider
+  splitting into multiple plan files if reload latency matters.
+- **10 000+ jobs** — expansion itself remains sub-second, but YAML parse time
+  and I/O for very large files can dominate; benchmark on your hardware if you
+  cross this threshold.
+
+The `include:` fragment cache means all 120 jobs sharing one fragment pay the
+disk-read cost only once; per-job cost is dominated by `_subst_vars` and
+`JobSpec.from_dict`, both of which scale linearly.
+
 ## Regression gate
 
 CI runs `pytest benchmarks/` on every push (non-blocking job). Async paths

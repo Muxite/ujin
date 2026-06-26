@@ -49,7 +49,7 @@ in-memory `POST /targets` left open.
 | `browser` | `url`, `engine?`, `actions[]`, `extract?` (`links`\|`article`\|`structured`\|`raw`), `results_selector?`, `headless?` | drive a real browser through an interaction recipe (`load_more`, scroll, click), then extract — see [BROWSER.md](BROWSER.md) |
 | `amazon_search` | `term` (or `terms[]`), `domain?`, `max_results?`, `category?`, `engine?`, `with_description?`, `headless?`, `proxy?`, `timeout_secs?` | search Amazon for a single term or fan out across a list of terms concurrently via `MultiPollable` (results merged); see [MARKETPLACE.md](MARKETPLACE.md) |
 | `amazon_category` | `categories?`, `terms_per_poll?`, `max_results?`, `domain?`, `engine?`, `headless?`, `harvest?`, `harvest_path?`, `harvest_ratio?`, `proxy?`, `timeout_secs?` | sweep Amazon category pages, sampling from a rotating pool of search terms; see [MARKETPLACE.md](MARKETPLACE.md) |
-| `marketplace_search` | `profile` (required), `profiles?`, `profiles_path?`, `categories?`, `terms_per_poll?`, `max_results?`, `engine?`, `with_description?`, `headless?`, `proxy?`, `timeout_secs?` | profile-driven search over any marketplace site; profiles resolved from inline `profiles` dict, `profiles_path` file, or `$UJIN_MARKETPLACE_PROFILES` env var — see [MARKETPLACE.md](MARKETPLACE.md) |
+| `marketplace_search` | `profile?` (default `amazon`), `profiles?`, `profiles_path?`, `categories?`, `terms_per_poll?`, `max_results?`, `engine?` (`auto`\|`http`\|`browser`), `proxy?`, `timeout_secs?`, `headless?`, `seed?`, `with_description?`, `detail_cache?`, `detail_cache_path?`, `detail_cache_ttl_secs?` | profile-driven search over any marketplace site; **no profiles are built in** — supply via inline `profiles` dict, `profiles_path` file, or `$UJIN_MARKETPLACE_PROFILES` env var — see [MARKETPLACE.md](MARKETPLACE.md) |
 | `plugin:<name>` | (plugin-defined) | a custom source — see PLUGINS.md |
 
 ### Transforms (`kind`) — run in order; one returning nothing drops the event
@@ -90,7 +90,7 @@ in-memory `POST /targets` left open.
 ## REST surface (`:8902`)
 
 ```
-GET    /health                  {ok, jobs, plugins, workflows}
+GET    /health                  {ok, jobs, plugins, workflows[, plan]}
 GET    /kinds                   available source/transform/sink kinds
 GET    /metrics                 engine stats + per-job + plugin status
 GET    /jobs                    list job summaries
@@ -105,10 +105,74 @@ GET    /jobs/{id}/content       latest obtained payload (the data ujin last got)
 GET    /jobs/{id}/results?limit=N  recent buffer of obtained results (per change)
 WS     /jobs/events             live change stream (all jobs)
 POST   /plugins/reload          re-import plugins -> {loaded, failed}
+GET    /plan                    read-only: jobs the active plan/workflows resolve to + provenance
+POST   /plan/reload             re-read the INGEST-PLAN -> {reloaded, path, loaded, added, already_present, failed}
+POST   /plan/reload?prune=true   …also remove plan-owned jobs gone from the file -> +{pruned}
+POST   /plan/reload?dry_run=true preview only -> {reloaded:false, dry_run:true, added, updated, unchanged}
 ```
 
-File-driven jobs (**workflows**) also load from `UJIN_WORKFLOWS_DIR` on startup
-(id = filename stem). See [WORKFLOWS.md](WORKFLOWS.md).
+The `plan` field in `/health` is only present when `--plan`/`$UJIN_INGEST_PLAN` is
+configured; it lists `loaded` and `failed` job ids, mirroring `workflows`. Omitted
+entirely on no-plan deploys so `/health` stays byte-identical.
+
+`GET /plan` is a **read-only** introspection of what the active workflows directory
+and INGEST-PLAN currently resolve to. It re-runs the same loaders and provenance
+plumbing that back `ujin plan render --explain`, so every returned job carries its
+originating source file and — for `matrix:`/`for_each:`-expanded jobs — the matrix
+entry (key/index/vars) that produced it. It never creates, mutates, or deletes a
+job; it only reads. With neither a plan nor a populated workflows dir configured,
+`jobs` is empty:
+
+```jsonc
+// GET /plan
+{
+  "plan_path": "/etc/ujin/ingest-plan.yaml",   // null when no --plan/$UJIN_INGEST_PLAN
+  "workflows_dir": "/workflows",
+  "jobs": [
+    {"id": "crossref",  "tags": [],
+     "provenance": {"source": "/etc/ujin/ingest-plan.yaml", "matrix": null}},
+    {"id": "feed-tech", "tags": ["feeds"],
+     "provenance": {"source": "/etc/ujin/ingest-plan.yaml",
+                    "matrix": {"key": "matrix", "index": 0, "vars": {"slug": "tech"}}}}
+  ],
+  "failed": []   // {id, error} per file/job that did not resolve, as in /health
+}
+```
+
+Unresolvable files or jobs are reported in `failed` exactly as `GET /health` lists
+them. See [INGEST_PLAN.md](INGEST_PLAN.md#introspecting-the-active-plan-get-plan).
+
+`POST /plan/reload` re-reads the configured plan file and upserts its jobs by their
+stable ids — picking up added/changed jobs without restarting the server — then
+refreshes the `/health` plan status. It shares the startup loader, so a single
+malformed job is reported in `failed` while the rest reload. The response classifies
+each loaded job id into `added` (new this reload) or `already_present` (re-upserted),
+and a server log line is emitted with the counts. With no plan configured it is a safe
+no-op (`{"reloaded": false, "detail": "no plan configured", …}`). Like every mutating
+route it sits behind the optional API-key auth. Add `?prune=true` (or a
+`{"prune": true}` body) to also **remove** plan-owned jobs whose ids vanished from the
+file (returned in a `pruned` list); jobs created via the API or the positional preload
+are never pruned. Add `?dry_run=true` (or a `{"dry_run": true}` body) to **preview**
+the reload instead: the plan resolves exactly as a real reload would, but nothing is
+upserted or pruned — the response reports which ids would be
+`added`/`updated`/`unchanged` (plus `removed` when combined with `prune`), and
+`GET /jobs` is identical before and after. See
+[INGEST_PLAN.md](INGEST_PLAN.md#reloading-a-plan-without-restarting).
+
+To skip the manual POST entirely, start with `jobs-serve --watch-plan` (or
+`UJIN_WATCH_PLAN=1`; tune with `--watch-interval` / `$UJIN_WATCH_INTERVAL`, default
+`2.0`s). Off by default. When on, a background task watches the `--plan` file and, on
+change, applies the **same** reload-with-prune automatically — added/changed jobs
+appear and removed plan-owned jobs are pruned with no restart. A malformed save is
+skipped (jobs kept, error in `failed`), API/preload jobs are never pruned, and it is
+race-free with the manual endpoint. See
+[INGEST_PLAN.md](INGEST_PLAN.md#auto-reloading-on-file-change---watch-plan).
+
+File-driven jobs (**workflows**) load from `UJIN_WORKFLOWS_DIR` on startup (id =
+filename stem), with optional `defaults:` deep-merge, `include:`/`use:` fragments,
+and `matrix:`/`for_each:` fan-out — see [WORKFLOWS.md](WORKFLOWS.md). A single
+**INGEST-PLAN** file (many jobs at once) also loads via `--plan`/`$UJIN_INGEST_PLAN`
+— see [INGEST_PLAN.md](INGEST_PLAN.md).
 
 Every change also emits a compact `{"event":"change","job_id",...}` on
 `WS /jobs/events`, independent of whether the job has a `ws` sink.

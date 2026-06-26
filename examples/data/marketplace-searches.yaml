@@ -1,0 +1,14 @@
+# Row data for a *file-backed matrix* — one variable map per saved search.
+#
+# A workflow/plan references this file with `matrix: { from: <path> }` instead of
+# writing the rows inline; ujin fans the template into one job per row here, with
+# `{{ slug }}` / `{{ query }}` / `{{ floor }}` substituted in. Keeping the rows in
+# their own file lets the set of searches change (add a row, drop a row) without
+# editing the job definition. Referenced from examples/matrix-from-file.yaml.
+#
+# The file must be a NON-EMPTY top-level list of mappings — the same shape an
+# inline `matrix:` list holds. A whole-value placeholder keeps its native type
+# (`min_price: "{{ floor }}"` -> the integer 500, not "500").
+- { slug: laptop,  query: "gaming laptop", floor: 500 }
+- { slug: gpu,     query: "rtx 4090",      floor: 800 }
+- { slug: monitor, query: "4k monitor",    floor: 200 }

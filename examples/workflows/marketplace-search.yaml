@@ -1,0 +1,46 @@
+# A *matrix* workflow: one template fanned into several jobs.
+#
+# `matrix:` (alias `for_each:`) is a list of variable maps. ujin loads this file
+# as **one job per entry**, substituting each entry's variables into every
+# `{{ var }}` placeholder across the source/transforms/sinks/schedule. Here three
+# saved searches share one definition:
+#
+#   GET /jobs/search-laptop   GET /jobs/search-gpu   GET /jobs/search-monitor
+#
+# The `id:` template references `{{ slug }}`, so each generated job gets a stable,
+# distinct id — reloading this file upserts the same three jobs instead of
+# duplicating them. (Drop the `id:` line and ids fall back to
+# `<stem>-<index>`: marketplace-search-0, -1, -2.)
+#
+# A `{{ var }}` that is the whole value keeps its type — `min_price: {{ floor }}`
+# substitutes the integer 500, not the string "500".
+
+matrix:
+  - { slug: laptop,  query: "gaming laptop", floor: 500 }
+  - { slug: gpu,     query: "rtx 4090",      floor: 800 }
+  - { slug: monitor, query: "4k monitor",    floor: 200 }
+
+id: "search-{{ slug }}"
+source:
+  kind: api
+  config:
+    url: "https://api.example.com/search?q={{ query }}&min_price={{ floor }}"
+    method: GET
+    json_path: results
+transforms:
+  - kind: select
+    config:
+      path: payload
+      fields: [id, title, price, url]
+  - kind: dedupe
+    config: { key: id }
+sinks:
+  - kind: sqlite          # record change events durably
+  - kind: jsonl
+    config: { path: "/data/{{ slug }}.jsonl" }
+schedule:
+  mode: adaptive          # grows when quiet, shrinks when listings change
+  base: 1800
+  min: 300
+  max: 21600
+  jitter: decorrelated
