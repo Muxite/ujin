@@ -30,6 +30,11 @@ _HTML_C = """
 """
 
 
+def test_extract_regions_empty_selectors():
+    """Empty selector list returns {} without parsing HTML."""
+    assert extract_regions("<html><body>hi</body></html>", []) == {}
+
+
 def test_extract_regions_normalizes():
     regions = extract_regions(_HTML_A, ["main"])
     assert "Top headline one" in regions["main"]

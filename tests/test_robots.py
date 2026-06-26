@@ -1,9 +1,13 @@
 """Tests for ujin.robots: parse edge cases, cache TTL, and regression guard."""
 from __future__ import annotations
 
+import re
+import sys
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
-from ujin.robots import RobotsCache, RobotsPolicy
+from ujin.robots import RobotsCache, RobotsPolicy, _http_fetcher
 
 
 # ================================================================== parse ===
@@ -355,3 +359,94 @@ async def test_no_robots_fetch_on_default_scrape(fake_origin):
     assert "/robots.txt" not in paths, (
         f"HttpPollable fetched /robots.txt by default (paths seen: {paths})"
     )
+
+
+# ========================================================= parse edge-cases ===
+
+
+class TestParseEdgeCases:
+    def test_repeated_agent_merges_rules(self):
+        """Same agent appearing in two groups reuses the existing _rules entry."""
+        txt = (
+            "User-agent: *\n"
+            "Disallow: /foo\n"
+            "\n"
+            "User-agent: *\n"
+            "Disallow: /bar\n"
+        )
+        p = RobotsPolicy(txt)
+        assert p.is_allowed("/foo") is False
+        assert p.is_allowed("/bar") is False
+        assert p.is_allowed("/other") is True
+
+    def test_unknown_directive_ignored(self):
+        """A key not in {user-agent, allow, disallow, crawl-delay, sitemap} is skipped."""
+        txt = (
+            "User-agent: *\n"
+            "Disallow: /private\n"
+            "Host: example.com\n"
+        )
+        p = RobotsPolicy(txt)
+        assert p.is_allowed("/private") is False
+        assert p.is_allowed("/public") is True
+
+
+# ========================================================== _match helpers ===
+
+
+class TestMatchHelper:
+    def test_empty_pattern_matches_everything(self):
+        """Empty pattern returns (True, 0); used when an Allow value is empty."""
+        assert RobotsPolicy._match("", "/anything") == (True, 0)
+        assert RobotsPolicy._match("", "") == (True, 0)
+
+    def test_re_error_returns_no_match(self):
+        """If re.match raises re.error, _match returns (False, 0) gracefully."""
+        with patch("ujin.robots.re.match", side_effect=re.error("injected")):
+            result = RobotsPolicy._match("/path", "/path")
+        assert result == (False, 0)
+
+
+# ========================================================== _http_fetcher ===
+
+
+def _make_aiohttp_mock(status: int, body: str = "") -> MagicMock:
+    mock_resp = MagicMock()
+    mock_resp.status = status
+    mock_resp.text = AsyncMock(return_value=body)
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+    mock_session = MagicMock()
+    mock_session.get = MagicMock(return_value=mock_resp)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    mock_aiohttp = MagicMock()
+    mock_aiohttp.ClientTimeout = MagicMock(return_value=MagicMock())
+    mock_aiohttp.ClientSession = MagicMock(return_value=mock_session)
+    return mock_aiohttp
+
+
+class TestHttpFetcher:
+    @pytest.mark.asyncio
+    async def test_import_error_returns_empty(self, monkeypatch):
+        """When aiohttp is not importable, _http_fetcher catches the error and returns ''."""
+        monkeypatch.setitem(sys.modules, "aiohttp", None)
+        result = await _http_fetcher("http://x.test/robots.txt")
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_non_200_returns_empty(self, monkeypatch):
+        """Non-200 response: _http_fetcher returns '' without raising."""
+        monkeypatch.setitem(sys.modules, "aiohttp", _make_aiohttp_mock(404))
+        result = await _http_fetcher("http://x.test/robots.txt")
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_200_returns_body(self, monkeypatch):
+        """200 response: _http_fetcher returns the decoded body text."""
+        body = "User-agent: *\nDisallow: /\n"
+        monkeypatch.setitem(sys.modules, "aiohttp", _make_aiohttp_mock(200, body))
+        result = await _http_fetcher("http://x.test/robots.txt")
+        assert result == body
