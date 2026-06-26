@@ -1,0 +1,55 @@
+# A *cross-product matrix* plan: a mapping of axis-name -> list-of-values fans out
+# as the cartesian product — one job per COMBINATION of axis values.
+#
+#   UJIN_INGEST_PLAN=/path/matrix-cross-product.yaml ujin jobs-serve
+#   ujin jobs-serve --plan /path/matrix-cross-product.yaml
+#   ujin plan validate examples/matrix-cross-product.yaml          # offline check
+#   ujin plan render   examples/matrix-cross-product.yaml --explain # see the 6 jobs
+#
+# Here two axes — `region` (3 values) and `tier` (2 values) — produce 3 * 2 = 6
+# jobs, each with `{{ region }}` and `{{ tier }}` substituted into the resolved
+# spec. This is the third matrix shape, alongside the inline list of variable maps
+# (examples/workflows/marketplace-search.yaml) and the file-backed
+# `matrix: { from: <path> }` form (examples/matrix-from-file.yaml). A mapping value
+# is read as cross-product axes unless it carries a `from:` key, which selects the
+# file-backed form instead (so `from` is reserved as an axis name).
+#
+# Each combination gets a stable, deterministic id derived from its values — built
+# with the axis names sorted, so it is independent of the order the axes are written
+# and identical across repeated `ujin plan render` runs. With no `id:` template the
+# ids fall back to `<plan-stem>-<region>-<tier>` — axis NAMES sorted (region before
+# tier), each axis's VALUES kept in the order written:
+#
+#   matrix-cross-product-us-east-free     matrix-cross-product-us-east-pro
+#   matrix-cross-product-us-west-free     matrix-cross-product-us-west-pro
+#   matrix-cross-product-eu-central-free  matrix-cross-product-eu-central-pro
+#
+# Set an explicit `id:` template (as below) for friendlier ids. See
+# docs/INGEST_PLAN.md and docs/WORKFLOWS.md ("cross-product matrix").
+
+jobs:
+  - id: "status-{{ region }}-{{ tier }}"
+    matrix:
+      region: [us-east, us-west, eu-central]
+      tier: [free, pro]
+    source:
+      kind: api
+      config:
+        url: "https://api.example.com/{{ region }}/status?tier={{ tier }}"
+        method: GET
+        json_path: services
+    transforms:
+      - kind: select
+        config:
+          path: payload
+          fields: [id, name, healthy]
+    sinks:
+      - kind: sqlite          # record change events durably
+      - kind: jsonl
+        config: { path: "/data/status-{{ region }}-{{ tier }}.jsonl" }
+    schedule:
+      mode: adaptive
+      base: 600
+      min: 60
+      max: 7200
+      jitter: decorrelated

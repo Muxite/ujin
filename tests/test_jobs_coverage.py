@@ -17,7 +17,12 @@ import pytest
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from ujin.jobs.app import _load_workflows_dir, _specs_from_workflow_file, create_jobs_app  # noqa: E402
+from ujin.jobs.app import (  # noqa: E402
+    _load_ingest_plan,
+    _load_workflows_dir,
+    _specs_from_workflow_file,
+    create_jobs_app,
+)
 from ujin.jobs.cron import CronExpr, _parse_field, next_fire  # noqa: E402
 from ujin.jobs.pipeline import Pipeline, _jsonable  # noqa: E402
 from ujin.jobs.transforms import (  # noqa: E402
@@ -496,3 +501,51 @@ async def test_dedupe_with_key_dict_payload():
 def test_build_transform_unknown_kind_raises():
     with pytest.raises(ValueError, match="unknown transform kind"):
         build_transform("totally_bogus_kind", {})
+
+
+# ── app.py: _load_ingest_plan branches when failed=None ──────────────────────
+
+
+def test_load_ingest_plan_file_error_no_failed_arg(tmp_path):
+    # file-level error (missing file) with no failed= kwarg → branch 494->496
+    specs = _load_ingest_plan(tmp_path / "nope.yaml")
+    assert specs == []
+
+
+def test_load_ingest_plan_job_error_no_failed_arg(tmp_path):
+    import yaml
+
+    # per-job error with no failed= kwarg → branch 523->501
+    f = tmp_path / "plan.yaml"
+    f.write_text(yaml.safe_dump([
+        {"id": "good", "source": {"kind": "http", "config": {"url": "https://a/"}}},
+        {"id": "bad", "matrix": "nope",
+         "source": {"kind": "http", "config": {"url": "https://b/"}}},
+    ]))
+    specs = _load_ingest_plan(f)
+    assert [s.id for s in specs] == ["good"]
+
+
+# ── app.py: scrape_close raises during lifespan shutdown (lines 644-645) ─────
+
+
+def test_scrape_close_exception_swallowed_on_shutdown(db, monkeypatch):
+    try:
+        import ujin.scrape.build as _sb
+    except ImportError:
+        pytest.skip("scrape extra not installed")
+
+    import ujin.scrape.build as _sb
+
+    async def bad_close():
+        raise RuntimeError("forced close failure for coverage test")
+
+    async def fake_build(cfg):
+        return (object(), {}, bad_close)
+
+    monkeypatch.setattr(_sb, "build_scrape_service", fake_build)
+    app = create_jobs_app(run_engine=False)
+    with TestClient(app) as c:
+        assert c.get("/health").status_code == 200
+    # TestClient context exit drives lifespan shutdown; bad_close() raises but
+    # the except Exception block (lines 644-645) swallows it silently.

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added (external INGEST-PLAN / multi-job config)
+- Restored the external-config / INGEST-PLAN subsystem: a single plan file can declare many jobs at once via top-level `defaults:` (deep-merged into each job, per-job keys overriding), reusable `include:`/`use:` fragments, and `matrix:`/`for_each:` templates that fan out one job per parameter set (with `${VAR}`/`${VAR:-default}` substitution into `source`, `transforms`, `sinks`, and `schedule`). Adds `ujin/jobs/schema.py`, the `ujin plan` CLI group (`validate`/`render`/`diff`/`schema`/`env`/`eject`/`init`), and lets `jobs-serve` mount one external plan through `$UJIN_INGEST_PLAN` (inline/path/env precedence, mirroring `$UJIN_MARKETPLACE_PROFILES`). Fully additive — existing single-file workflows/jobs and a no-`UJIN_INGEST_PLAN` deploy are byte-for-byte unchanged. See `docs/INGEST_PLAN.md`.
+
 ### Added (test coverage)
 - Added offline, deterministic tests to `tests/test_robots.py` and `tests/test_diff.py` covering previously-uncovered paths: repeated-agent parse branch (`55->57`), unknown-directive skip (`75->37`), empty-pattern `_match` short-circuit (line 131), `re.error` guard (lines 144–145), full `_http_fetcher` body (lines 161–171, via aiohttp mock/import-failure), and `extract_regions` empty-selectors early return (region.py line 30); lifting `ujin/robots.py` and `ujin/diff/region.py` to 100% line and branch coverage.
 - Added 8 offline, deterministic tests to `tests/test_extract_contacts.py` covering previously-uncovered edge paths in `ujin/extract/contacts.py`: empty/whitespace-only `href` anchor (line 153), empty `mailto:` and `tel:` address/number branches (lines 158, 162), and the three exception-guard fallbacks in `_is_social_href`, `_resolve`, and `extract_contacts` (lines 85–86, 94–95, 123–124), lifting the module to 100% line and branch coverage.

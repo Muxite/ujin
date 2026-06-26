@@ -1,0 +1,11 @@
+# Reusable schedule fragment — reference it from a workflow's `schedule:` with
+#   schedule:
+#     include: fragments/adaptive-hourly.yaml
+# Poll about hourly, backing off while a feed is quiet and speeding up on change.
+# A workflow can still override individual knobs (e.g. `base:`) alongside the
+# include — the local key wins.
+mode: adaptive
+base: 3600
+min: 600
+max: 86400
+jitter: decorrelated
