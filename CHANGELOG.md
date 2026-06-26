@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added (test coverage)
+- Added `tests/test_poll_multi.py` with 15 offline, deterministic unit tests for `MultiPollable` (fan-out composition, list/scalar/None payloads, exception and not-ok child skipping, fingerprint change detection, empty-children edge case), bringing `ujin/poll/multi.py` to 100% line and branch coverage.
 - Added offline, deterministic unit tests for the generic marketplace engine (`ujin/fetch/browser.py`, `ujin/extract/product.py`, `ujin/poll/amazon.py`, `ujin/poll/marketplace.py`), covering browser fingerprint rotation / stealth context, JSON-LD/schema.org `Product` edge cases, href-pattern `source_id` recovery, AliExpress `runParams` parsing branches, `_SeenStore` TTL hit/miss/expiry, and `_HarvestStore` save/cap behaviour. Module-level coverage for these files improved from 80–91% to 96–100%.
 
 ### Added (generic marketplace engine)
