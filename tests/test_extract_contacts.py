@@ -432,3 +432,65 @@ def test_route_existing_modes_unaffected_by_contacts_addition():
         assert body["contacts"] is None
     finally:
         client.__exit__(None, None, None)
+
+
+# ── edge / branch coverage ────────────────────────────────────────────────────
+
+def test_anchor_with_empty_href_skipped():
+    # Line 153: `if not href: return` — empty href attribute
+    html = '<a href="">empty</a><a>no-href-attr</a><a href="   ">whitespace</a>'
+    result = extract_contacts(html)
+    assert result == {"emails": [], "phones": [], "links": []}
+
+
+def test_mailto_empty_address_not_appended():
+    # Line 158 false branch: email == "" after stripping
+    html = '<a href="mailto:">No address</a>'
+    result = extract_contacts(html)
+    assert result["emails"] == []
+
+
+def test_mailto_query_only_address_not_appended():
+    # Line 158 false branch: "mailto:?subject=Hi" → email="" after split
+    html = '<a href="mailto:?subject=Hi">Contact</a>'
+    result = extract_contacts(html)
+    assert result["emails"] == []
+
+
+def test_tel_empty_number_not_appended():
+    # Line 162 false branch: phone == "" after stripping
+    html = '<a href="tel:">No number</a>'
+    result = extract_contacts(html)
+    assert result["phones"] == []
+
+
+def test_is_social_href_urlparse_exception_returns_false():
+    # Lines 85-86: urlparse raises → _is_social_href returns False
+    from unittest.mock import patch
+    import ujin.extract.contacts as _mod
+
+    with patch.object(_mod, "urlparse", side_effect=Exception("boom")):
+        html = '<a href="https://github.com/example">GitHub</a>'
+        result = extract_contacts(html)
+        assert result["links"] == []
+
+
+def test_resolve_urljoin_exception_returns_original_value():
+    # Lines 94-95: urljoin raises → _resolve returns value unchanged
+    from unittest.mock import patch
+    import ujin.extract.contacts as _mod
+
+    with patch.object(_mod, "urljoin", side_effect=Exception("boom")):
+        html = '<a rel="me" href="/profiles/user">Profile</a>'
+        result = extract_contacts(html, base_url="https://example.com/")
+        assert "/profiles/user" in result["links"]
+
+
+def test_parser_feed_exception_does_not_propagate():
+    # Lines 123-124: parser.feed raises → extract_contacts catches and returns {}
+    from unittest.mock import patch
+    import ujin.extract.contacts as _mod
+
+    with patch.object(_mod._ContactsParser, "feed", side_effect=Exception("parse error")):
+        result = extract_contacts("<html><body>test</body></html>")
+        assert isinstance(result, dict)

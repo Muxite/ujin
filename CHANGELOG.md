@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Added (test coverage)
+- Added 8 offline, deterministic tests to `tests/test_extract_contacts.py` covering previously-uncovered edge paths in `ujin/extract/contacts.py`: empty/whitespace-only `href` anchor (line 153), empty `mailto:` and `tel:` address/number branches (lines 158, 162), and the three exception-guard fallbacks in `_is_social_href`, `_resolve`, and `extract_contacts` (lines 85–86, 94–95, 123–124), lifting the module to 100% line and branch coverage.
+- Added `tests/test_adapt_coverage.py` with 8 offline, deterministic tests covering previously-uncovered branches in `ujin/adapt/jitter.py` (`apply("full")`, `apply("equal")`, `apply(unknown)` ValueError), `ujin/adapt/interval.py` (`min_interval > max_interval` validation, `reset()`), and `ujin/adapt/backoff.py` (`Backoff.reset()`), lifting each module's line coverage to 100%.
 - Added `tests/test_poll_multi.py` with 15 offline, deterministic unit tests for `MultiPollable` (fan-out composition, list/scalar/None payloads, exception and not-ok child skipping, fingerprint change detection, empty-children edge case), bringing `ujin/poll/multi.py` to 100% line and branch coverage.
 - Added offline, deterministic unit tests for the generic marketplace engine (`ujin/fetch/browser.py`, `ujin/extract/product.py`, `ujin/poll/amazon.py`, `ujin/poll/marketplace.py`), covering browser fingerprint rotation / stealth context, JSON-LD/schema.org `Product` edge cases, href-pattern `source_id` recovery, AliExpress `runParams` parsing branches, `_SeenStore` TTL hit/miss/expiry, and `_HarvestStore` save/cap behaviour. Module-level coverage for these files improved from 80–91% to 96–100%.
 
