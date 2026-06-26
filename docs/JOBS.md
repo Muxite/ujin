@@ -47,6 +47,9 @@ in-memory `POST /targets` left open.
 | `command` | `argv[]` | fingerprints stdout |
 | `scrape` | `url`, `mode?`, `force_refresh?` | full HTTP→obscura→sitemap→RSS chain + extraction |
 | `browser` | `url`, `engine?`, `actions[]`, `extract?` (`links`\|`article`\|`structured`\|`raw`), `results_selector?`, `headless?` | drive a real browser through an interaction recipe (`load_more`, scroll, click), then extract — see [BROWSER.md](BROWSER.md) |
+| `amazon_search` | `term` (or `terms[]`), `domain?`, `max_results?`, `category?`, `engine?`, `with_description?`, `headless?`, `proxy?`, `timeout_secs?` | search Amazon for a single term or fan out across a list of terms concurrently via `MultiPollable` (results merged); see [MARKETPLACE.md](MARKETPLACE.md) |
+| `amazon_category` | `categories?`, `terms_per_poll?`, `max_results?`, `domain?`, `engine?`, `headless?`, `harvest?`, `harvest_path?`, `harvest_ratio?`, `proxy?`, `timeout_secs?` | sweep Amazon category pages, sampling from a rotating pool of search terms; see [MARKETPLACE.md](MARKETPLACE.md) |
+| `marketplace_search` | `profile` (required), `profiles?`, `profiles_path?`, `categories?`, `terms_per_poll?`, `max_results?`, `engine?`, `with_description?`, `headless?`, `proxy?`, `timeout_secs?` | profile-driven search over any marketplace site; profiles resolved from inline `profiles` dict, `profiles_path` file, or `$UJIN_MARKETPLACE_PROFILES` env var — see [MARKETPLACE.md](MARKETPLACE.md) |
 | `plugin:<name>` | (plugin-defined) | a custom source — see PLUGINS.md |
 
 ### Transforms (`kind`) — run in order; one returning nothing drops the event

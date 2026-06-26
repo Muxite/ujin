@@ -4,12 +4,13 @@ The **ultimate scraper-poller**. Two halves that share one toolkit:
 
 1. **Adaptive multi-role poller** — poll *anything* (HTTP pages, RSS, JSON APIs,
    GraphQL endpoints, shell commands, Python callables, scoped page regions, or
-   browser-driven interaction recipes) on a cadence that **adapts** to change,
+   browser-driven interaction recipes, or profile-driven marketplace product
+   searches) on a cadence that **adapts** to change,
    with **jitter** so aggregate load stays smooth.
 2. **Rich scrape service** — one-shot rendering + extraction with an
    HTTP → obscura → sitemap → RSS fallback chain, per-host cooldown,
    fingerprinted change detection, structured-data + HTML-table + image +
-   head-metadata + feed-URL extraction, and optional social/trends sources —
+   head-metadata + feed-URL + contact extraction, and optional social/trends sources —
    all behind a small HTTP API.
 
 It bundles the [obscura](https://github.com/Muxite/obscura) headless renderer as
@@ -249,8 +250,13 @@ curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
   `CommandPollable`, `CallablePollable`, `SitePollable` (selector-scoped
   change), and `BrowserPollable` (runs a declarative interaction recipe via
   Playwright/Selenium, then feeds the loaded HTML to the extractors —
-  see [docs/BROWSER.md](docs/BROWSER.md)). Each returns a `PollResult` with a
-  content fingerprint.
+  see [docs/BROWSER.md](docs/BROWSER.md)). `MultiPollable` fans out over N
+  child pollables and merges their results (used by `amazon_search` when
+  multiple `terms` are given); `MarketplaceSearchPollable` sweeps any site
+  via an externally-supplied profile (`$UJIN_MARKETPLACE_PROFILES` /
+  `profiles_path` / inline `profiles` — see
+  [docs/MARKETPLACE.md](docs/MARKETPLACE.md)). Each returns a `PollResult`
+  with a content fingerprint.
 - **Adaptive** (`ujin.adapt`): `AdaptiveInterval` grows/shrinks the interval;
   full/equal/decorrelated **jitter**; `TokenBucket` + AIMD smoothing;
   exponential `Backoff` (honors `Retry-After`) and a `CircuitBreaker`.
