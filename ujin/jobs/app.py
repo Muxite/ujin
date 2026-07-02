@@ -207,6 +207,105 @@ def _resolve_job(raw, defaults: dict, file_includes: list, including_file) -> di
     return _deep_merge(merged, job)
 
 
+class WorkflowMatrixError(Exception):
+    """A workflow file's ``matrix:``/``for_each:`` block is malformed.
+
+    Raised while fanning a template out over its parameter list — e.g. the block
+    is not a non-empty list of mappings, or a ``{{ var }}`` placeholder in the
+    template has no value in an entry. The offending template is skipped and
+    surfaced on ``GET /health`` (``workflows.failed``) instead of aborting the
+    loader.
+    """
+
+
+# ``{{ var }}`` placeholders substituted per matrix entry BEFORE ``${ENV}`` (see
+# ``_expand_env``), so the two layers compose: a matrix value may itself carry an
+# ``${ENV}`` reference that is then resolved. A distinct delimiter from ``${...}``
+# keeps the two syntaxes from clashing.
+_MATRIX_REF = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+_MATRIX_KEYS = ("matrix", "for_each")
+
+
+def _subst_matrix(value: Any, params: dict[str, Any]) -> Any:
+    """Recursively substitute ``{{ var }}`` placeholders from *params*.
+
+    A string that is *exactly* one placeholder is replaced by the entry's typed
+    value (so numbers/lists/maps stay typed); a placeholder embedded in a larger
+    string is replaced textually. An undefined ``{{ var }}`` is a
+    :class:`WorkflowMatrixError`.
+    """
+    if isinstance(value, str):
+        whole = _MATRIX_REF.fullmatch(value.strip())
+        if whole:
+            name = whole.group(1)
+            if name not in params:
+                raise WorkflowMatrixError(f"matrix var {name!r} is not set in this entry")
+            return params[name]
+
+        def _sub(m: "re.Match[str]") -> str:
+            name = m.group(1)
+            if name not in params:
+                raise WorkflowMatrixError(f"matrix var {name!r} is not set in this entry")
+            return str(params[name])
+
+        return _MATRIX_REF.sub(_sub, value)
+    if isinstance(value, list):
+        return [_subst_matrix(v, params) for v in value]
+    if isinstance(value, dict):
+        return {k: _subst_matrix(v, params) for k, v in value.items()}
+    return value
+
+
+def _expand_env_tree(value: Any) -> Any:
+    """Apply :func:`_expand_env` to every string leaf of a parsed structure."""
+    if isinstance(value, str):
+        return _expand_env(value)
+    if isinstance(value, list):
+        return [_expand_env_tree(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _expand_env_tree(v) for k, v in value.items()}
+    return value
+
+
+def _specs_from_matrix(data: dict, stem: str, including_file) -> list:
+    """Fan a ``matrix:``/``for_each:`` template out into one JobSpec per entry.
+
+    Each entry is a map of ``var -> value`` substituted into the surrounding
+    template (source/transforms/sinks/schedule/name/id) BEFORE ``${ENV}`` so the
+    two layers compose. Track 1's file-level ``defaults:`` + ``include:``/``use:``
+    are resolved first and deep-merged under every fanned-out job (per-entry keys
+    win), so a matrix template composes with defaults and shared fragments.
+    """
+    from .model import JobSpec
+
+    key = next(k for k in _MATRIX_KEYS if k in data)
+    rows = data.get(key)
+    if not isinstance(rows, list) or not rows:
+        raise WorkflowMatrixError(f"{key!r} must be a non-empty list of parameter maps")
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise WorkflowMatrixError(
+                f"{key}[{i}] must be a mapping of var -> value, got {type(row).__name__}"
+            )
+
+    template = {k: v for k, v in data.items() if k not in _MATRIX_KEYS}
+    # Resolve Track 1 file-level defaults + include/use once; they layer beneath
+    # every entry's substituted body (matching the plain-workflow merge order).
+    defaults, file_includes, template = _file_directives(template)
+
+    specs = []
+    for i, row in enumerate(rows):
+        body = _expand_env_tree(_subst_matrix(template, row))
+        merged: dict = _expand_env_tree(_subst_matrix(defaults, row))
+        for ref in file_includes:
+            merged = _deep_merge(merged, _load_fragment(ref, including_file, []))
+        body = _deep_merge(merged, body)
+        body.setdefault("id", f"{stem}-{i}")
+        body.setdefault("name", body["id"])
+        specs.append(JobSpec.from_dict(body))
+    return specs
+
+
 def _preload_specs(path: str) -> list:
     """Parse a jobs.yaml (top-level list, or {jobs: [...]}) into JobSpecs.
 
@@ -237,7 +336,10 @@ def _specs_from_workflow_file(path) -> list:
     the **workflow id** (and default name) so the same file maps to the same
     workflow across restarts/redeploys — unless the file sets an explicit ``id``.
     A file may also hold a list / ``{jobs: [...]}``; entries without an ``id``
-    fall back to ``<stem>-<index>`` to stay deterministic.
+    fall back to ``<stem>-<index>`` to stay deterministic. A file carrying a
+    ``matrix:``/``for_each:`` list instead fans one template out into
+    ``<stem>-<index>`` jobs, one per parameter map (see
+    :func:`_specs_from_matrix`).
     """
     import yaml
 
@@ -247,7 +349,16 @@ def _specs_from_workflow_file(path) -> list:
 
     path = Path(path)
     stem = path.stem
-    data = yaml.safe_load(_expand_env(open(path, encoding="utf-8").read())) or {}
+    raw = open(path, encoding="utf-8").read()
+
+    # Matrix fan-out is resolved off the *unexpanded* text so ``{{ var }}`` is
+    # substituted before ``${ENV}`` (parsing the raw text is safe — placeholders
+    # are plain scalars). Everything else keeps env-expand-then-parse.
+    parsed = yaml.safe_load(raw) or {}
+    if isinstance(parsed, dict) and any(k in parsed for k in _MATRIX_KEYS):
+        return _specs_from_matrix(parsed, stem, path)
+
+    data = yaml.safe_load(_expand_env(raw)) or {}
 
     # File-level `defaults:` + `include:`/`use:` (deep-merged under every job).
     defaults, file_includes, data = _file_directives(data)
@@ -274,9 +385,11 @@ def _load_workflows_dir(path: str, *, failed: list | None = None) -> list:
     """Load every ``*.yaml``/``*.yml`` workflow file in *path* (sorted).
 
     A file that fails to parse or resolve (bad YAML, missing/cyclic
-    ``include:``) is logged and skipped rather than crashing the server; pass a
-    ``failed`` list to also collect ``{"file", "error"}`` records for ``/health``.
-    Fragment files live in subdirectories, so the top-level glob never loads them.
+    ``include:``, malformed :class:`WorkflowMatrixError` block, …) is logged and
+    skipped rather than crashing the server; pass a ``failed`` list to also
+    collect ``{"id": <stem>, "file": <name>, "error": <str>}`` records for
+    ``/health``. Fragment files live in subdirectories, so the top-level glob
+    never loads them.
     """
     from pathlib import Path
 
@@ -290,7 +403,7 @@ def _load_workflows_dir(path: str, *, failed: list | None = None) -> list:
         except Exception as exc:  # noqa: BLE001
             log.warning("skipping workflow file %s: %s", fp, exc)
             if failed is not None:
-                failed.append({"file": str(fp), "error": str(exc)})
+                failed.append({"id": fp.stem, "file": fp.name, "error": str(exc)})
     return specs
 
 

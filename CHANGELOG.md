@@ -18,6 +18,21 @@
   and is documented in `docs/WORKFLOWS.md`. Files without `defaults:`/`include:`
   parse exactly as before, and `${VAR}`/`${VAR:-default}` substitution is unchanged.
 
+### Added (matrix workflows)
+- **Matrix / parameterized workflows.** A workflow file may carry a `matrix:`
+  (alias `for_each:`) list of parameter maps; the surrounding template is fanned
+  out into one `JobSpec` per entry (`<stem>-<index>`), substituting that entry's
+  `{{ var }}` placeholders into `source`/`transforms`/`sinks`/`schedule`/`name`.
+  Matrix substitution runs **before** `${ENV}`/`${VAR:-default}` so the two layers
+  compose, a whole-string placeholder keeps the entry's value type, and the
+  file's `defaults:` map plus resolved `include:`/`use:` fragments are deep-merged
+  under every fanned-out job (per-entry keys win), composing with the workflow
+  defaults/includes support. A malformed block raises `WorkflowMatrixError`, is skipped, and is
+  surfaced on `GET /health` (`workflows.failed`) rather than aborting the loader.
+  `_load_workflows_dir(path, *, failed=None)` now optionally collects file-level
+  load failures. Non-matrix workflows are unaffected. Documented in
+  `docs/WORKFLOWS.md` with a runnable `examples/workflows/status-pages.yaml`.
+
 ### Added (test coverage)
 - Added offline, deterministic tests to `tests/test_robots.py` and `tests/test_diff.py` covering previously-uncovered paths: repeated-agent parse branch (`55->57`), unknown-directive skip (`75->37`), empty-pattern `_match` short-circuit (line 131), `re.error` guard (lines 144–145), full `_http_fetcher` body (lines 161–171, via aiohttp mock/import-failure), and `extract_regions` empty-selectors early return (region.py line 30); lifting `ujin/robots.py` and `ujin/diff/region.py` to 100% line and branch coverage.
 - Added 8 offline, deterministic tests to `tests/test_extract_contacts.py` covering previously-uncovered edge paths in `ujin/extract/contacts.py`: empty/whitespace-only `href` anchor (line 153), empty `mailto:` and `tel:` address/number branches (lines 158, 162), and the three exception-guard fallbacks in `_is_social_href`, `_resolve`, and `extract_contacts` (lines 85–86, 94–95, 123–124), lifting the module to 100% line and branch coverage.

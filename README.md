@@ -132,7 +132,10 @@ id**, and ujin sets it up on startup, runs it, and hands back what it obtained a
 boilerplate across jobs with a top-level `defaults:` block (deep-merged into every
 job, per-job keys win) and reusable fragments via `include:`/`use:` (a shared sink,
 transform pipeline, or schedule; resolved against `$UJIN_WORKFLOWS_DIR` then the
-file's directory, with nested-include + cycle-guard support). See
+file's directory, with nested-include + cycle-guard support). Watching many
+near-identical sites? A `matrix:`/`for_each:` list fans **one template** out into
+one job per entry, substituting each entry's `{{ vars }}` (before `${ENV}`, keeping
+value types) on top of the same `defaults:`/`include:` resolution. See
 [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
 Need something the built-ins don't cover? Drop a Python file into the mounted
@@ -206,7 +209,8 @@ Three FastAPI apps — run any combination. Full reference in
   `/jobs/{id}/content` + `/jobs/{id}/results` (hand out obtained data), `WS /jobs/events`,
   `/kinds`, `/metrics`, `POST /plugins/reload`. Durable + plugin-extensible.
   File-driven workflows load from `./workflows`, with shared `defaults:` and
-  `include:`/`use:` fragments — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
+  `include:`/`use:` fragments plus `matrix:`/`for_each:` fan-out of one template
+  over a data list — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 - **Poller control** (`:8900`): `GET /health /metrics /targets`,
   `GET /content?key=…` (reuse the body ujin last fetched), `POST /targets`,
   `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.
