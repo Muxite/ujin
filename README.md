@@ -131,6 +131,12 @@ id**, and ujin sets it up on startup, runs it, and hands back what it obtained a
 `GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). See
 [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
+Declaring many similar jobs at once? Point `--plan <file>` (or `$UJIN_INGEST_PLAN`)
+at an **ingest plan** — one file with shared `defaults:` plus per-job `matrix:`
+fan-out (e.g. one template -> a job per site/region). ujin ships only the loader
+and a generic example; a missing/invalid plan is reported under `GET /health`, not
+fatal. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
+
 Need something the built-ins don't cover? Drop a Python file into the mounted
 `/plugins` volume and it becomes a `plugin:<name>` source/transform/sink — see
 [docs/PLUGINS.md](docs/PLUGINS.md). Sibling projects can also extend ujin in-tree
@@ -173,7 +179,7 @@ ujin sweep targets.yaml      # poll all targets once; print what changed
 ujin serve targets.yaml      # run the poll engine as a daemon
 ujin api [targets.yaml]      # poller control service (REST + WS) on :8900
 ujin scrape-serve            # rich scrape HTTP service on :8901
-ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
+ujin jobs-serve [jobs.yaml] [--workflows DIR] [--plan FILE]  # job control plane on :8902
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
 ujin learned site_state.db   # inspect the durable per-host learned state (--json)
@@ -202,6 +208,8 @@ Three FastAPI apps — run any combination. Full reference in
   `/jobs/{id}/content` + `/jobs/{id}/results` (hand out obtained data), `WS /jobs/events`,
   `/kinds`, `/metrics`, `POST /plugins/reload`. Durable + plugin-extensible.
   File-driven workflows load from `./workflows` — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
+  An external ingest plan (`--plan` / `$UJIN_INGEST_PLAN`) declares many jobs at
+  once from `defaults:` + per-job `matrix:` — see [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
 - **Poller control** (`:8900`): `GET /health /metrics /targets`,
   `GET /content?key=…` (reuse the body ujin last fetched), `POST /targets`,
   `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.

@@ -134,6 +134,7 @@ def create_jobs_app(
     config_path: str | None = None,
     *,
     workflows_dir: str | None = None,
+    plan_path: str | None = None,
     scrape_config: Any = None,
     run_engine: bool = True,
 ) -> Any:
@@ -201,6 +202,30 @@ def create_jobs_app(
                 wf_status["failed"].append({"id": spec.id, "error": str(exc)})
         app.state.workflows = wf_status
 
+        # "Setup" phase: an external ingest plan (`defaults:` + per-job `matrix:`)
+        # declares many jobs from one file the consumer owns (--plan or
+        # $UJIN_INGEST_PLAN). A missing/invalid plan is reported, not fatal.
+        from .model import JobSpec
+        from .plan import PLAN_ENV, PlanError, load_plan
+
+        plan_source = plan_path or os.environ.get(PLAN_ENV)
+        plan_status: dict[str, Any] = {
+            "source": plan_source, "loaded": 0, "failed": 0, "error": None,
+        }
+        if plan_source:
+            try:
+                for job_dict in load_plan(plan_source):
+                    try:
+                        manager.create(JobSpec.from_dict(job_dict))
+                        plan_status["loaded"] += 1
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("plan job %s failed: %s", job_dict.get("id"), exc)
+                        plan_status["failed"] += 1
+            except PlanError as exc:
+                log.warning("ingest plan %s failed to load: %s", plan_source, exc)
+                plan_status["error"] = str(exc)
+        app.state.plan = plan_status
+
         app.state.engine = engine
         app.state.store = store
         app.state.hub = hub
@@ -240,7 +265,9 @@ def create_jobs_app(
                 "jobs": len(m.jobs),
                 "plugins": getattr(app.state, "plugins", {"loaded": [], "failed": []}),
                 "workflows": getattr(app.state, "workflows",
-                                     {"dir": wf_dir, "loaded": [], "failed": []})}
+                                     {"dir": wf_dir, "loaded": [], "failed": []}),
+                "plan": getattr(app.state, "plan",
+                                {"source": None, "loaded": 0, "failed": 0, "error": None})}
 
     @app.get("/kinds")
     def kinds() -> dict[str, Any]:
@@ -393,9 +420,11 @@ def serve(  # pragma: no cover -- launches uvicorn; not testable without a live 
     port: int = 8902,
     config_path: str | None = None,
     workflows_dir: str | None = None,
+    plan_path: str | None = None,
 ) -> None:
     import uvicorn
 
     uvicorn.run(
-        create_jobs_app(config_path, workflows_dir=workflows_dir), host=host, port=port
+        create_jobs_app(config_path, workflows_dir=workflows_dir, plan_path=plan_path),
+        host=host, port=port,
     )
