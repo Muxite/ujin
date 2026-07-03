@@ -1,0 +1,15 @@
+# Reusable fragment: a shared "dedupe + persist" pipeline.
+#
+# Pulled in via `include: fragments/sqlite-sink.yaml`. A fragment is a *partial*
+# job mapping (any subset of source/transforms/sinks/schedule); it is deep-merged
+# beneath the including job's inline keys. A fragment may itself `include:`
+# another fragment (resolved relative to $UJIN_WORKFLOWS_DIR, then this file's
+# directory) — nested includes are supported, with a cycle guard.
+#
+# It lives in `fragments/` (a subdirectory) so the workflows-dir glob does not
+# pick it up as a standalone workflow.
+transforms:
+  - kind: dedupe
+    config: { key: link }
+sinks:
+  - kind: sqlite

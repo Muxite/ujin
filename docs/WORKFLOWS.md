@@ -56,7 +56,74 @@ schedule:
 - A file may also hold a `jobs: [...]` list / top-level list; entries without an
   `id` fall back to `<stem>-<index>` so ids stay deterministic.
 - Validation is eager: an unknown source/transform/sink kind lands in the
-  `failed` list (see `GET /health`) instead of aborting startup.
+  `failed` list (see `GET /health`) instead of aborting startup. A file that
+  fails to parse or whose `include:` can't be resolved is likewise logged and
+  skipped (and surfaced in `failed`) rather than crashing the server.
+
+## Shared defaults (`defaults:`)
+
+A top-level `defaults:` block is **deep-merged into every job** in the file, with
+per-job keys winning. Nested maps (`source`, `transforms`, `sinks`, `schedule`)
+merge key-by-key — a job can override just `schedule.base` and inherit the rest.
+Lists (e.g. `sinks`) are replaced wholesale, not concatenated.
+
+```yaml
+# /workflows/site-feeds.yaml   ->  workflows "site-feeds-0", "site-feeds-1"
+defaults:
+  schedule: { mode: adaptive, base: 300, min: 60, max: 3600 }
+jobs:
+  - source: { kind: rss, config: { url: "https://hnrss.org/frontpage" } }
+  - source: { kind: rss, config: { url: "https://lobste.rs/rss" } }
+    schedule: { base: 600 }      # overrides only base; mode/min/max inherited
+```
+
+## Reusable fragments (`include:` / `use:`)
+
+`include:` (alias `use:`) pulls a **reusable fragment file** — a partial job
+mapping (any subset of `source`/`transforms`/`sinks`/`schedule`) — into a job.
+It works both at the **file level** (applied to every job) and **per job**, and
+takes a single path or a list of paths:
+
+```yaml
+include: fragments/sqlite-sink.yaml         # file-level: all jobs get it
+jobs:
+  - source: { kind: rss, config: { url: "https://hnrss.org/frontpage" } }
+  - source: { kind: rss, config: { url: "https://lobste.rs/rss" } }
+    use: fragments/extra-transforms.yaml     # per-job: only this job
+```
+
+```yaml
+# /workflows/fragments/sqlite-sink.yaml   (a partial job — not a workflow itself)
+transforms:
+  - kind: dedupe
+    config: { key: link }
+sinks:
+  - kind: sqlite
+```
+
+Keep fragments in a **subdirectory** (e.g. `fragments/`) so the workflows-dir
+glob (`*.y*ml`, non-recursive) doesn't load them as standalone workflows.
+
+**Path resolution.** A relative fragment path is resolved against
+`$UJIN_WORKFLOWS_DIR` **first**, then the **including file's own directory**; the
+first existing file wins. An absolute path is used as-is. This means a fragment in
+the mounted workflows root is reachable from any file, and a fragment next to a
+file is reachable without configuring the env var.
+
+**Nested includes.** A fragment may itself `include:` another fragment (resolved
+relative to that fragment's location); nesting is unbounded but **cycle-guarded** —
+a fragment that (transitively) includes itself raises a clear `WorkflowIncludeError`.
+
+**Precedence** (lowest → highest):
+
+```
+defaults:  <  file-level include  <  per-job include  <  inline job keys
+```
+
+So a job's own keys always win, an included fragment overrides the file defaults,
+and a per-job include overrides a file-level one. A missing fragment, a cyclic
+include, or a malformed directive raises `WorkflowIncludeError` — fatal for an
+explicit `--config` file, logged-and-skipped for a workflows-directory file.
 
 Run it locally without Docker:
 
@@ -114,5 +181,7 @@ the registry. Two ways to extend the menu:
 ## Examples
 
 `examples/workflows/` ships runnable workflow files:
-`crossref-papers.yaml` (adaptive API poll) and `example-page.yaml` (a minimal HTTP
-poll). Copy them into your mounted `./workflows` directory to try them.
+`crossref-papers.yaml` (adaptive API poll), `example-page.yaml` (a minimal HTTP
+poll), and `site-feeds.yaml` — which demonstrates `defaults:` plus an `include:`
+of the shared `fragments/sqlite-sink.yaml` fragment. Copy them into your mounted
+`./workflows` directory (fragments and all) to try them.
