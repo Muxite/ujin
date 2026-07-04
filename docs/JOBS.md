@@ -125,15 +125,18 @@ Every change also emits a compact `{"event":"change","job_id",...}` on
 
 ## Validating config offline
 
-`ujin jobs-validate` dry-loads a jobs file and/or a workflows directory the
-same way `jobs-serve` would at startup, but never binds a port or touches the
-jobstore. It reports every problem it finds — which job, which field, what was
-expected — and exits non-zero on any failure (zero if everything loads clean):
+`ujin jobs-validate` dry-loads a jobs file, a workflows directory, and/or an
+ingest plan (file or directory) the same way `jobs-serve` would at startup —
+including `defaults:`/`include:`/`use:` fragment resolution and `matrix:`/
+`for_each:` fan-out — but never binds a port or touches the jobstore. It
+reports every problem it finds — which job, which field, what was expected —
+and exits non-zero on any failure (zero if everything loads clean):
 
 ```bash
 ujin jobs-validate examples/jobs.crossref.yaml
 ujin jobs-validate --workflows ./workflows
-ujin jobs-validate examples/jobs.crossref.yaml --workflows ./workflows
+ujin jobs-validate --plan examples/ingest-plan.yaml
+ujin jobs-validate examples/jobs.crossref.yaml --workflows ./workflows --plan ./ingest-plan.d
 ```
 
 ```
@@ -143,9 +146,11 @@ ok  crossref-quantum-error-correction
 1 valid, 2 invalid
 ```
 
-Checks a malformed/missing `source`, a non-mapping `matrix:`, duplicate job
-ids (within a file and across a whole workflows directory), and unknown
-top-level keys in a jobs file (only `jobs:` is expected).
+Checks a malformed/missing `source`, a non-mapping per-job `matrix:` or a
+malformed workflow-file-level `matrix:`/`for_each:` block, a missing or cyclic
+`include:`/`use:` fragment, duplicate job ids (within a file, across a whole
+workflows directory, and across an ingest plan), and unknown top-level keys in
+a jobs file (only `jobs:`, `defaults:`, `include:`/`use:` are expected).
 
 ## Auth (optional)
 

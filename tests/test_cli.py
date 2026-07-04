@@ -158,6 +158,29 @@ def test_main_jobs_validate_workflows_dir(tmp_path, capsys):
     assert "watch-docs" in capsys.readouterr().out
 
 
+def test_main_jobs_validate_plan_valid_exits_zero(tmp_path, capsys):
+    p = tmp_path / "plan.yaml"
+    p.write_text(
+        "jobs:\n"
+        "  - id: from-plan\n"
+        "    source: { kind: html, config: { url: 'https://example.com' } }\n"
+    )
+    rc = cli.main(["jobs-validate", "--plan", str(p)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "from-plan" in out
+    assert "1 valid, 0 invalid" in out
+
+
+def test_main_jobs_validate_plan_invalid_exits_nonzero(tmp_path, capsys):
+    p = tmp_path / "plan.yaml"
+    p.write_text("jobs: not-a-list\n")
+    rc = cli.main(["jobs-validate", "--plan", str(p)])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "INVALID" in out
+
+
 def test_main_serve_dispatch(monkeypatch, tmp_path):
     p = tmp_path / "targets.yaml"
     p.write_text(TARGETS_YAML)
