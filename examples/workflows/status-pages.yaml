@@ -1,0 +1,54 @@
+# A *matrix* workflow: one template fanned out over a data list.
+#
+# Instead of three near-identical files (one per status page), this single file
+# collapses them into ONE template plus a `matrix:` list of parameter maps. ujin
+# produces one job per entry — `status-pages-0`, `status-pages-1`, … — with each
+# entry's `{{ vars }}` substituted into source/transforms/sinks/schedule.
+#
+#   GET /jobs/status-pages-0/content     # the data ujin last obtained (github)
+#   GET /jobs/status-pages-1/content     # gitlab
+#   GET /jobs/status-pages-2/content     # bitbucket
+#
+# `{{ var }}` is substituted BEFORE `${ENV}` / `${VAR:-default}`, so the two
+# layers compose — a matrix value may itself carry an env reference.
+#
+# `for_each:` is an accepted alias for `matrix:`.
+#
+# A matrix template ALSO composes with the includes/defaults primitives: the
+# `use:` below pulls a shared fragment whose `transforms:` (a `dedupe` step) is
+# deep-merged under *every* fanned-out job, exactly as for a plain workflow — one
+# fragment feeds all three watchers.
+
+matrix:
+  - { site: github,    host: "www.githubstatus.com",     every: 300 }
+  - { site: gitlab,    host: "status.gitlab.com",         every: 600 }
+  - { site: bitbucket, host: "bitbucket.status.atlassian.com", every: 900 }
+
+# `defaults:` is deep-merged UNDER every fanned-out job (per-entry keys win), so
+# shared config lives in one place. Nested maps merge key-wise: here every job
+# inherits `mode`/`max` from the default schedule and overrides only `base`.
+defaults:
+  schedule:
+    mode: adaptive
+    max: 86400
+
+# `use:` (alias of `include:`) pulls a reusable fragment; its keys are deep-merged
+# under every fanned-out job. Here the fragment supplies the shared `dedupe`
+# transform. The job's own `sinks:` below still win over the fragment's (inline
+# keys beat included ones), so each site keeps its per-site output file.
+use: fragments/sqlite-sink.yaml
+
+name: "status-{{ site }}"
+source:
+  kind: http
+  config:
+    url: "https://{{ host }}/api/v2/status.json"
+    headers:
+      User-Agent: "${UJIN_UA:-ujin status watcher}"   # env layer, after matrix
+# (no inline `transforms:` — the shared `dedupe` step comes from the fragment above)
+sinks:
+  - kind: sqlite                                        # persist change events
+  - kind: jsonl
+    config: { path: "/data/status-{{ site }}.jsonl" }   # per-site output file
+schedule:
+  base: "{{ every }}"          # per-entry cadence; `mode`/`max` come from defaults

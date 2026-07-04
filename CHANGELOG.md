@@ -26,6 +26,36 @@
   `plan.loaded`/`plan.failed` are now lists (job ids / failure records). Single-file
   plans and `$UJIN_INGEST_PLAN` behave exactly as before. Adds
   `examples/ingest-plan.d/` and `ujin.jobs.plan.load_plan_dir`.
+### Added (workflow defaults + includes)
+- Workflow/job files now support a top-level `defaults:` block (deep-merged into
+  every resulting job, with per-job keys winning recursively over nested maps like
+  `source`/`transforms`/`sinks`/`schedule`) and an `include:`/`use:` directive —
+  usable both file-level and per-job — that pulls in reusable fragment files (a
+  shared sink, transform pipeline, or schedule). Fragment paths resolve against
+  `$UJIN_WORKFLOWS_DIR` first, then the including file's directory; nested includes
+  are supported with a cycle guard, and precedence is `defaults < included-fragment
+  < inline-job-keys`. A missing or cyclic fragment raises a clear
+  `ujin.jobs.app.WorkflowIncludeError`; the directory loader logs and skips a bad
+  file (now also surfaced in `GET /health` `workflows.failed`) instead of crashing.
+  Applied consistently to both the workflows-dir loader and the `--config` preload
+  path. Ships `examples/workflows/site-feeds.yaml` + `fragments/sqlite-sink.yaml`
+  and is documented in `docs/WORKFLOWS.md`. Files without `defaults:`/`include:`
+  parse exactly as before, and `${VAR}`/`${VAR:-default}` substitution is unchanged.
+
+### Added (matrix workflows)
+- **Matrix / parameterized workflows.** A workflow file may carry a `matrix:`
+  (alias `for_each:`) list of parameter maps; the surrounding template is fanned
+  out into one `JobSpec` per entry (`<stem>-<index>`), substituting that entry's
+  `{{ var }}` placeholders into `source`/`transforms`/`sinks`/`schedule`/`name`.
+  Matrix substitution runs **before** `${ENV}`/`${VAR:-default}` so the two layers
+  compose, a whole-string placeholder keeps the entry's value type, and the
+  file's `defaults:` map plus resolved `include:`/`use:` fragments are deep-merged
+  under every fanned-out job (per-entry keys win), composing with the workflow
+  defaults/includes support. A malformed block raises `WorkflowMatrixError`, is skipped, and is
+  surfaced on `GET /health` (`workflows.failed`) rather than aborting the loader.
+  `_load_workflows_dir(path, *, failed=None)` now optionally collects file-level
+  load failures. Non-matrix workflows are unaffected. Documented in
+  `docs/WORKFLOWS.md` with a runnable `examples/workflows/status-pages.yaml`.
 
 ### Added (test coverage)
 - Added offline, deterministic tests to `tests/test_robots.py` and `tests/test_diff.py` covering previously-uncovered paths: repeated-agent parse branch (`55->57`), unknown-directive skip (`75->37`), empty-pattern `_match` short-circuit (line 131), `re.error` guard (lines 144–145), full `_http_fetcher` body (lines 161–171, via aiohttp mock/import-failure), and `extract_regions` empty-selectors early return (region.py line 30); lifting `ujin/robots.py` and `ujin/diff/region.py` to 100% line and branch coverage.

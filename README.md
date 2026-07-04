@@ -131,15 +131,23 @@ id**, and ujin sets it up on startup, runs it, and hands back what it obtained a
 `GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). Both
 the preloaded `jobs.yaml` and every workflow file support `${VAR}` /
 `${VAR:-default}` env-var expansion, so a mounted file can reference a secret or
-per-deploy URL without committing it. See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
+per-deploy URL without committing it. Share boilerplate across jobs with a
+top-level `defaults:` block (deep-merged into every job, per-job keys win) and
+reusable fragments via `include:`/`use:` (a shared sink, transform pipeline, or
+schedule; resolved against `$UJIN_WORKFLOWS_DIR` then the file's directory, with
+nested-include + cycle-guard support). Watching many near-identical sites? A
+`matrix:`/`for_each:` list fans **one template** out into one job per entry,
+substituting each entry's `{{ vars }}` (before `${ENV}`, keeping value types) on
+top of the same `defaults:`/`include:` resolution. See
+[docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
-Declaring many similar jobs at once? Point `--plan <path>` (or `$UJIN_INGEST_PLAN`)
-at an **ingest plan** — a file with shared `defaults:` plus per-job `matrix:`
-fan-out (e.g. one template -> a job per site/region), or a **directory** of such
-files loaded and merged in sorted order (a malformed file is isolated and reported,
-not fatal). ujin ships only the loader and a generic example; a missing/invalid
-plan is reported under `GET /health`, not fatal. See
-[docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
+Declaring many similar jobs at once from a *single external* file instead? Point
+`--plan <path>` (or `$UJIN_INGEST_PLAN`) at an **ingest plan** — a file with
+shared `defaults:` plus per-job `matrix:` fan-out (e.g. one template -> a job per
+site/region), or a **directory** of such files loaded and merged in sorted order
+(a malformed file is isolated and reported, not fatal). ujin ships only the
+loader and a generic example; a missing/invalid plan is reported under
+`GET /health`, not fatal. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
 
 Need something the built-ins don't cover? Drop a Python file into the mounted
 `/plugins` volume and it becomes a `plugin:<name>` source/transform/sink — see
@@ -211,10 +219,12 @@ Three FastAPI apps — run any combination. Full reference in
   `GET/DELETE /jobs/{id}`, `/jobs/{id}/run|pause|resume|runs|events`,
   `/jobs/{id}/content` + `/jobs/{id}/results` (hand out obtained data), `WS /jobs/events`,
   `/kinds`, `/metrics`, `POST /plugins/reload`. Durable + plugin-extensible.
-  File-driven workflows load from `./workflows` — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
-  An external ingest plan (`--plan` / `$UJIN_INGEST_PLAN`, a single file or a
-  directory of files) declares many jobs at once from `defaults:` + per-job
-  `matrix:` — see [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
+  File-driven workflows load from `./workflows`, with shared `defaults:` and
+  `include:`/`use:` fragments plus `matrix:`/`for_each:` fan-out of one template
+  over a data list — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md). An external
+  ingest plan (`--plan` / `$UJIN_INGEST_PLAN`, a single file or a directory of
+  files) declares many jobs at once from `defaults:` + per-job `matrix:` — see
+  [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
 - **Poller control** (`:8900`): `GET /health /metrics /targets`,
   `GET /content?key=…` (reuse the body ujin last fetched), `POST /targets`,
   `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.
