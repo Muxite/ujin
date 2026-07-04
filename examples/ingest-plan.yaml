@@ -1,0 +1,56 @@
+# Generic external ingest plan — declare many jobs from one file.
+#
+# Load with:
+#   ujin jobs-serve --plan examples/ingest-plan.yaml
+#   UJIN_INGEST_PLAN=examples/ingest-plan.yaml ujin jobs-serve
+#
+# `defaults:` deep-merges into every job below (lists replace, not append);
+# `matrix:` fans one job entry out into one job per combination. See
+# docs/INGEST_PLAN.md for the full schema. ujin ships no plan content of its
+# own — this file is a generic, runnable reference; the consuming program
+# owns its real plan.
+
+defaults:
+  sinks:
+    - kind: sqlite
+  schedule:
+    mode: adaptive
+    base: 300
+    min: 60
+    max: 3600
+
+jobs:
+  # No `matrix:` -> exactly one job, id "homepage". "${VAR:-default}" expands
+  # from the process environment.
+  - id: homepage
+    source:
+      kind: http
+      config:
+        url: "${INGEST_BASE:-https://example.com}/"
+
+  # Mapping matrix -> cartesian product of its axes; here 3 jobs sharing one
+  # template (status-github, status-npm, status-pypi). The `base:` override
+  # below replaces the (numeric) default of 300 for these three jobs only.
+  - id: status-${name}
+    matrix:
+      name: [github, npm, pypi]
+    source:
+      kind: http
+      config:
+        url: "https://status.${name}.example.com/"
+    schedule:
+      mode: adaptive
+      base: 600
+      min: 120
+      max: 3600
+
+  # List-of-rows matrix -> explicit per-job values instead of a cartesian
+  # product (feed-releases, feed-tags), each with its own `path`.
+  - id: feed-${name}
+    matrix:
+      - { name: releases, path: /releases.atom }
+      - { name: tags, path: /tags.atom }
+    source:
+      kind: rss
+      config:
+        url: "${FEED_BASE:-https://example.com}${path}"

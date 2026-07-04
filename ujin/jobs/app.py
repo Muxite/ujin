@@ -66,16 +66,267 @@ def _expand_env(text: str) -> str:
     return _ENV_REF.sub(_sub, text)
 
 
-def _preload_specs(path: str) -> list:
-    """Parse a jobs.yaml (top-level list, or {jobs: [...]}) into JobSpecs."""
+class WorkflowIncludeError(Exception):
+    """A ``defaults:``/``include:``/``use:`` directive could not be resolved.
+
+    Raised on a missing fragment file, a cyclic include chain, or a malformed
+    directive. The directory loader catches this (logs + skips the file); the
+    explicit ``--config`` preload path lets it propagate (fail fast on a typo).
+    """
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge *override* into *base*, returning a new dict.
+
+    Nested mappings merge key-by-key; any non-mapping value (list, scalar) in
+    *override* replaces the one in *base* wholesale. Neither input is mutated —
+    this is how defaults/fragments layer under a job without clobbering siblings.
+    """
+    out = dict(base)
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def _pop_includes(mapping: dict) -> list:
+    """Pop ``include:``/``use:`` from *mapping* → ordered list of fragment refs.
+
+    Both keys are accepted (``use`` is an alias for ``include``); each may be a
+    single path string or a list of them. ``include`` entries are applied before
+    ``use`` entries when both are present.
+    """
+    refs: list = []
+    for key in ("include", "use"):
+        val = mapping.pop(key, None)
+        if val is None:
+            continue
+        if isinstance(val, str):
+            refs.append(val)
+        elif isinstance(val, (list, tuple)):
+            refs.extend(val)
+        else:
+            raise WorkflowIncludeError(
+                f"{key!r} must be a fragment path or list of paths, "
+                f"got {type(val).__name__}"
+            )
+    return refs
+
+
+def _resolve_fragment_path(ref: str, including_file):
+    """Resolve a fragment *ref* to a path, *workflows dir first, then sibling*.
+
+    Resolution order for a relative *ref*: ``$UJIN_WORKFLOWS_DIR/<ref>`` (if the
+    env var is set), then ``<including_file>.parent/<ref>``. The first existing
+    candidate wins; if neither exists the sibling candidate is returned so the
+    "not found" error names a sensible location. An absolute *ref* is used as-is.
+    """
+    from pathlib import Path
+
+    p = Path(ref)
+    if p.is_absolute():
+        # Normalise so a ``..``-crossing include collapses to a stable key and
+        # the cycle guard cannot recurse into an OS path-length failure.
+        return Path(os.path.normpath(str(p)))
+    candidates = []
+    wf_dir = os.environ.get("UJIN_WORKFLOWS_DIR")
+    if wf_dir:
+        candidates.append(Path(os.path.normpath(str(Path(wf_dir) / ref))))
+    candidates.append(
+        Path(os.path.normpath(str(Path(including_file).parent / ref)))
+    )
+    for c in candidates:
+        if c.is_file():
+            return c
+    return candidates[-1]
+
+
+def _load_fragment(ref: str, including_file, chain: list) -> dict:
+    """Load fragment *ref* into a dict, resolving its own nested includes.
+
+    *chain* holds the resolved paths currently being loaded so a fragment that
+    (transitively) includes itself raises instead of recursing forever. A
+    fragment is a partial job mapping; its own ``include:``/``use:`` are merged
+    *beneath* its inline keys (more-specific wins), matching whole-job precedence.
+    """
     import yaml
+
+    resolved = _resolve_fragment_path(ref, including_file)
+    key = str(resolved)
+    if key in chain:
+        cycle = " -> ".join([*chain, key])
+        raise WorkflowIncludeError(f"cyclic include detected: {cycle}")
+    if not resolved.is_file():
+        raise WorkflowIncludeError(
+            f"include {ref!r} not found (looked in $UJIN_WORKFLOWS_DIR and "
+            f"{resolved.parent})"
+        )
+    frag = yaml.safe_load(_expand_env(resolved.read_text(encoding="utf-8"))) or {}
+    if not isinstance(frag, dict):
+        raise WorkflowIncludeError(
+            f"include {ref!r} must be a mapping, got {type(frag).__name__}"
+        )
+    frag = dict(frag)
+    nested = _pop_includes(frag)
+    merged: dict = {}
+    for nref in nested:
+        merged = _deep_merge(merged, _load_fragment(nref, resolved, [*chain, key]))
+    return _deep_merge(merged, frag)
+
+
+def _file_directives(data):
+    """Split file-level ``defaults:`` + ``include:``/``use:`` off *data*.
+
+    Returns ``(defaults, includes, remaining)``. A non-mapping file (a bare list
+    of jobs) carries no file-level directives. The remaining mapping still holds
+    the job body / ``jobs:`` list.
+    """
+    if not isinstance(data, dict):
+        return {}, [], data
+    data = dict(data)
+    defaults = data.pop("defaults", None) or {}
+    includes = _pop_includes(data)
+    return defaults, includes, data
+
+
+def _resolve_job(raw, defaults: dict, file_includes: list, including_file) -> dict:
+    """Layer ``defaults < fragments < inline job keys`` into one job dict.
+
+    *file_includes* apply to every job in the file; the job's own
+    ``include:``/``use:`` apply on top of them (closer to the job), and the
+    inline keys win over everything. Returns a fresh dict ready for
+    :meth:`JobSpec.from_dict`.
+    """
+    job = dict(raw)
+    job_includes = _pop_includes(job)
+    merged: dict = dict(defaults)
+    for ref in (*file_includes, *job_includes):
+        merged = _deep_merge(merged, _load_fragment(ref, including_file, []))
+    return _deep_merge(merged, job)
+
+
+class WorkflowMatrixError(Exception):
+    """A workflow file's ``matrix:``/``for_each:`` block is malformed.
+
+    Raised while fanning a template out over its parameter list — e.g. the block
+    is not a non-empty list of mappings, or a ``{{ var }}`` placeholder in the
+    template has no value in an entry. The offending template is skipped and
+    surfaced on ``GET /health`` (``workflows.failed``) instead of aborting the
+    loader.
+    """
+
+
+# ``{{ var }}`` placeholders substituted per matrix entry BEFORE ``${ENV}`` (see
+# ``_expand_env``), so the two layers compose: a matrix value may itself carry an
+# ``${ENV}`` reference that is then resolved. A distinct delimiter from ``${...}``
+# keeps the two syntaxes from clashing.
+_MATRIX_REF = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+_MATRIX_KEYS = ("matrix", "for_each")
+
+
+def _subst_matrix(value: Any, params: dict[str, Any]) -> Any:
+    """Recursively substitute ``{{ var }}`` placeholders from *params*.
+
+    A string that is *exactly* one placeholder is replaced by the entry's typed
+    value (so numbers/lists/maps stay typed); a placeholder embedded in a larger
+    string is replaced textually. An undefined ``{{ var }}`` is a
+    :class:`WorkflowMatrixError`.
+    """
+    if isinstance(value, str):
+        whole = _MATRIX_REF.fullmatch(value.strip())
+        if whole:
+            name = whole.group(1)
+            if name not in params:
+                raise WorkflowMatrixError(f"matrix var {name!r} is not set in this entry")
+            return params[name]
+
+        def _sub(m: "re.Match[str]") -> str:
+            name = m.group(1)
+            if name not in params:
+                raise WorkflowMatrixError(f"matrix var {name!r} is not set in this entry")
+            return str(params[name])
+
+        return _MATRIX_REF.sub(_sub, value)
+    if isinstance(value, list):
+        return [_subst_matrix(v, params) for v in value]
+    if isinstance(value, dict):
+        return {k: _subst_matrix(v, params) for k, v in value.items()}
+    return value
+
+
+def _expand_env_tree(value: Any) -> Any:
+    """Apply :func:`_expand_env` to every string leaf of a parsed structure."""
+    if isinstance(value, str):
+        return _expand_env(value)
+    if isinstance(value, list):
+        return [_expand_env_tree(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _expand_env_tree(v) for k, v in value.items()}
+    return value
+
+
+def _specs_from_matrix(data: dict, stem: str, including_file) -> list:
+    """Fan a ``matrix:``/``for_each:`` template out into one JobSpec per entry.
+
+    Each entry is a map of ``var -> value`` substituted into the surrounding
+    template (source/transforms/sinks/schedule/name/id) BEFORE ``${ENV}`` so the
+    two layers compose. Track 1's file-level ``defaults:`` + ``include:``/``use:``
+    are resolved first and deep-merged under every fanned-out job (per-entry keys
+    win), so a matrix template composes with defaults and shared fragments.
+    """
+    from .model import JobSpec
+
+    key = next(k for k in _MATRIX_KEYS if k in data)
+    rows = data.get(key)
+    if not isinstance(rows, list) or not rows:
+        raise WorkflowMatrixError(f"{key!r} must be a non-empty list of parameter maps")
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise WorkflowMatrixError(
+                f"{key}[{i}] must be a mapping of var -> value, got {type(row).__name__}"
+            )
+
+    template = {k: v for k, v in data.items() if k not in _MATRIX_KEYS}
+    # Resolve Track 1 file-level defaults + include/use once; they layer beneath
+    # every entry's substituted body (matching the plain-workflow merge order).
+    defaults, file_includes, template = _file_directives(template)
+
+    specs = []
+    for i, row in enumerate(rows):
+        body = _expand_env_tree(_subst_matrix(template, row))
+        merged: dict = _expand_env_tree(_subst_matrix(defaults, row))
+        for ref in file_includes:
+            merged = _deep_merge(merged, _load_fragment(ref, including_file, []))
+        body = _deep_merge(merged, body)
+        body.setdefault("id", f"{stem}-{i}")
+        body.setdefault("name", body["id"])
+        specs.append(JobSpec.from_dict(body))
+    return specs
+
+
+def _preload_specs(path: str) -> list:
+    """Parse a jobs.yaml (top-level list, or {jobs: [...]}) into JobSpecs.
+
+    Honours the same file-level ``defaults:`` / ``include:`` resolution as the
+    workflows-dir loader so both entry points behave consistently.
+    """
+    import yaml
+
+    from pathlib import Path
 
     from .model import JobSpec
 
     text = _expand_env(open(path, encoding="utf-8").read())
     data = yaml.safe_load(text) or {}
+    defaults, file_includes, data = _file_directives(data)
     raw = data.get("jobs", data) if isinstance(data, dict) else data
-    return [JobSpec.from_dict(d) for d in (raw or [])]
+    file = Path(path)
+    return [
+        JobSpec.from_dict(_resolve_job(d, defaults, file_includes, file))
+        for d in (raw or [])
+    ]
 
 
 def _specs_from_workflow_file(path) -> list:
@@ -85,7 +336,10 @@ def _specs_from_workflow_file(path) -> list:
     the **workflow id** (and default name) so the same file maps to the same
     workflow across restarts/redeploys — unless the file sets an explicit ``id``.
     A file may also hold a list / ``{jobs: [...]}``; entries without an ``id``
-    fall back to ``<stem>-<index>`` to stay deterministic.
+    fall back to ``<stem>-<index>`` to stay deterministic. A file carrying a
+    ``matrix:``/``for_each:`` list instead fans one template out into
+    ``<stem>-<index>`` jobs, one per parameter map (see
+    :func:`_specs_from_matrix`).
     """
     import yaml
 
@@ -95,27 +349,48 @@ def _specs_from_workflow_file(path) -> list:
 
     path = Path(path)
     stem = path.stem
-    data = yaml.safe_load(_expand_env(open(path, encoding="utf-8").read())) or {}
+    raw = open(path, encoding="utf-8").read()
+
+    # Matrix fan-out is resolved off the *unexpanded* text so ``{{ var }}`` is
+    # substituted before ``${ENV}`` (parsing the raw text is safe — placeholders
+    # are plain scalars). Everything else keeps env-expand-then-parse.
+    parsed = yaml.safe_load(raw) or {}
+    if isinstance(parsed, dict) and any(k in parsed for k in _MATRIX_KEYS):
+        return _specs_from_matrix(parsed, stem, path)
+
+    data = yaml.safe_load(_expand_env(raw)) or {}
+
+    # File-level `defaults:` + `include:`/`use:` (deep-merged under every job).
+    defaults, file_includes, data = _file_directives(data)
 
     # Single-job mapping (no top-level `jobs:` list) -> the whole file is one job.
     if isinstance(data, dict) and "jobs" not in data:
-        d = dict(data)
+        d = _resolve_job(data, defaults, file_includes, path)
         d.setdefault("id", stem)
         d.setdefault("name", stem)
         return [JobSpec.from_dict(d)]
 
     raw = data.get("jobs", data) if isinstance(data, dict) else data
+    raw = raw or []
     specs = []
-    for i, entry in enumerate(raw or []):
-        d = dict(entry)
+    for i, entry in enumerate(raw):
+        d = _resolve_job(entry, defaults, file_includes, path)
         d.setdefault("id", stem if len(raw) == 1 else f"{stem}-{i}")
         d.setdefault("name", d["id"])
         specs.append(JobSpec.from_dict(d))
     return specs
 
 
-def _load_workflows_dir(path: str) -> list:
-    """Load every ``*.yaml``/``*.yml`` workflow file in *path* (sorted)."""
+def _load_workflows_dir(path: str, *, failed: list | None = None) -> list:
+    """Load every ``*.yaml``/``*.yml`` workflow file in *path* (sorted).
+
+    A file that fails to parse or resolve (bad YAML, missing/cyclic
+    ``include:``, malformed :class:`WorkflowMatrixError` block, …) is logged and
+    skipped rather than crashing the server; pass a ``failed`` list to also
+    collect ``{"id": <stem>, "file": <name>, "error": <str>}`` records for
+    ``/health``. Fragment files live in subdirectories, so the top-level glob
+    never loads them.
+    """
     from pathlib import Path
 
     root = Path(path)
@@ -127,6 +402,8 @@ def _load_workflows_dir(path: str) -> list:
             specs.extend(_specs_from_workflow_file(fp))
         except Exception as exc:  # noqa: BLE001
             log.warning("skipping workflow file %s: %s", fp, exc)
+            if failed is not None:
+                failed.append({"id": fp.stem, "file": fp.name, "error": str(exc)})
     return specs
 
 
@@ -134,6 +411,7 @@ def create_jobs_app(
     config_path: str | None = None,
     *,
     workflows_dir: str | None = None,
+    plan_path: str | None = None,
     scrape_config: Any = None,
     run_engine: bool = True,
 ) -> Any:
@@ -192,14 +470,52 @@ def create_jobs_app(
         # Ids are filename-derived, so re-loading upserts the same workflow rather
         # than duplicating it. A bad file is reported, not fatal.
         wf_status: dict[str, list] = {"dir": wf_dir, "loaded": [], "failed": []}
-        for spec in _load_workflows_dir(wf_dir):
+        file_failures: list = []
+        for spec in _load_workflows_dir(wf_dir, failed=file_failures):
             try:
                 manager.create(spec)
                 wf_status["loaded"].append(spec.id)
             except Exception as exc:  # noqa: BLE001
                 log.warning("workflow %s failed: %s", spec.id, exc)
                 wf_status["failed"].append({"id": spec.id, "error": str(exc)})
+        wf_status["failed"].extend(file_failures)
         app.state.workflows = wf_status
+
+        # "Setup" phase: an external ingest plan (`defaults:` + per-job `matrix:`)
+        # declares many jobs the consumer owns (--plan or $UJIN_INGEST_PLAN). The
+        # path may be a single file OR a directory of plan files. A missing/invalid
+        # plan (or a malformed file within a directory) is reported, not fatal.
+        from pathlib import Path as _Path
+
+        from .model import JobSpec
+        from .plan import PLAN_ENV, PlanError, load_plan, load_plan_dir
+
+        plan_source = plan_path or os.environ.get(PLAN_ENV)
+        plan_status: dict[str, Any] = {
+            "source": plan_source, "loaded": [], "failed": [], "error": None,
+        }
+        if plan_source:
+            job_dicts: list[Any] = []
+            if _Path(plan_source).is_dir():
+                # Directory mode: per-file failures are isolated (recorded +
+                # skipped) so valid files still load.
+                job_dicts, file_failures = load_plan_dir(plan_source)
+                plan_status["failed"].extend(file_failures)
+            else:
+                try:
+                    job_dicts = load_plan(plan_source)
+                except PlanError as exc:
+                    log.warning("ingest plan %s failed to load: %s", plan_source, exc)
+                    plan_status["error"] = str(exc)
+            for job_dict in job_dicts:
+                try:
+                    manager.create(JobSpec.from_dict(job_dict))
+                    plan_status["loaded"].append(job_dict.get("id"))
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("plan job %s failed: %s", job_dict.get("id"), exc)
+                    plan_status["failed"].append(
+                        {"id": job_dict.get("id"), "error": str(exc)})
+        app.state.plan = plan_status
 
         app.state.engine = engine
         app.state.store = store
@@ -240,7 +556,9 @@ def create_jobs_app(
                 "jobs": len(m.jobs),
                 "plugins": getattr(app.state, "plugins", {"loaded": [], "failed": []}),
                 "workflows": getattr(app.state, "workflows",
-                                     {"dir": wf_dir, "loaded": [], "failed": []})}
+                                     {"dir": wf_dir, "loaded": [], "failed": []}),
+                "plan": getattr(app.state, "plan",
+                                {"source": None, "loaded": [], "failed": [], "error": None})}
 
     @app.get("/kinds")
     def kinds() -> dict[str, Any]:
@@ -393,9 +711,11 @@ def serve(  # pragma: no cover -- launches uvicorn; not testable without a live 
     port: int = 8902,
     config_path: str | None = None,
     workflows_dir: str | None = None,
+    plan_path: str | None = None,
 ) -> None:
     import uvicorn
 
     uvicorn.run(
-        create_jobs_app(config_path, workflows_dir=workflows_dir), host=host, port=port
+        create_jobs_app(config_path, workflows_dir=workflows_dir, plan_path=plan_path),
+        host=host, port=port,
     )

@@ -128,8 +128,26 @@ curl -X POST localhost:8902/jobs -H 'content-type: application/json' -d '{
 Prefer files over API calls? Drop workflow definitions into the mounted
 `./workflows` directory — each file is one workflow, the **filename stem is its
 id**, and ujin sets it up on startup, runs it, and hands back what it obtained at
-`GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). See
+`GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). Both
+the preloaded `jobs.yaml` and every workflow file support `${VAR}` /
+`${VAR:-default}` env-var expansion, so a mounted file can reference a secret or
+per-deploy URL without committing it. Share boilerplate across jobs with a
+top-level `defaults:` block (deep-merged into every job, per-job keys win) and
+reusable fragments via `include:`/`use:` (a shared sink, transform pipeline, or
+schedule; resolved against `$UJIN_WORKFLOWS_DIR` then the file's directory, with
+nested-include + cycle-guard support). Watching many near-identical sites? A
+`matrix:`/`for_each:` list fans **one template** out into one job per entry,
+substituting each entry's `{{ vars }}` (before `${ENV}`, keeping value types) on
+top of the same `defaults:`/`include:` resolution. See
 [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
+
+Declaring many similar jobs at once from a *single external* file instead? Point
+`--plan <path>` (or `$UJIN_INGEST_PLAN`) at an **ingest plan** — a file with
+shared `defaults:` plus per-job `matrix:` fan-out (e.g. one template -> a job per
+site/region), or a **directory** of such files loaded and merged in sorted order
+(a malformed file is isolated and reported, not fatal). ujin ships only the
+loader and a generic example; a missing/invalid plan is reported under
+`GET /health`, not fatal. See [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
 
 Need something the built-ins don't cover? Drop a Python file into the mounted
 `/plugins` volume and it becomes a `plugin:<name>` source/transform/sink — see
@@ -173,7 +191,7 @@ ujin sweep targets.yaml      # poll all targets once; print what changed
 ujin serve targets.yaml      # run the poll engine as a daemon
 ujin api [targets.yaml]      # poller control service (REST + WS) on :8900
 ujin scrape-serve            # rich scrape HTTP service on :8901
-ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
+ujin jobs-serve [jobs.yaml] [--workflows DIR] [--plan FILE|DIR]  # job control plane on :8902
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
 ujin learned site_state.db   # inspect the durable per-host learned state (--json)
@@ -201,7 +219,12 @@ Three FastAPI apps — run any combination. Full reference in
   `GET/DELETE /jobs/{id}`, `/jobs/{id}/run|pause|resume|runs|events`,
   `/jobs/{id}/content` + `/jobs/{id}/results` (hand out obtained data), `WS /jobs/events`,
   `/kinds`, `/metrics`, `POST /plugins/reload`. Durable + plugin-extensible.
-  File-driven workflows load from `./workflows` — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
+  File-driven workflows load from `./workflows`, with shared `defaults:` and
+  `include:`/`use:` fragments plus `matrix:`/`for_each:` fan-out of one template
+  over a data list — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md). An external
+  ingest plan (`--plan` / `$UJIN_INGEST_PLAN`, a single file or a directory of
+  files) declares many jobs at once from `defaults:` + per-job `matrix:` — see
+  [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
 - **Poller control** (`:8900`): `GET /health /metrics /targets`,
   `GET /content?key=…` (reuse the body ujin last fetched), `POST /targets`,
   `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.
@@ -321,7 +344,8 @@ Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [ADAPTIVE](docs/ADAPTIVE.md) ·
 [BACKENDS](docs/BACKENDS.md) (aiohttp vs obscura vs playwright vs selenium) ·
 [PERFORMANCE](docs/PERFORMANCE.md) · [CONSUMERS](docs/CONSUMERS.md)
 (downstream submodule contracts) · [API](docs/API.md) · [JOBS](docs/JOBS.md) ·
-[WORKFLOWS](docs/WORKFLOWS.md) · [PLUGINS](docs/PLUGINS.md) ·
+[WORKFLOWS](docs/WORKFLOWS.md) · [INGEST_PLAN](docs/INGEST_PLAN.md) ·
+[PLUGINS](docs/PLUGINS.md) ·
 [LIST_TRANSFORMS](docs/LIST_TRANSFORMS.md) (filter/flatten/sort/limit/rename/aggregate/unique/fill/csv) ·
 [MARKETPLACE](docs/MARKETPLACE.md) (generic engine; site profiles supplied externally) ·
 [BROWSER](docs/BROWSER.md) · [MCP](docs/MCP.md) · [CHANGELOG](CHANGELOG.md)

@@ -2,6 +2,62 @@
 
 ## [Unreleased]
 
+### Docs
+- Merged in the previously-unlanded `ingest-plan-directory` and `workflow-includes-defaults`/`matrix-workflows` feature work and reconciled the docs around it: `README.md`'s feature list and Jobs-control-plane bullet now mention workflow `defaults:`/`include:`/`use:` fragments, `matrix:`/`for_each:` fan-out, and the external `--plan`/`$UJIN_INGEST_PLAN` ingest-plan loader; `docs/INGEST_PLAN.md` is linked from the README docs index and from `docs/JOBS.md`; `docs/JOBS.md`'s REST surface line now lists the `plan` key that `GET /health` always returns.
+- `README.md`, `docs/JOBS.md`, `docs/WORKFLOWS.md`: documented the `${VAR}` / `${VAR:-default}` env-var expansion applied to the preloaded `jobs.yaml` and every workflow file (`ujin/jobs/app.py`'s `_expand_env`), which was already shipped but absent from all three docs.
+- `docs/JOBS.md`: documented the `webhook`/`forward` sink's retry-with-backoff and disk-spool config (`retries`, `backoff_secs`, `backoff_max_secs`, `spool_dir`, `spool_max_files`, `$UJIN_SPOOL_DIR`) and the `marketplace_search` source's `detail_cache`/`detail_cache_path`/`detail_cache_ttl_secs` options, which were already shipped in `ujin/jobs/sinks.py` and `ujin/poll/marketplace.py` but missing from the docs tables.
+- `docs/JOBS.md`'s REST surface line and `docs/WORKFLOWS.md`'s `GET /health` example were stale — `ujin/jobs/app.py`'s handler actually returns `{ok, status, service, jobs, plugins, workflows}`, not `{ok, jobs, plugins, workflows}`; also added a populated `workflows.failed` example to WORKFLOWS.md alongside the empty one.
+### Added (ingest plans)
+- Added a generic external ingest-plan loader (`ujin/jobs/plan.py`): a single file
+  with top-level `defaults:` (deep-merged into every job) plus optional per-job
+  `matrix:` (mapping cartesian-product or explicit list rows) fans out into many
+  jobs, with type-preserving `${var}` matrix substitution then `${ENV_VAR}`
+  expansion, and deterministic id assignment. Mounted via `ujin jobs-serve --plan
+  <file>` or `$UJIN_INGEST_PLAN` (mirroring `$UJIN_MARKETPLACE_PROFILES`); loading
+  failures are non-fatal and reported under `GET /health` (`"plan": {source,
+  loaded, failed, error}`) instead of aborting `jobs-serve`. Ships
+  `examples/ingest-plan.yaml` and [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md); no
+  site-specific logic — ujin ships only the loader and a generic example.
+- Extended the ingest-plan path to also accept a **directory** of plan files
+  (`--plan <dir>` / `$UJIN_INGEST_PLAN=<dir>`): every `*.yaml`/`*.yml` file in it
+  is loaded in sorted, deterministic order and merged into one job set (mirroring
+  `--workflows DIR`), with each file's `defaults:`/`matrix:`/`${…}` resolved on its
+  own. A malformed file is isolated — recorded under `/health.plan.failed` as
+  `{file, error}` and skipped — while the valid files still load. `GET /health`'s
+  `plan.loaded`/`plan.failed` are now lists (job ids / failure records). Single-file
+  plans and `$UJIN_INGEST_PLAN` behave exactly as before. Adds
+  `examples/ingest-plan.d/` and `ujin.jobs.plan.load_plan_dir`.
+### Added (workflow defaults + includes)
+- Workflow/job files now support a top-level `defaults:` block (deep-merged into
+  every resulting job, with per-job keys winning recursively over nested maps like
+  `source`/`transforms`/`sinks`/`schedule`) and an `include:`/`use:` directive —
+  usable both file-level and per-job — that pulls in reusable fragment files (a
+  shared sink, transform pipeline, or schedule). Fragment paths resolve against
+  `$UJIN_WORKFLOWS_DIR` first, then the including file's directory; nested includes
+  are supported with a cycle guard, and precedence is `defaults < included-fragment
+  < inline-job-keys`. A missing or cyclic fragment raises a clear
+  `ujin.jobs.app.WorkflowIncludeError`; the directory loader logs and skips a bad
+  file (now also surfaced in `GET /health` `workflows.failed`) instead of crashing.
+  Applied consistently to both the workflows-dir loader and the `--config` preload
+  path. Ships `examples/workflows/site-feeds.yaml` + `fragments/sqlite-sink.yaml`
+  and is documented in `docs/WORKFLOWS.md`. Files without `defaults:`/`include:`
+  parse exactly as before, and `${VAR}`/`${VAR:-default}` substitution is unchanged.
+
+### Added (matrix workflows)
+- **Matrix / parameterized workflows.** A workflow file may carry a `matrix:`
+  (alias `for_each:`) list of parameter maps; the surrounding template is fanned
+  out into one `JobSpec` per entry (`<stem>-<index>`), substituting that entry's
+  `{{ var }}` placeholders into `source`/`transforms`/`sinks`/`schedule`/`name`.
+  Matrix substitution runs **before** `${ENV}`/`${VAR:-default}` so the two layers
+  compose, a whole-string placeholder keeps the entry's value type, and the
+  file's `defaults:` map plus resolved `include:`/`use:` fragments are deep-merged
+  under every fanned-out job (per-entry keys win), composing with the workflow
+  defaults/includes support. A malformed block raises `WorkflowMatrixError`, is skipped, and is
+  surfaced on `GET /health` (`workflows.failed`) rather than aborting the loader.
+  `_load_workflows_dir(path, *, failed=None)` now optionally collects file-level
+  load failures. Non-matrix workflows are unaffected. Documented in
+  `docs/WORKFLOWS.md` with a runnable `examples/workflows/status-pages.yaml`.
+
 ### Added (test coverage)
 - Added offline, deterministic tests to `tests/test_robots.py` and `tests/test_diff.py` covering previously-uncovered paths: repeated-agent parse branch (`55->57`), unknown-directive skip (`75->37`), empty-pattern `_match` short-circuit (line 131), `re.error` guard (lines 144–145), full `_http_fetcher` body (lines 161–171, via aiohttp mock/import-failure), and `extract_regions` empty-selectors early return (region.py line 30); lifting `ujin/robots.py` and `ujin/diff/region.py` to 100% line and branch coverage.
 - Added 8 offline, deterministic tests to `tests/test_extract_contacts.py` covering previously-uncovered edge paths in `ujin/extract/contacts.py`: empty/whitespace-only `href` anchor (line 153), empty `mailto:` and `tel:` address/number branches (lines 158, 162), and the three exception-guard fallbacks in `_is_social_href`, `_resolve`, and `extract_contacts` (lines 85–86, 94–95, 123–124), lifting the module to 100% line and branch coverage.

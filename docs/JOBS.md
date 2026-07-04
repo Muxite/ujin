@@ -23,6 +23,13 @@ docker compose up ujin-jobs           # durable jobstore volume + ./plugins moun
 Jobs are persisted (sqlite) and **reloaded on restart** — the gap the old
 in-memory `POST /targets` left open.
 
+Preloaded YAML (both the `jobs-serve [jobs.yaml]` positional file and every
+[workflow file](WORKFLOWS.md)) is expanded for `${VAR}` / `${VAR:-default}`
+references against the process environment before parsing — so a mounted file
+can point at a secret or backend URL (`url: "${BACKEND_URL:-http://localhost}"`)
+without committing it. An unset variable with no default expands to `""` (and
+logs a warning once).
+
 ## The job spec
 
 ```jsonc
@@ -49,7 +56,7 @@ in-memory `POST /targets` left open.
 | `browser` | `url`, `engine?`, `actions[]`, `extract?` (`links`\|`article`\|`structured`\|`raw`), `results_selector?`, `headless?` | drive a real browser through an interaction recipe (`load_more`, scroll, click), then extract — see [BROWSER.md](BROWSER.md) |
 | `amazon_search` | `term` (or `terms[]`), `domain?`, `max_results?`, `category?`, `engine?`, `with_description?`, `headless?`, `proxy?`, `timeout_secs?` | search Amazon for a single term or fan out across a list of terms concurrently via `MultiPollable` (results merged); see [MARKETPLACE.md](MARKETPLACE.md) |
 | `amazon_category` | `categories?`, `terms_per_poll?`, `max_results?`, `domain?`, `engine?`, `headless?`, `harvest?`, `harvest_path?`, `harvest_ratio?`, `proxy?`, `timeout_secs?` | sweep Amazon category pages, sampling from a rotating pool of search terms; see [MARKETPLACE.md](MARKETPLACE.md) |
-| `marketplace_search` | `profile` (required), `profiles?`, `profiles_path?`, `categories?`, `terms_per_poll?`, `max_results?`, `engine?`, `with_description?`, `headless?`, `proxy?`, `timeout_secs?` | profile-driven search over any marketplace site; profiles resolved from inline `profiles` dict, `profiles_path` file, or `$UJIN_MARKETPLACE_PROFILES` env var — see [MARKETPLACE.md](MARKETPLACE.md) |
+| `marketplace_search` | `profile` (required), `profiles?`, `profiles_path?`, `categories?`, `terms_per_poll?`, `max_results?`, `engine?`, `with_description?`, `headless?`, `proxy?`, `timeout_secs?`, `detail_cache?`, `detail_cache_path?`, `detail_cache_ttl_secs?` | profile-driven search over any marketplace site; profiles resolved from inline `profiles` dict, `profiles_path` file, or `$UJIN_MARKETPLACE_PROFILES` env var; `detail_cache: true` skips re-fetching detail pages for source_ids seen within `detail_cache_ttl_secs` (default 7 days) — see [MARKETPLACE.md](MARKETPLACE.md) |
 | `plugin:<name>` | (plugin-defined) | a custom source — see PLUGINS.md |
 
 ### Transforms (`kind`) — run in order; one returning nothing drops the event
@@ -72,7 +79,7 @@ in-memory `POST /targets` left open.
 ### Sinks (`kind`) — fan out concurrently; one failing sink never blocks the others
 | kind | config | effect |
 |------|--------|--------|
-| `webhook` | `url`, `method?`, `headers?`, `hmac_secret?` | POST JSON; optional `X-Ujin-Signature: sha256=…` |
+| `webhook` | `url`, `method?`, `headers?`, `hmac_secret?`, `retries?`, `backoff_secs?`, `backoff_max_secs?`, `spool_dir?`, `spool_max_files?` | POST JSON; optional `X-Ujin-Signature: sha256=…`; retries with jittered exponential backoff on connect errors/timeouts/429/5xx, then spools undelivered events to disk (`spool_dir`, default `$UJIN_SPOOL_DIR` or `/data/spool`; empty string disables spooling) and replays them oldest-first once the backend recovers |
 | `forward` | same as webhook | generalized forward to another HTTP service |
 | `ws` | — | push the full event to `WS /jobs/events` clients |
 | `jsonl` / `file` | `path` | append one JSON line per event |
@@ -90,7 +97,7 @@ in-memory `POST /targets` left open.
 ## REST surface (`:8902`)
 
 ```
-GET    /health                  {ok, jobs, plugins, workflows}
+GET    /health                  {ok, status, service, jobs, plugins, workflows, plan}
 GET    /kinds                   available source/transform/sink kinds
 GET    /metrics                 engine stats + per-job + plugin status
 GET    /jobs                    list job summaries
@@ -108,7 +115,10 @@ POST   /plugins/reload          re-import plugins -> {loaded, failed}
 ```
 
 File-driven jobs (**workflows**) also load from `UJIN_WORKFLOWS_DIR` on startup
-(id = filename stem). See [WORKFLOWS.md](WORKFLOWS.md).
+(id = filename stem). See [WORKFLOWS.md](WORKFLOWS.md). An external **ingest
+plan** (`jobs-serve --plan FILE|DIR` / `$UJIN_INGEST_PLAN`) declares many jobs
+at once from `defaults:` + per-job `matrix:`. See
+[INGEST_PLAN.md](INGEST_PLAN.md).
 
 Every change also emits a compact `{"event":"change","job_id",...}` on
 `WS /jobs/events`, independent of whether the job has a `ws` sink.

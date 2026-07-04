@@ -1,0 +1,39 @@
+# A ujin workflow showing `defaults:` + `include:` — two RSS-poll workflows that
+# share a schedule and a persistence pipeline.
+#
+#   defaults:   deep-merged into every job below; per-job keys win (recursively,
+#               so a job can override just `schedule.base` and inherit the rest).
+#   include:    pulls in a reusable *fragment* (a shared transforms+sinks pipeline)
+#               that ships in the `fragments/` subdirectory — kept out of the top
+#               level so it is not itself loaded as a workflow.
+#
+# Precedence, lowest to highest:  defaults  <  included fragment  <  inline keys.
+#
+# This file holds a `jobs:` list, so the two workflows get ids `site-feeds-0`
+# and `site-feeds-1`. Query them at GET /jobs/site-feeds-0/content, etc.
+
+defaults:
+  schedule:
+    mode: adaptive
+    base: 300
+    min: 60
+    max: 3600
+    jitter: decorrelated
+
+# File-level include: every job below inherits the shared dedupe + sqlite sink.
+# Resolved against $UJIN_WORKFLOWS_DIR first, then this file's directory.
+include: fragments/sqlite-sink.yaml
+
+jobs:
+  - source:
+      kind: rss
+      config:
+        url: "https://hnrss.org/frontpage"
+
+  - source:
+      kind: rss
+      config:
+        url: "https://lobste.rs/rss"
+    # Override only one default key — `mode`, `min`, `max`, `jitter` are inherited.
+    schedule:
+      base: 600
