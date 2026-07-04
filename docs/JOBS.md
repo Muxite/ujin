@@ -97,7 +97,7 @@ logs a warning once).
 ## REST surface (`:8902`)
 
 ```
-GET    /health                  {ok, status, service, jobs, plugins, workflows}
+GET    /health                  {ok, status, service, jobs, plugins, workflows, plan}
 GET    /kinds                   available source/transform/sink kinds
 GET    /metrics                 engine stats + per-job + plugin status
 GET    /jobs                    list job summaries
@@ -115,7 +115,10 @@ POST   /plugins/reload          re-import plugins -> {loaded, failed}
 ```
 
 File-driven jobs (**workflows**) also load from `UJIN_WORKFLOWS_DIR` on startup
-(id = filename stem). See [WORKFLOWS.md](WORKFLOWS.md).
+(id = filename stem). See [WORKFLOWS.md](WORKFLOWS.md). An external **ingest
+plan** (`jobs-serve --plan FILE|DIR` / `$UJIN_INGEST_PLAN`) declares many jobs
+at once from `defaults:` + per-job `matrix:`. See
+[INGEST_PLAN.md](INGEST_PLAN.md).
 
 Every change also emits a compact `{"event":"change","job_id",...}` on
 `WS /jobs/events`, independent of whether the job has a `ws` sink.
