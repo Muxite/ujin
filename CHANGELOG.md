@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Docs
+- `README.md`, `docs/JOBS.md`, `docs/WORKFLOWS.md`: documented the `${VAR}` / `${VAR:-default}` env-var expansion applied to the preloaded `jobs.yaml` and every workflow file (`ujin/jobs/app.py`'s `_expand_env`), which was already shipped but absent from all three docs.
 - `docs/JOBS.md`: documented the `webhook`/`forward` sink's retry-with-backoff and disk-spool config (`retries`, `backoff_secs`, `backoff_max_secs`, `spool_dir`, `spool_max_files`, `$UJIN_SPOOL_DIR`) and the `marketplace_search` source's `detail_cache`/`detail_cache_path`/`detail_cache_ttl_secs` options, which were already shipped in `ujin/jobs/sinks.py` and `ujin/poll/marketplace.py` but missing from the docs tables.
 - `docs/JOBS.md`'s REST surface line and `docs/WORKFLOWS.md`'s `GET /health` example were stale — `ujin/jobs/app.py`'s handler actually returns `{ok, status, service, jobs, plugins, workflows}`, not `{ok, jobs, plugins, workflows}`; also added a populated `workflows.failed` example to WORKFLOWS.md alongside the empty one.
 

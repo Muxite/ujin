@@ -23,6 +23,13 @@ docker compose up ujin-jobs           # durable jobstore volume + ./plugins moun
 Jobs are persisted (sqlite) and **reloaded on restart** — the gap the old
 in-memory `POST /targets` left open.
 
+Preloaded YAML (both the `jobs-serve [jobs.yaml]` positional file and every
+[workflow file](WORKFLOWS.md)) is expanded for `${VAR}` / `${VAR:-default}`
+references against the process environment before parsing — so a mounted file
+can point at a secret or backend URL (`url: "${BACKEND_URL:-http://localhost}"`)
+without committing it. An unset variable with no default expands to `""` (and
+logs a warning once).
+
 ## The job spec
 
 ```jsonc

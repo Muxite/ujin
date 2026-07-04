@@ -57,6 +57,10 @@ schedule:
   `id` fall back to `<stem>-<index>` so ids stay deterministic.
 - Validation is eager: an unknown source/transform/sink kind lands in the
   `failed` list (see `GET /health`) instead of aborting startup.
+- `${VAR}` / `${VAR:-default}` in the file are expanded against the process
+  environment before parsing — e.g. `url: "${CROSSREF_URL}"` — so a mounted
+  workflow file can reference a secret or per-deploy value without committing
+  it. See [JOBS.md](JOBS.md) for the full expansion rules.
 
 Run it locally without Docker:
 

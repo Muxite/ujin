@@ -128,8 +128,10 @@ curl -X POST localhost:8902/jobs -H 'content-type: application/json' -d '{
 Prefer files over API calls? Drop workflow definitions into the mounted
 `./workflows` directory — each file is one workflow, the **filename stem is its
 id**, and ujin sets it up on startup, runs it, and hands back what it obtained at
-`GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). See
-[docs/WORKFLOWS.md](docs/WORKFLOWS.md).
+`GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). Both
+the preloaded `jobs.yaml` and every workflow file support `${VAR}` /
+`${VAR:-default}` env-var expansion, so a mounted file can reference a secret or
+per-deploy URL without committing it. See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
 Need something the built-ins don't cover? Drop a Python file into the mounted
 `/plugins` volume and it becomes a `plugin:<name>` source/transform/sink — see
