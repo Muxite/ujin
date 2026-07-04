@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.243.0 — 2026-07-04
 
 ### Docs
 - Merged in the previously-unlanded `ingest-plan-directory` and `workflow-includes-defaults`/`matrix-workflows` feature work and reconciled the docs around it: `README.md`'s feature list and Jobs-control-plane bullet now mention workflow `defaults:`/`include:`/`use:` fragments, `matrix:`/`for_each:` fan-out, and the external `--plan`/`$UJIN_INGEST_PLAN` ingest-plan loader; `docs/INGEST_PLAN.md` is linked from the README docs index and from `docs/JOBS.md`; `docs/JOBS.md`'s REST surface line now lists the `plan` key that `GET /health` always returns.
