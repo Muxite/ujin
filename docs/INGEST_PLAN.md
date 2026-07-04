@@ -18,22 +18,31 @@ UJIN_INGEST_PLAN=examples/ingest-plan.yaml ujin jobs-serve
 ```
 
 `--plan` takes precedence over `$UJIN_INGEST_PLAN`; if neither is set, no plan is
-loaded (a no-op — an existing no-config deploy is unaffected). A missing or
-malformed plan is **not fatal**: it's reported under `GET /health`, and
-`jobs-serve` keeps running with whatever else it loaded (preloaded jobs,
-`--workflows`, jobs created over the API).
+loaded (a no-op — an existing no-config deploy is unaffected). The path may point
+at a single **file** or a **directory** of plan files (see
+[Directory of plan files](#directory-of-plan-files)). A missing or malformed plan
+is **not fatal**: it's reported under `GET /health`, and `jobs-serve` keeps
+running with whatever else it loaded (preloaded jobs, `--workflows`, jobs created
+over the API).
 
 ```json
 { "ok": true, "jobs": 6,
-  "plan": { "source": "examples/ingest-plan.yaml", "loaded": 6, "failed": 0, "error": null } }
+  "plan": {
+    "source": "examples/ingest-plan.yaml",
+    "loaded": ["homepage", "status-github", "status-npm", "status-pypi", "feed-releases", "feed-tags"],
+    "failed": [],
+    "error": null } }
 ```
 
 - `source` — the resolved path (or `null` if no plan was configured).
-- `loaded` — jobs successfully created from the plan.
-- `failed` — jobs the plan declared but that failed to create (e.g. an unknown
-  source kind); each failure is logged with its job id.
-- `error` — set when the plan file itself couldn't be loaded (missing, unreadable,
-  or invalid YAML/schema); `loaded`/`failed` stay `0` in that case.
+- `loaded` — list of job ids successfully created from the plan.
+- `failed` — list of failures. A job the plan declared but that failed to create
+  (e.g. an unknown source kind) is recorded as `{"id": ..., "error": ...}`; in
+  directory mode a malformed plan *file* is recorded as `{"file": ..., "error": ...}`.
+  Each failure is also logged.
+- `error` — set when a single plan *file* couldn't be loaded (missing, unreadable,
+  or invalid YAML/schema); `loaded`/`failed` stay empty in that case. (In directory
+  mode per-file problems go to `failed` instead, so `error` stays `null`.)
 
 ## Schema
 
@@ -97,6 +106,34 @@ Because ids are derived from the plan file's own content, re-loading the same
 plan (a restart, a redeploy) **upserts the same jobs** rather than duplicating
 them — the same behavior file-driven workflows give you.
 
+## Directory of plan files
+
+The plan path may point at a **directory** instead of a single file. When it does,
+ujin loads every `*.yaml` / `*.yml` file in that directory — in sorted
+(deterministic) filename order — and merges all their jobs into one set. This
+mirrors `--workflows DIR` and lets a consumer split a large plan across several
+files (e.g. one file per domain) and drop new plan files in without editing an
+existing one.
+
+```bash
+ujin jobs-serve --plan examples/ingest-plan.d
+# or
+UJIN_INGEST_PLAN=examples/ingest-plan.d ujin jobs-serve
+```
+
+- Each file is an ordinary plan document (the same `defaults:` + `jobs:` +
+  `matrix:` schema). Its `defaults:` apply only to the jobs in *that* file — files
+  are parsed independently, not concatenated before parsing.
+- Files are loaded in **sorted filename order**, so a numeric prefix (`00-…`,
+  `10-…`) gives you a stable, predictable load order.
+- Non-`.yaml`/`.yml` files (a `README.md`, notes, etc.) are ignored.
+- A **malformed file is isolated**: its error is recorded under
+  `/health.plan.failed` as `{"file": <name>, "error": <message>}` and the file is
+  skipped — the valid files in the directory still load. The whole set never fails
+  because one file is bad.
+
+A single-file plan path keeps behaving exactly as before.
+
 ## Example
 
 `examples/ingest-plan.yaml` loads as 6 jobs: one plain `homepage` job (no
@@ -105,6 +142,14 @@ a list-of-rows matrix. Try it:
 
 ```bash
 ujin jobs-serve --plan examples/ingest-plan.yaml
-curl localhost:8902/health   # -> "plan": {"loaded": 6, "failed": 0, ...}
+curl localhost:8902/health   # -> "plan": {"loaded": [...6 ids...], "failed": [], ...}
 curl localhost:8902/jobs
+```
+
+`examples/ingest-plan.d/` is the same idea split across two files
+(`00-status.yaml`, `10-feeds.yaml`) to demonstrate directory mode:
+
+```bash
+ujin jobs-serve --plan examples/ingest-plan.d
+curl localhost:8902/health
 ```

@@ -203,27 +203,39 @@ def create_jobs_app(
         app.state.workflows = wf_status
 
         # "Setup" phase: an external ingest plan (`defaults:` + per-job `matrix:`)
-        # declares many jobs from one file the consumer owns (--plan or
-        # $UJIN_INGEST_PLAN). A missing/invalid plan is reported, not fatal.
+        # declares many jobs the consumer owns (--plan or $UJIN_INGEST_PLAN). The
+        # path may be a single file OR a directory of plan files. A missing/invalid
+        # plan (or a malformed file within a directory) is reported, not fatal.
+        from pathlib import Path as _Path
+
         from .model import JobSpec
-        from .plan import PLAN_ENV, PlanError, load_plan
+        from .plan import PLAN_ENV, PlanError, load_plan, load_plan_dir
 
         plan_source = plan_path or os.environ.get(PLAN_ENV)
         plan_status: dict[str, Any] = {
-            "source": plan_source, "loaded": 0, "failed": 0, "error": None,
+            "source": plan_source, "loaded": [], "failed": [], "error": None,
         }
         if plan_source:
-            try:
-                for job_dict in load_plan(plan_source):
-                    try:
-                        manager.create(JobSpec.from_dict(job_dict))
-                        plan_status["loaded"] += 1
-                    except Exception as exc:  # noqa: BLE001
-                        log.warning("plan job %s failed: %s", job_dict.get("id"), exc)
-                        plan_status["failed"] += 1
-            except PlanError as exc:
-                log.warning("ingest plan %s failed to load: %s", plan_source, exc)
-                plan_status["error"] = str(exc)
+            job_dicts: list[Any] = []
+            if _Path(plan_source).is_dir():
+                # Directory mode: per-file failures are isolated (recorded +
+                # skipped) so valid files still load.
+                job_dicts, file_failures = load_plan_dir(plan_source)
+                plan_status["failed"].extend(file_failures)
+            else:
+                try:
+                    job_dicts = load_plan(plan_source)
+                except PlanError as exc:
+                    log.warning("ingest plan %s failed to load: %s", plan_source, exc)
+                    plan_status["error"] = str(exc)
+            for job_dict in job_dicts:
+                try:
+                    manager.create(JobSpec.from_dict(job_dict))
+                    plan_status["loaded"].append(job_dict.get("id"))
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("plan job %s failed: %s", job_dict.get("id"), exc)
+                    plan_status["failed"].append(
+                        {"id": job_dict.get("id"), "error": str(exc)})
         app.state.plan = plan_status
 
         app.state.engine = engine
@@ -267,7 +279,7 @@ def create_jobs_app(
                 "workflows": getattr(app.state, "workflows",
                                      {"dir": wf_dir, "loaded": [], "failed": []}),
                 "plan": getattr(app.state, "plan",
-                                {"source": None, "loaded": 0, "failed": 0, "error": None})}
+                                {"source": None, "loaded": [], "failed": [], "error": None})}
 
     @app.get("/kinds")
     def kinds() -> dict[str, Any]:

@@ -13,6 +13,15 @@
   loaded, failed, error}`) instead of aborting `jobs-serve`. Ships
   `examples/ingest-plan.yaml` and [docs/INGEST_PLAN.md](docs/INGEST_PLAN.md); no
   site-specific logic — ujin ships only the loader and a generic example.
+- Extended the ingest-plan path to also accept a **directory** of plan files
+  (`--plan <dir>` / `$UJIN_INGEST_PLAN=<dir>`): every `*.yaml`/`*.yml` file in it
+  is loaded in sorted, deterministic order and merged into one job set (mirroring
+  `--workflows DIR`), with each file's `defaults:`/`matrix:`/`${…}` resolved on its
+  own. A malformed file is isolated — recorded under `/health.plan.failed` as
+  `{file, error}` and skipped — while the valid files still load. `GET /health`'s
+  `plan.loaded`/`plan.failed` are now lists (job ids / failure records). Single-file
+  plans and `$UJIN_INGEST_PLAN` behave exactly as before. Adds
+  `examples/ingest-plan.d/` and `ujin.jobs.plan.load_plan_dir`.
 
 ### Added (test coverage)
 - Added offline, deterministic tests to `tests/test_robots.py` and `tests/test_diff.py` covering previously-uncovered paths: repeated-agent parse branch (`55->57`), unknown-directive skip (`75->37`), empty-pattern `_match` short-circuit (line 131), `re.error` guard (lines 144–145), full `_http_fetcher` body (lines 161–171, via aiohttp mock/import-failure), and `extract_regions` empty-selectors early return (region.py line 30); lifting `ujin/robots.py` and `ujin/diff/region.py` to 100% line and branch coverage.

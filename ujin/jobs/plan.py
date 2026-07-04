@@ -30,9 +30,16 @@ the matrix pass doesn't recognize is left untouched so the env pass can still ex
 it. A job with no `matrix:` still gets a single pass through both (an effectively
 empty combo, so only `${ENV_VAR}` refs resolve).
 
-See ``examples/ingest-plan.yaml`` and ``docs/INGEST_PLAN.md`` for a full example
-and reference. This module is self-contained aside from reusing ``app._expand_env``
-for leaf-level environment expansion.
+The plan path may point at a single file **or a directory** of plan files. A
+directory is loaded like the workflows dir: every ``*.yaml``/``*.yml`` file in it
+is parsed in sorted (deterministic) order and its jobs merged into one set, with
+a malformed file isolated (recorded + skipped) rather than aborting the whole
+set. See :func:`load_plan_dir`.
+
+See ``examples/ingest-plan.yaml`` (single file), ``examples/ingest-plan.d/``
+(directory) and ``docs/INGEST_PLAN.md`` for full examples and reference. This
+module is self-contained aside from reusing ``app._expand_env`` for leaf-level
+environment expansion.
 """
 from __future__ import annotations
 
@@ -54,6 +61,10 @@ _MATRIX_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _WHOLE_MATRIX_REF = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 
 _TOP_LEVEL_KEYS = {"defaults", "jobs"}
+
+#: Glob matching plan files inside a plan *directory* (``*.yaml``/``*.yml``),
+#: mirroring :func:`ujin.jobs.app._load_workflows_dir`.
+_PLAN_GLOB = "*.y*ml"
 
 
 class PlanError(ValueError):
@@ -197,20 +208,11 @@ def parse_plan(data: Any) -> list[dict[str, Any]]:
     return specs
 
 
-def load_plan(path: str | None = None) -> list[dict[str, Any]]:
-    """Load + parse an ingest plan from *path* or ``$UJIN_INGEST_PLAN``.
-
-    Returns an empty list when neither is set (no plan -> no jobs), so mounting
-    nothing is a silent no-op rather than an error. A path that IS given (or
-    resolved from the env) but is missing, unreadable, or malformed raises
-    :class:`PlanError`.
-    """
+def _load_plan_file(p: Path) -> list[dict[str, Any]]:
+    """Read + parse a single plan *file*. Raises :class:`PlanError` on any
+    problem (missing, unreadable, invalid YAML, or bad schema)."""
     import yaml
 
-    src = path or os.environ.get(PLAN_ENV)
-    if not src:
-        return []
-    p = Path(src)
     if not p.exists():
         raise PlanError(f"ingest plan file not found: {p}")
     try:
@@ -222,3 +224,45 @@ def load_plan(path: str | None = None) -> list[dict[str, Any]]:
     except yaml.YAMLError as exc:
         raise PlanError(f"ingest plan {p} is not valid YAML: {exc}") from exc
     return parse_plan(data)
+
+
+def load_plan_dir(path: str | os.PathLike[str]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Load every plan file in directory *path* in a stable, sorted order.
+
+    Mirrors :func:`ujin.jobs.app._load_workflows_dir`: each ``*.yaml``/``*.yml``
+    file is parsed independently and its jobs appended to a single merged list.
+    A file that is malformed is isolated — its error is recorded and the file
+    skipped, so the remaining valid files still load. Returns a
+    ``(jobs, failures)`` tuple where *failures* is a list of
+    ``{"file": <name>, "error": <message>}`` dicts (empty when all files loaded).
+    """
+    root = Path(path)
+    jobs: list[dict[str, Any]] = []
+    failures: list[dict[str, str]] = []
+    for fp in sorted(root.glob(_PLAN_GLOB)):
+        try:
+            jobs.extend(_load_plan_file(fp))
+        except PlanError as exc:
+            log.warning("skipping ingest plan file %s: %s", fp, exc)
+            failures.append({"file": fp.name, "error": str(exc)})
+    return jobs, failures
+
+
+def load_plan(path: str | None = None) -> list[dict[str, Any]]:
+    """Load + parse an ingest plan from *path* or ``$UJIN_INGEST_PLAN``.
+
+    Returns an empty list when neither is set (no plan -> no jobs), so mounting
+    nothing is a silent no-op rather than an error. When the resolved path is a
+    **directory**, every plan file inside it is loaded and merged (malformed
+    files are skipped, mirroring the workflows dir); use :func:`load_plan_dir`
+    to also capture the per-file failures. When it is a single **file** that is
+    missing, unreadable, or malformed, :class:`PlanError` is raised.
+    """
+    src = path or os.environ.get(PLAN_ENV)
+    if not src:
+        return []
+    p = Path(src)
+    if p.is_dir():
+        jobs, _failures = load_plan_dir(p)
+        return jobs
+    return _load_plan_file(p)

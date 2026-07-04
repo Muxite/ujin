@@ -5,7 +5,13 @@ from __future__ import annotations
 
 import pytest
 
-from ujin.jobs.plan import PLAN_ENV, PlanError, load_plan, parse_plan
+from ujin.jobs.plan import (
+    PLAN_ENV,
+    PlanError,
+    load_plan,
+    load_plan_dir,
+    parse_plan,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -335,6 +341,109 @@ def test_load_plan_example_file_has_six_jobs():
 
 
 # --------------------------------------------------------------------------- #
+# load_plan_dir: directory of plan files (merge, ordering, failure isolation)
+# --------------------------------------------------------------------------- #
+
+def _write(dir_path, name: str, text: str):
+    p = dir_path / name
+    p.write_text(text)
+    return p
+
+
+def test_load_plan_dir_merges_all_files(tmp_path):
+    _write(tmp_path, "a.yaml", """
+jobs:
+  - id: alpha
+    source: {kind: http, config: {url: "https://a"}}
+""")
+    _write(tmp_path, "b.yml", """
+jobs:
+  - id: beta
+    source: {kind: http, config: {url: "https://b"}}
+""")
+    jobs, failures = load_plan_dir(tmp_path)
+    assert failures == []
+    assert [j["id"] for j in jobs] == ["alpha", "beta"]
+
+
+def test_load_plan_dir_ignores_non_yaml_files(tmp_path):
+    _write(tmp_path, "keep.yaml", """
+jobs:
+  - id: kept
+    source: {kind: http, config: {url: "https://k"}}
+""")
+    _write(tmp_path, "notes.txt", "not a plan\n")
+    _write(tmp_path, "README.md", "# nope\n")
+    jobs, failures = load_plan_dir(tmp_path)
+    assert failures == []
+    assert [j["id"] for j in jobs] == ["kept"]
+
+
+def test_load_plan_dir_is_sorted_deterministic(tmp_path):
+    # Written out of order; loaded in sorted filename order.
+    for name, jid in [("30-c.yaml", "c"), ("10-a.yaml", "a"), ("20-b.yaml", "b")]:
+        _write(tmp_path, name, f"""
+jobs:
+  - id: {jid}
+    source: {{kind: http, config: {{url: "https://{jid}"}}}}
+""")
+    jobs, failures = load_plan_dir(tmp_path)
+    assert failures == []
+    assert [j["id"] for j in jobs] == ["a", "b", "c"]
+
+
+def test_load_plan_dir_isolates_a_malformed_file(tmp_path):
+    _write(tmp_path, "good.yaml", """
+jobs:
+  - id: good
+    source: {kind: http, config: {url: "https://g"}}
+""")
+    _write(tmp_path, "bad.yaml", "just: a string: broken: yaml: [\n")
+    _write(tmp_path, "schema.yaml", "unknown_top_level: true\n")
+    jobs, failures = load_plan_dir(tmp_path)
+    assert [j["id"] for j in jobs] == ["good"]
+    assert {f["file"] for f in failures} == {"bad.yaml", "schema.yaml"}
+    assert all(f["error"] for f in failures)
+
+
+def test_load_plan_dir_empty_dir_yields_nothing(tmp_path):
+    assert load_plan_dir(tmp_path) == ([], [])
+
+
+def test_load_plan_on_a_directory_returns_merged_jobs(tmp_path):
+    _write(tmp_path, "a.yaml", """
+jobs:
+  - id: alpha
+    source: {kind: http, config: {url: "https://a"}}
+""")
+    _write(tmp_path, "bad.yaml", "unknown_top_level: true\n")
+    # load_plan() swallows per-file failures for a directory (use load_plan_dir
+    # to capture them) and still returns the valid jobs.
+    jobs = load_plan(str(tmp_path))
+    assert [j["id"] for j in jobs] == ["alpha"]
+
+
+def test_load_plan_dir_from_env_var_directory(tmp_path, monkeypatch):
+    _write(tmp_path, "a.yaml", """
+jobs:
+  - id: fromenv
+    source: {kind: http, config: {url: "https://e"}}
+""")
+    monkeypatch.setenv(PLAN_ENV, str(tmp_path))
+    jobs = load_plan(None)
+    assert [j["id"] for j in jobs] == ["fromenv"]
+
+
+def test_load_plan_dir_example_directory():
+    from pathlib import Path
+
+    example = Path(__file__).resolve().parents[1] / "examples" / "ingest-plan.d"
+    jobs, failures = load_plan_dir(example)
+    assert failures == []
+    assert len(jobs) >= 2
+
+
+# --------------------------------------------------------------------------- #
 # create_jobs_app wiring + /health "plan" reporting
 # --------------------------------------------------------------------------- #
 
@@ -361,7 +470,7 @@ def test_no_plan_is_a_noop(db):
     app = create_jobs_app(run_engine=False)
     with TestClient(app) as c:
         health = c.get("/health").json()
-        assert health["plan"] == {"source": None, "loaded": 0, "failed": 0, "error": None}
+        assert health["plan"] == {"source": None, "loaded": [], "failed": [], "error": None}
 
 
 def test_plan_path_loads_jobs_into_jobs_serve(db, tmp_path):
@@ -378,8 +487,8 @@ jobs:
     with TestClient(app) as c:
         health = c.get("/health").json()
         assert health["plan"]["source"] == str(plan)
-        assert health["plan"]["loaded"] == 2
-        assert health["plan"]["failed"] == 0
+        assert sorted(health["plan"]["loaded"]) == ["status-a", "status-b"]
+        assert health["plan"]["failed"] == []
         assert health["plan"]["error"] is None
         ids = {j["id"] for j in c.get("/jobs").json()}
         assert {"status-a", "status-b"} <= ids
@@ -395,7 +504,7 @@ jobs:
     app = create_jobs_app(run_engine=False)
     with TestClient(app) as c:
         health = c.get("/health").json()
-        assert health["plan"]["loaded"] == 1
+        assert health["plan"]["loaded"] == ["homepage"]
         ids = {j["id"] for j in c.get("/jobs").json()}
         assert "homepage" in ids
 
@@ -408,7 +517,7 @@ def test_missing_plan_file_is_non_fatal(db, tmp_path):
         assert health["ok"] is True
         assert health["plan"]["error"] is not None
         assert "not found" in health["plan"]["error"]
-        assert health["plan"]["loaded"] == 0
+        assert health["plan"]["loaded"] == []
 
 
 def test_malformed_plan_is_non_fatal(db, tmp_path):
@@ -418,7 +527,7 @@ def test_malformed_plan_is_non_fatal(db, tmp_path):
         health = c.get("/health").json()
         assert health["ok"] is True
         assert health["plan"]["error"] is not None
-        assert health["plan"]["loaded"] == 0
+        assert health["plan"]["loaded"] == []
 
 
 def test_plan_job_creation_failure_is_reported_not_fatal(db, tmp_path):
@@ -432,8 +541,8 @@ jobs:
     app = create_jobs_app(run_engine=False, plan_path=str(plan))
     with TestClient(app) as c:
         health = c.get("/health").json()
-        assert health["plan"]["loaded"] == 1
-        assert health["plan"]["failed"] == 1
+        assert health["plan"]["loaded"] == ["good"]
+        assert [f["id"] for f in health["plan"]["failed"]] == ["bad"]
         assert health["plan"]["error"] is None
         ids = {j["id"] for j in c.get("/jobs").json()}
         assert ids == {"good"}
@@ -446,5 +555,75 @@ def test_example_plan_file_loads_via_create_jobs_app(db):
     app = create_jobs_app(run_engine=False, plan_path=example)
     with TestClient(app) as c:
         health = c.get("/health").json()
-        assert health["plan"]["loaded"] == 6
-        assert health["plan"]["failed"] == 0
+        assert len(health["plan"]["loaded"]) == 6
+        assert health["plan"]["failed"] == []
+
+
+def test_plan_directory_loads_all_files_via_create_jobs_app(db, tmp_path):
+    d = tmp_path / "plan.d"
+    d.mkdir()
+    (d / "a.yaml").write_text("""
+jobs:
+  - id: alpha
+    source: {kind: http, config: {url: "https://a"}}
+""")
+    (d / "b.yaml").write_text("""
+jobs:
+  - id: beta
+    source: {kind: http, config: {url: "https://b"}}
+""")
+    app = create_jobs_app(run_engine=False, plan_path=str(d))
+    with TestClient(app) as c:
+        health = c.get("/health").json()
+        assert health["plan"]["source"] == str(d)
+        assert sorted(health["plan"]["loaded"]) == ["alpha", "beta"]
+        assert health["plan"]["failed"] == []
+        assert health["plan"]["error"] is None
+        ids = {j["id"] for j in c.get("/jobs").json()}
+        assert {"alpha", "beta"} <= ids
+
+
+def test_plan_directory_malformed_file_isolated_via_create_jobs_app(db, tmp_path):
+    d = tmp_path / "plan.d"
+    d.mkdir()
+    (d / "good.yaml").write_text("""
+jobs:
+  - id: good
+    source: {kind: http, config: {url: "https://g"}}
+""")
+    (d / "bad.yaml").write_text("unknown_top_level: true\n")
+    app = create_jobs_app(run_engine=False, plan_path=str(d))
+    with TestClient(app) as c:
+        health = c.get("/health").json()
+        assert health["ok"] is True
+        assert health["plan"]["loaded"] == ["good"]
+        assert [f["file"] for f in health["plan"]["failed"]] == ["bad.yaml"]
+        assert health["plan"]["error"] is None
+        ids = {j["id"] for j in c.get("/jobs").json()}
+        assert ids == {"good"}
+
+
+def test_plan_directory_via_env_var(db, tmp_path, monkeypatch):
+    d = tmp_path / "plan.d"
+    d.mkdir()
+    (d / "a.yaml").write_text("""
+jobs:
+  - id: envdir
+    source: {kind: http, config: {url: "https://e"}}
+""")
+    monkeypatch.setenv(PLAN_ENV, str(d))
+    app = create_jobs_app(run_engine=False)
+    with TestClient(app) as c:
+        health = c.get("/health").json()
+        assert health["plan"]["loaded"] == ["envdir"]
+
+
+def test_example_plan_directory_loads_via_create_jobs_app(db):
+    from pathlib import Path
+
+    example = str(Path(__file__).resolve().parents[1] / "examples" / "ingest-plan.d")
+    app = create_jobs_app(run_engine=False, plan_path=example)
+    with TestClient(app) as c:
+        health = c.get("/health").json()
+        assert len(health["plan"]["loaded"]) >= 2
+        assert health["plan"]["failed"] == []
