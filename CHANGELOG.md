@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Docs
+- `docs/JOBS.md`: documented the `webhook`/`forward` sink's retry-with-backoff and disk-spool config (`retries`, `backoff_secs`, `backoff_max_secs`, `spool_dir`, `spool_max_files`, `$UJIN_SPOOL_DIR`) and the `marketplace_search` source's `detail_cache`/`detail_cache_path`/`detail_cache_ttl_secs` options, which were already shipped in `ujin/jobs/sinks.py` and `ujin/poll/marketplace.py` but missing from the docs tables.
+
 ### Added (test coverage)
 - Added offline, deterministic tests to `tests/test_robots.py` and `tests/test_diff.py` covering previously-uncovered paths: repeated-agent parse branch (`55->57`), unknown-directive skip (`75->37`), empty-pattern `_match` short-circuit (line 131), `re.error` guard (lines 144–145), full `_http_fetcher` body (lines 161–171, via aiohttp mock/import-failure), and `extract_regions` empty-selectors early return (region.py line 30); lifting `ujin/robots.py` and `ujin/diff/region.py` to 100% line and branch coverage.
 - Added 8 offline, deterministic tests to `tests/test_extract_contacts.py` covering previously-uncovered edge paths in `ujin/extract/contacts.py`: empty/whitespace-only `href` anchor (line 153), empty `mailto:` and `tel:` address/number branches (lines 158, 162), and the three exception-guard fallbacks in `_is_social_href`, `_resolve`, and `extract_contacts` (lines 85–86, 94–95, 123–124), lifting the module to 100% line and branch coverage.

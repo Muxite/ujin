@@ -49,7 +49,7 @@ in-memory `POST /targets` left open.
 | `browser` | `url`, `engine?`, `actions[]`, `extract?` (`links`\|`article`\|`structured`\|`raw`), `results_selector?`, `headless?` | drive a real browser through an interaction recipe (`load_more`, scroll, click), then extract — see [BROWSER.md](BROWSER.md) |
 | `amazon_search` | `term` (or `terms[]`), `domain?`, `max_results?`, `category?`, `engine?`, `with_description?`, `headless?`, `proxy?`, `timeout_secs?` | search Amazon for a single term or fan out across a list of terms concurrently via `MultiPollable` (results merged); see [MARKETPLACE.md](MARKETPLACE.md) |
 | `amazon_category` | `categories?`, `terms_per_poll?`, `max_results?`, `domain?`, `engine?`, `headless?`, `harvest?`, `harvest_path?`, `harvest_ratio?`, `proxy?`, `timeout_secs?` | sweep Amazon category pages, sampling from a rotating pool of search terms; see [MARKETPLACE.md](MARKETPLACE.md) |
-| `marketplace_search` | `profile` (required), `profiles?`, `profiles_path?`, `categories?`, `terms_per_poll?`, `max_results?`, `engine?`, `with_description?`, `headless?`, `proxy?`, `timeout_secs?` | profile-driven search over any marketplace site; profiles resolved from inline `profiles` dict, `profiles_path` file, or `$UJIN_MARKETPLACE_PROFILES` env var — see [MARKETPLACE.md](MARKETPLACE.md) |
+| `marketplace_search` | `profile` (required), `profiles?`, `profiles_path?`, `categories?`, `terms_per_poll?`, `max_results?`, `engine?`, `with_description?`, `headless?`, `proxy?`, `timeout_secs?`, `detail_cache?`, `detail_cache_path?`, `detail_cache_ttl_secs?` | profile-driven search over any marketplace site; profiles resolved from inline `profiles` dict, `profiles_path` file, or `$UJIN_MARKETPLACE_PROFILES` env var; `detail_cache: true` skips re-fetching detail pages for source_ids seen within `detail_cache_ttl_secs` (default 7 days) — see [MARKETPLACE.md](MARKETPLACE.md) |
 | `plugin:<name>` | (plugin-defined) | a custom source — see PLUGINS.md |
 
 ### Transforms (`kind`) — run in order; one returning nothing drops the event
@@ -72,7 +72,7 @@ in-memory `POST /targets` left open.
 ### Sinks (`kind`) — fan out concurrently; one failing sink never blocks the others
 | kind | config | effect |
 |------|--------|--------|
-| `webhook` | `url`, `method?`, `headers?`, `hmac_secret?` | POST JSON; optional `X-Ujin-Signature: sha256=…` |
+| `webhook` | `url`, `method?`, `headers?`, `hmac_secret?`, `retries?`, `backoff_secs?`, `backoff_max_secs?`, `spool_dir?`, `spool_max_files?` | POST JSON; optional `X-Ujin-Signature: sha256=…`; retries with jittered exponential backoff on connect errors/timeouts/429/5xx, then spools undelivered events to disk (`spool_dir`, default `$UJIN_SPOOL_DIR` or `/data/spool`; empty string disables spooling) and replays them oldest-first once the backend recovers |
 | `forward` | same as webhook | generalized forward to another HTTP service |
 | `ws` | — | push the full event to `WS /jobs/events` clients |
 | `jsonl` / `file` | `path` | append one JSON line per event |
