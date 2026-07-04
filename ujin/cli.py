@@ -183,6 +183,23 @@ def _cmd_jobs_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_jobs_validate(args: argparse.Namespace) -> int:
+    from ujin.jobs.validate import validate
+
+    if not args.jobs and not args.workflows and not args.plan:
+        print("ujin: nothing to validate — pass a jobs.yaml, --workflows DIR, and/or --plan FILE|DIR",
+              file=sys.stderr)
+        return 1
+
+    result = validate(args.jobs, workflows_dir=args.workflows, plan_path=args.plan)
+    for issue in result.issues:
+        print(f"INVALID  {issue}")
+    for job_id in result.loaded:
+        print(f"ok  {job_id}")
+    print(f"{len(result.loaded)} valid, {len(result.issues)} invalid")
+    return 0 if result.ok else 1
+
+
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
     from ujin.mcp import serve
 
@@ -576,6 +593,28 @@ def main(argv: list[str] | None = None) -> int:
     p_jobs.add_argument("--host", default="0.0.0.0", help="bind address (default: 0.0.0.0)")
     p_jobs.add_argument("--port", type=int, default=8902, help="port (default: 8902)")
     p_jobs.set_defaults(func=_cmd_jobs_serve)
+
+    p_jobs_validate = sub.add_parser(
+        "jobs-validate", help="dry-load a jobs/workflows/plan config and report problems, no server",
+        description="Validate a jobs.yaml, --workflows directory, and/or --plan "
+                    "file|directory the same way jobs-serve would load them, "
+                    "without starting anything. Reports every problem found "
+                    "(which job, which field, what's wrong) and exits non-zero "
+                    "on any failure.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="examples:\n"
+               "  ujin jobs-validate examples/jobs.crossref.yaml\n"
+               "  ujin jobs-validate --workflows ./workflows\n"
+               "  ujin jobs-validate --plan examples/ingest-plan.yaml\n"
+               "  ujin jobs-validate examples/jobs.crossref.yaml --workflows ./workflows",
+    )
+    p_jobs_validate.add_argument("jobs", nargs="?", default=None,
+                        help="jobs.yaml to validate")
+    p_jobs_validate.add_argument("--workflows", default=None,
+                        help="directory of workflow files to validate")
+    p_jobs_validate.add_argument("--plan", default=None,
+                        help="external ingest-plan file or directory to validate")
+    p_jobs_validate.set_defaults(func=_cmd_jobs_validate)
 
     p_watch = sub.add_parser(
         "watch", help="watch a URL's regions for change (adaptive, jittered)",

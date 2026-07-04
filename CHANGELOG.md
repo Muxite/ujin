@@ -57,6 +57,18 @@
   `_load_workflows_dir(path, *, failed=None)` now optionally collects file-level
   load failures. Non-matrix workflows are unaffected. Documented in
   `docs/WORKFLOWS.md` with a runnable `examples/workflows/status-pages.yaml`.
+### Added (CLI)
+- Added `ujin jobs-validate [jobs.yaml] [--workflows DIR] [--plan FILE|DIR]`
+  (`ujin/jobs/validate.py`) to dry-load a jobs file, workflows directory, and/or
+  ingest plan the same way `jobs-serve` would, without starting a server. Now
+  also resolves `defaults:`/`include:`/`use:` fragments and `matrix:`/`for_each:`
+  fan-out (both the per-job `matrix:` shape and workflow-file-level fan-out) so
+  validation stays in sync with the rest of the loader. Reports every problem
+  found (which job, which field, expected vs. got) instead of stopping at the
+  first one — missing/malformed `source`, a non-mapping `matrix:`, a missing or
+  cyclic `include:`/`use:` fragment, duplicate job ids (within a file, across a
+  workflows directory, and across an ingest plan), and unknown top-level keys in
+  a jobs file — and exits non-zero on any failure, zero on success.
 
 ### Added (test coverage)
 - Added offline, deterministic tests to `tests/test_robots.py` and `tests/test_diff.py` covering previously-uncovered paths: repeated-agent parse branch (`55->57`), unknown-directive skip (`75->37`), empty-pattern `_match` short-circuit (line 131), `re.error` guard (lines 144–145), full `_http_fetcher` body (lines 161–171, via aiohttp mock/import-failure), and `extract_regions` empty-selectors early return (region.py line 30); lifting `ujin/robots.py` and `ujin/diff/region.py` to 100% line and branch coverage.

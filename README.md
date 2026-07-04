@@ -108,6 +108,7 @@ sinks → schedule** — with no code for the common cases. See [docs/JOBS.md](d
 ```bash
 ujin jobs-serve                              # :8902, durable sqlite jobstore
 ujin jobs-serve examples/jobs.crossref.yaml  # preload jobs from YAML
+ujin jobs-validate examples/jobs.crossref.yaml  # dry-load + check, no server
 ```
 
 ```bash
@@ -192,6 +193,7 @@ ujin serve targets.yaml      # run the poll engine as a daemon
 ujin api [targets.yaml]      # poller control service (REST + WS) on :8900
 ujin scrape-serve            # rich scrape HTTP service on :8901
 ujin jobs-serve [jobs.yaml] [--workflows DIR] [--plan FILE|DIR]  # job control plane on :8902
+ujin jobs-validate [jobs.yaml] [--workflows DIR] [--plan FILE|DIR]  # dry-load + validate, no server
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
 ujin learned site_state.db   # inspect the durable per-host learned state (--json)
