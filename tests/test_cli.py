@@ -115,6 +115,49 @@ def test_main_jobs_serve_dispatch_plan(monkeypatch):
     assert called["plan_path"] == "/plan.yaml"
 
 
+def test_main_jobs_validate_valid_exits_zero(tmp_path, capsys):
+    p = tmp_path / "jobs.yaml"
+    p.write_text(
+        "jobs:\n"
+        "  - id: watch-example\n"
+        "    name: watch-example\n"
+        "    source: { kind: html, config: { url: 'https://example.com' } }\n"
+    )
+    rc = cli.main(["jobs-validate", str(p)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "watch-example" in out
+    assert "1 valid, 0 invalid" in out
+
+
+def test_main_jobs_validate_invalid_exits_nonzero(tmp_path, capsys):
+    p = tmp_path / "jobs.yaml"
+    p.write_text("jobs:\n  - id: bad\n    name: bad\n    matrix: 5\n")
+    rc = cli.main(["jobs-validate", str(p)])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "INVALID" in out
+    assert "job #0" in out
+
+
+def test_main_jobs_validate_no_args_exits_nonzero(capsys):
+    rc = cli.main(["jobs-validate"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "nothing to validate" in err
+
+
+def test_main_jobs_validate_workflows_dir(tmp_path, capsys):
+    wf = tmp_path / "workflows"
+    wf.mkdir()
+    (wf / "watch-docs.yaml").write_text(
+        "source: { kind: html, config: { url: 'https://example.com' } }\n"
+    )
+    rc = cli.main(["jobs-validate", "--workflows", str(wf)])
+    assert rc == 0
+    assert "watch-docs" in capsys.readouterr().out
+
+
 def test_main_serve_dispatch(monkeypatch, tmp_path):
     p = tmp_path / "targets.yaml"
     p.write_text(TARGETS_YAML)

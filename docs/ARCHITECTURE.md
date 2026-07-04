@@ -34,7 +34,7 @@ ujin/
 ├── jobs/            JobSpec/JobStore/JobManager/pipeline + :8902 app        [jobs]
 ├── service.py       poller control :8900 app                                [service]
 ├── mcp/             FastMCP server over scrape+jobs                         [mcp]
-└── cli.py           serve/sweep/api/scrape-serve/jobs-serve/mcp-serve/watch
+└── cli.py           serve/sweep/api/scrape-serve/jobs-serve/jobs-validate/mcp-serve/watch
 ```
 
 ## The poll loop (engine.py + adapt/)

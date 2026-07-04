@@ -123,6 +123,30 @@ at once from `defaults:` + per-job `matrix:`. See
 Every change also emits a compact `{"event":"change","job_id",...}` on
 `WS /jobs/events`, independent of whether the job has a `ws` sink.
 
+## Validating config offline
+
+`ujin jobs-validate` dry-loads a jobs file and/or a workflows directory the
+same way `jobs-serve` would at startup, but never binds a port or touches the
+jobstore. It reports every problem it finds — which job, which field, what was
+expected — and exits non-zero on any failure (zero if everything loads clean):
+
+```bash
+ujin jobs-validate examples/jobs.crossref.yaml
+ujin jobs-validate --workflows ./workflows
+ujin jobs-validate examples/jobs.crossref.yaml --workflows ./workflows
+```
+
+```
+INVALID  jobs.yaml [job #0]: 'matrix:' must be a mapping of variable -> list of values, got int
+INVALID  jobs.yaml [job #2]: duplicate job id 'dup' (already defined in jobs.yaml)
+ok  crossref-quantum-error-correction
+1 valid, 2 invalid
+```
+
+Checks a malformed/missing `source`, a non-mapping `matrix:`, duplicate job
+ids (within a file and across a whole workflows directory), and unknown
+top-level keys in a jobs file (only `jobs:` is expected).
+
 ## Auth (optional)
 
 Off by default — trust the network / run behind a reverse proxy. Set
