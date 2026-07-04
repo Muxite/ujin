@@ -1,0 +1,33 @@
+# Directory-style ingest plan (fragment 2 of 2).
+#
+# A second file in the same directory. Its `defaults:` apply only to the jobs
+# in THIS file — each file is parsed on its own — so the two fragments stay
+# independent while contributing to one merged job set.
+
+defaults:
+  sinks:
+    - kind: sqlite
+  schedule:
+    mode: adaptive
+    base: 900
+    min: 300
+    max: 7200
+
+jobs:
+  # No `matrix:` -> exactly one job. "${VAR:-default}" expands from the
+  # process environment.
+  - id: homepage
+    source:
+      kind: http
+      config:
+        url: "${INGEST_BASE:-https://example.com}/"
+
+  # List-of-rows matrix -> explicit per-job values (feed-releases, feed-tags).
+  - id: feed-${name}
+    matrix:
+      - { name: releases, path: /releases.atom }
+      - { name: tags, path: /tags.atom }
+    source:
+      kind: rss
+      config:
+        url: "${FEED_BASE:-https://example.com}${path}"

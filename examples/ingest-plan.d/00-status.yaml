@@ -1,0 +1,31 @@
+# Directory-style ingest plan (fragment 1 of 2).
+#
+# When the ingest-plan path points at a DIRECTORY, ujin loads every
+# *.yaml / *.yml file in it in sorted (deterministic) filename order and
+# merges all the jobs into one set. Each file is an ordinary plan document
+# (same `defaults:` + `jobs:` + `matrix:` schema as a single-file plan) and
+# is parsed independently, so a malformed file is skipped and reported under
+# /health.plan.failed without aborting the others.
+#
+# Load the whole directory with:
+#   ujin jobs-serve --plan examples/ingest-plan.d
+#   UJIN_INGEST_PLAN=examples/ingest-plan.d ujin jobs-serve
+
+defaults:
+  sinks:
+    - kind: sqlite
+  schedule:
+    mode: adaptive
+    base: 600
+    min: 120
+    max: 3600
+
+jobs:
+  # Mapping matrix -> one job per name (status-github, status-npm, status-pypi).
+  - id: status-${name}
+    matrix:
+      name: [github, npm, pypi]
+    source:
+      kind: http
+      config:
+        url: "https://status.${name}.example.com/"
