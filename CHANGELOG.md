@@ -4,6 +4,7 @@
 
 ### Docs
 - `docs/JOBS.md`: documented the `webhook`/`forward` sink's retry-with-backoff and disk-spool config (`retries`, `backoff_secs`, `backoff_max_secs`, `spool_dir`, `spool_max_files`, `$UJIN_SPOOL_DIR`) and the `marketplace_search` source's `detail_cache`/`detail_cache_path`/`detail_cache_ttl_secs` options, which were already shipped in `ujin/jobs/sinks.py` and `ujin/poll/marketplace.py` but missing from the docs tables.
+- `docs/JOBS.md`'s REST surface line and `docs/WORKFLOWS.md`'s `GET /health` example were stale — `ujin/jobs/app.py`'s handler actually returns `{ok, status, service, jobs, plugins, workflows}`, not `{ok, jobs, plugins, workflows}`; also added a populated `workflows.failed` example to WORKFLOWS.md alongside the empty one.
 
 ### Added (test coverage)
 - Added offline, deterministic tests to `tests/test_robots.py` and `tests/test_diff.py` covering previously-uncovered paths: repeated-agent parse branch (`55->57`), unknown-directive skip (`75->37`), empty-pattern `_match` short-circuit (line 131), `re.error` guard (lines 144–145), full `_http_fetcher` body (lines 161–171, via aiohttp mock/import-failure), and `extract_regions` empty-selectors early return (region.py line 30); lifting `ujin/robots.py` and `ujin/diff/region.py` to 100% line and branch coverage.

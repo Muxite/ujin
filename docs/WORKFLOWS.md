@@ -64,11 +64,19 @@ Run it locally without Docker:
 ujin jobs-serve --workflows ./examples/workflows      # or set UJIN_WORKFLOWS_DIR
 ```
 
-`GET /health` reports what was set up:
+`GET /health` reports what was set up — `loaded` holds the ids that registered
+cleanly; a file with an unknown/invalid kind lands in `failed` instead of
+aborting startup:
 
 ```json
-{ "ok": true, "jobs": 2,
+{ "ok": true, "status": "ok", "service": "ujin-jobs", "jobs": 2,
   "workflows": { "dir": "/workflows", "loaded": ["crossref-papers", "example-page"], "failed": [] } }
+```
+
+```json
+{ "ok": true, "status": "ok", "service": "ujin-jobs", "jobs": 1,
+  "workflows": { "dir": "/workflows", "loaded": ["crossref-papers"],
+                 "failed": [{"id": "broken-page", "error": "unknown source kind: 'htttp'"}] } }
 ```
 
 ## Collect — the container does the job

@@ -90,7 +90,7 @@ in-memory `POST /targets` left open.
 ## REST surface (`:8902`)
 
 ```
-GET    /health                  {ok, jobs, plugins, workflows}
+GET    /health                  {ok, status, service, jobs, plugins, workflows}
 GET    /kinds                   available source/transform/sink kinds
 GET    /metrics                 engine stats + per-job + plugin status
 GET    /jobs                    list job summaries
