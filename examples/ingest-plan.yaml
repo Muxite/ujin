@@ -1,0 +1,52 @@
+# Example ingest plan — declare a batch of jobs from one mounted file.
+#
+# Mount it and point ujin at it with either:
+#   ujin jobs-serve --plan examples/ingest-plan.yaml
+#   UJIN_INGEST_PLAN=/plans/ingest-plan.yaml ujin jobs-serve
+#
+# See docs/INGEST_PLAN.md for the full format. This file is generic: it carries
+# no site- or consumer-specific identifiers, only the loader's own mechanisms.
+
+# `defaults` are deep-merged into every job below.
+defaults:
+  schedule:
+    mode: adaptive
+    base: 300
+  sinks:
+    - kind: sqlite
+      config: {}
+
+# `templates` are named fragments a job opts into with `use:`.
+templates:
+  feed:
+    source:
+      kind: rss
+    transforms:
+      - kind: dedupe
+        config: {key: id}
+
+jobs:
+  # A plain job: inherits the defaults, sets its own id + source.
+  - id: status-page
+    source:
+      kind: http
+      config:
+        url: https://example.com/status
+
+  # Pull in the `feed` template, then override the feed URL. A ${VAR:-default}
+  # reference is filled from the environment at load time.
+  - id: blog-feed
+    use: feed
+    source:
+      config:
+        url: ${BLOG_FEED_URL:-https://example.com/blog.xml}
+
+  # `matrix` expands one entry into one job per combination. `${region}` is
+  # substituted across the body; ids become mirror-<0..2>.
+  - id: mirror
+    use: feed
+    matrix:
+      region: [us, eu, ap]
+    source:
+      config:
+        url: https://${region}.example.com/feed.xml

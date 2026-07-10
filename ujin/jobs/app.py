@@ -130,10 +130,28 @@ def _load_workflows_dir(path: str) -> list:
     return specs
 
 
+def _load_ingest_plan(path: str) -> tuple[list, str | None]:
+    """Load an ingest-plan file, returning ``(specs, error)``.
+
+    A bad or missing plan is non-fatal: the error string is returned (not raised)
+    so startup can log it and surface it on ``/health``, mirroring how the
+    workflows-dir loader reports a bad file.
+    """
+    from .plan import PlanError, load_plan
+
+    try:
+        return load_plan(path), None
+    except PlanError as exc:
+        return [], str(exc)
+    except Exception as exc:  # noqa: BLE001 -- never let a plan block startup
+        return [], f"{type(exc).__name__}: {exc}"
+
+
 def create_jobs_app(
     config_path: str | None = None,
     *,
     workflows_dir: str | None = None,
+    plan_path: str | None = None,
     scrape_config: Any = None,
     run_engine: bool = True,
 ) -> Any:
@@ -150,8 +168,11 @@ def create_jobs_app(
     from .manager import JobManager, UnknownKind
     from .store import JobStore
 
+    from .plan import PLAN_ENV
+
     db_path = os.environ.get("UJIN_JOBS_DB", "./ujin-jobs.db")
     wf_dir = workflows_dir or os.environ.get("UJIN_WORKFLOWS_DIR", "/workflows")
+    plan_src = plan_path or os.environ.get(PLAN_ENV)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -201,6 +222,24 @@ def create_jobs_app(
                 wf_status["failed"].append({"id": spec.id, "error": str(exc)})
         app.state.workflows = wf_status
 
+        # External ingest plan: one mounted file declaring many jobs (defaults +
+        # matrix expansion). Same non-fatal contract as the workflows dir — a bad
+        # or missing plan is logged and reported on /health, never fatal.
+        plan_status: dict[str, Any] = {"path": plan_src, "loaded": [], "failed": []}
+        if plan_src:
+            specs, plan_error = _load_ingest_plan(plan_src)
+            if plan_error is not None:
+                log.warning("ingest plan %s not loaded: %s", plan_src, plan_error)
+                plan_status["error"] = plan_error
+            for spec in specs:
+                try:
+                    manager.create(spec)
+                    plan_status["loaded"].append(spec.id)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("ingest plan job %s failed: %s", spec.id, exc)
+                    plan_status["failed"].append({"id": spec.id, "error": str(exc)})
+        app.state.plan = plan_status
+
         app.state.engine = engine
         app.state.store = store
         app.state.hub = hub
@@ -240,7 +279,9 @@ def create_jobs_app(
                 "jobs": len(m.jobs),
                 "plugins": getattr(app.state, "plugins", {"loaded": [], "failed": []}),
                 "workflows": getattr(app.state, "workflows",
-                                     {"dir": wf_dir, "loaded": [], "failed": []})}
+                                     {"dir": wf_dir, "loaded": [], "failed": []}),
+                "plan": getattr(app.state, "plan",
+                                {"path": plan_src, "loaded": [], "failed": []})}
 
     @app.get("/kinds")
     def kinds() -> dict[str, Any]:
@@ -393,9 +434,11 @@ def serve(  # pragma: no cover -- launches uvicorn; not testable without a live 
     port: int = 8902,
     config_path: str | None = None,
     workflows_dir: str | None = None,
+    plan_path: str | None = None,
 ) -> None:
     import uvicorn
 
     uvicorn.run(
-        create_jobs_app(config_path, workflows_dir=workflows_dir), host=host, port=port
+        create_jobs_app(config_path, workflows_dir=workflows_dir, plan_path=plan_path),
+        host=host, port=port,
     )

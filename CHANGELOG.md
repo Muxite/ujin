@@ -1,6 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## 0.48.0 — 2026-07-10
+
+- **External ingest plans** — a new generic loader (`ujin/jobs/plan.py`: `load_plan` / `parse_plan` / `PlanError`) lets one mounted file declare a whole batch of jobs at once, sharing config through `defaults` (deep-merged into every job), named `templates` (opted into with `use:`), and a per-entry `matrix` (cartesian expansion with type-preserving `${VAR}` / `${VAR:-default}` substitution). The path comes from a new `--plan` flag on `ujin jobs-serve` or `$UJIN_INGEST_PLAN` (mirroring `$UJIN_MARKETPLACE_PROFILES`); `create_jobs_app`/`serve` load it alongside the existing config-path and workflows-dir paths, which are unchanged. A bad or missing plan is non-fatal — logged and surfaced on `/health` under a new `plan` block (`path`/`loaded`/`failed`/`error`), just like a bad workflow file. Ships `examples/ingest-plan.yaml` and `docs/INGEST_PLAN.md`; the loader carries no consumer-specific identifiers. Documented in `README.md`.
 
 ### Added (test coverage)
 - Added offline, deterministic tests to `tests/test_robots.py` and `tests/test_diff.py` covering previously-uncovered paths: repeated-agent parse branch (`55->57`), unknown-directive skip (`75->37`), empty-pattern `_match` short-circuit (line 131), `re.error` guard (lines 144–145), full `_http_fetcher` body (lines 161–171, via aiohttp mock/import-failure), and `extract_regions` empty-selectors early return (region.py line 30); lifting `ujin/robots.py` and `ujin/diff/region.py` to 100% line and branch coverage.
@@ -29,6 +31,12 @@
   `examples/marketplace_profiles.yaml`; mount or pass it to retain previous behaviour. See
   `docs/MARKETPLACE.md`. This lets the specific scraping config live in the consuming app
   (e.g. wordle-max) rather than inside ujin.
+
+<!-- TODO(changelog-gap): releases 0.19.0–0.47.0 bumped the package version
+     (see `git log --oneline | grep 'chore(release)'`) without adding a
+     CHANGELOG section each. The marketplace + coverage entries above accumulated
+     across that span and are grouped under 0.48.0. Reconstruct per-release notes
+     from git history if a precise, release-by-release changelog is required. -->
 
 ## 0.18.0 — 2026-06-22
 

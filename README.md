@@ -131,6 +131,14 @@ id**, and ujin sets it up on startup, runs it, and hands back what it obtained a
 `GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). See
 [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
+Declaring a whole batch at once? Mount a single **ingest plan** and pass
+`--plan <file>` (or set `$UJIN_INGEST_PLAN`, mirroring `$UJIN_MARKETPLACE_PROFILES`).
+One file declares many jobs, sharing config through `defaults` (deep-merged into
+every job) and a `matrix` (cartesian expansion), so `ujin jobs-serve --plan
+examples/ingest-plan.yaml` registers the whole topology on startup. A bad or
+missing plan is logged and surfaced on `/health` (never fatal). See
+[docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
+
 Need something the built-ins don't cover? Drop a Python file into the mounted
 `/plugins` volume and it becomes a `plugin:<name>` source/transform/sink — see
 [docs/PLUGINS.md](docs/PLUGINS.md). Sibling projects can also extend ujin in-tree
@@ -173,7 +181,7 @@ ujin sweep targets.yaml      # poll all targets once; print what changed
 ujin serve targets.yaml      # run the poll engine as a daemon
 ujin api [targets.yaml]      # poller control service (REST + WS) on :8900
 ujin scrape-serve            # rich scrape HTTP service on :8901
-ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902
+ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902 (--plan for a batch ingest plan)
 ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
 ujin watch URL --selector …  # watch a page's regions for change
 ujin learned site_state.db   # inspect the durable per-host learned state (--json)
@@ -321,7 +329,7 @@ Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [ADAPTIVE](docs/ADAPTIVE.md) ·
 [BACKENDS](docs/BACKENDS.md) (aiohttp vs obscura vs playwright vs selenium) ·
 [PERFORMANCE](docs/PERFORMANCE.md) · [CONSUMERS](docs/CONSUMERS.md)
 (downstream submodule contracts) · [API](docs/API.md) · [JOBS](docs/JOBS.md) ·
-[WORKFLOWS](docs/WORKFLOWS.md) · [PLUGINS](docs/PLUGINS.md) ·
+[WORKFLOWS](docs/WORKFLOWS.md) · [INGEST_PLAN](docs/INGEST_PLAN.md) · [PLUGINS](docs/PLUGINS.md) ·
 [LIST_TRANSFORMS](docs/LIST_TRANSFORMS.md) (filter/flatten/sort/limit/rename/aggregate/unique/fill/csv) ·
 [MARKETPLACE](docs/MARKETPLACE.md) (generic engine; site profiles supplied externally) ·
 [BROWSER](docs/BROWSER.md) · [MCP](docs/MCP.md) · [CHANGELOG](CHANGELOG.md)

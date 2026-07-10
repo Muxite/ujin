@@ -1,6 +1,6 @@
 # Testing
 
-The suite is **fully offline and deterministic**: ~440 tests in ~5 s, no
+The suite is **fully offline and deterministic**: 1,537 tests in ~9 s, no
 internet, no real browsers, no obscura binary. Coverage is gated in CI
 (`fail_under = 85`, branch coverage on).
 
