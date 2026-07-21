@@ -18,3 +18,6 @@ ujin-jobs.db
 .claude/
 # Orchestrator runtime state (cycle/backlog/verdicts/logs) — never tracked.
 orchestrator/state/
+# Stray local lockfile — the project's declared install path is pip/hatchling
+# (pip install -e .[all,dev]), not uv; not adopted as a build dependency.
+uv.lock
