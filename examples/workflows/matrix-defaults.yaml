@@ -1,0 +1,31 @@
+# A ujin *matrix + defaults* workflow (Track 1 composition).
+#
+# A top-level `defaults:` mapping is DEEP-MERGED under every job template BEFORE
+# the matrix fans out, so shared source/schedule settings live in one place and
+# each template still expands to ONE JOB PER ENTRY. Nested mappings merge
+# recursively (a job's `source.config.url` layers over `defaults.source.config`),
+# while scalars/lists replace rather than concatenate.
+#
+# This file upserts two jobs — `watch-alpha`, `watch-beta` — each with
+# `source.kind: http`, `source.config.timeout: 30`, and `schedule.mode: once`
+# inherited from defaults, plus its own per-entry url. Run it with
+# `ujin jobs-serve --workflows ./examples/workflows`.
+
+defaults:
+  source:
+    kind: http
+    config:
+      timeout: 30
+  schedule:
+    mode: once
+
+jobs:
+  - id: watch-${NAME}
+    matrix:
+      - NAME: alpha
+        URL: https://alpha.example.com/status
+      - NAME: beta
+        URL: https://beta.example.com/status
+    source:
+      config:
+        url: "${URL}"     # merged with defaults.source.config.timeout

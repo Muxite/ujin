@@ -1,0 +1,39 @@
+# A ujin *matrix* workflow: one template fanned out over a list of variable maps.
+#
+# The `matrix:` (alias `for_each:`) key turns this single file into ONE JOB PER
+# ENTRY. Each entry's variables are substituted into the whole tree
+# (source / transforms / sinks / schedule) with the usual ${VAR} / ${VAR:-default}
+# syntax, and each generated job gets a distinct, deterministic id derived from
+# the template id + the entry — here `matrix-status-alpha`, `matrix-status-beta`,
+# `matrix-status-gamma`. Re-loading the same file upserts the same three jobs.
+#
+# Drop this into your mounted ./workflows directory (or run
+# `ujin jobs-serve --workflows ./examples/workflows`) and query them at
+# GET /jobs/matrix-status-alpha, etc.
+
+matrix:
+  - NAME: alpha
+    HOST: alpha.example.com
+    INTERVAL: 2
+  - NAME: beta
+    HOST: beta.example.com
+    INTERVAL: 10
+  - NAME: gamma
+    HOST: gamma.example.com
+    # INTERVAL omitted -> ${INTERVAL:-5} falls back to the default below
+
+source:
+  kind: http
+  config:
+    url: "https://${HOST}/status"
+transforms:
+  - kind: select
+    config:
+      path: payload
+sinks:
+  - kind: jsonl
+    config:
+      path: "./out/status-${NAME}.jsonl"
+schedule:
+  mode: cron
+  cron: "*/${INTERVAL:-5} * * * *"   # ${VAR:-default} still applies per entry

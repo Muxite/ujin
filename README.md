@@ -132,7 +132,14 @@ id**, and ujin sets it up on startup, runs it, and hands back what it obtained a
 boilerplate across jobs with a top-level `defaults:` block (deep-merged into every
 job, per-job keys win) and reusable fragments via `include:`/`use:` (a shared sink,
 transform pipeline, or schedule; resolved against `$UJIN_WORKFLOWS_DIR` then the
-file's directory, with nested-include + cycle-guard support). See
+file's directory, with nested-include + cycle-guard support). A `matrix:` (alias
+`for_each:`) key fans **one template out into one job per entry** — a list of
+variable maps, or a mapping of axes expanded to the cartesian product —
+substituting each entry's `${VAR}` variables into the source/transforms/sinks/
+schedule with distinct, deterministic ids (a whole-scalar `${VAR}` keeps its
+numeric type), composing after `defaults:`/`include:` resolution. A malformed
+matrix or a duplicate generated id is reported non-fatally under `GET /health`
+`workflows.failed` while the rest keep loading. See
 [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
 Declaring a whole batch at once? Mount a single **ingest plan** and pass

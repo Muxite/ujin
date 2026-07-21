@@ -125,6 +125,110 @@ and a per-job include overrides a file-level one. A missing fragment, a cyclic
 include, or a malformed directive raises `WorkflowIncludeError` — fatal for an
 explicit `--config` file, logged-and-skipped for a workflows-directory file.
 
+## Fan out with a matrix
+
+A `matrix:` (alias `for_each:`) key turns **one template into one job per entry**.
+Each entry is a map of variables substituted into the whole tree
+(source/transforms/sinks/schedule) with the usual `${VAR}` / `${VAR:-default}`
+syntax. Every generated job gets a distinct, deterministic id derived from the
+template id + the entry, so re-loading the file **upserts the same jobs**:
+
+```yaml
+# /workflows/status.yaml
+matrix:
+  - NAME: alpha
+    HOST: alpha.example.com
+    INTERVAL: 2
+  - NAME: beta
+    HOST: beta.example.com          # INTERVAL omitted -> ${INTERVAL:-5}
+source:
+  kind: http
+  config: { url: "https://${HOST}/status" }
+sinks:
+  - kind: jsonl
+    config: { path: "./out/status-${NAME}.jsonl" }
+schedule:
+  mode: cron
+  cron: "*/${INTERVAL:-5} * * * *"
+```
+
+This loads two workflows, `status-alpha` and `status-beta`.
+
+### A mapping of axes (cartesian product)
+
+Instead of a list of rows, `matrix:`/`for_each:` may be a **mapping of axes** —
+each key names a variable and maps to a list of values. The template fans out over
+the cartesian product of the axes (first axis varies slowest, last fastest):
+
+```yaml
+# /workflows/regions.yaml
+id: watch-${REGION}-${ENV}
+for_each:
+  REGION: [us, eu]
+  ENV: [prod, dev]
+source:
+  kind: http
+  config: { url: "https://${REGION}.${ENV}.example.com/status" }
+```
+
+This loads four workflows: `watch-us-prod`, `watch-us-dev`, `watch-eu-prod`,
+`watch-eu-dev`.
+
+Notes:
+
+- Ids default to `<template-id>-<slug-of-entry>`. The slug prefers a conventional
+  identity variable (`id`/`name`, case-insensitive — e.g. `NAME`), else a slug of
+  all the entry's values; distinct entries whose slugs collide are disambiguated
+  by index so ids stay distinct.
+- Set an explicit `id:` with a var to steer it (`id: svc-${NAME}` ->
+  `svc-alpha`, `svc-beta`).
+- **Type is preserved for whole-scalar references.** A value that is *exactly*
+  `${VAR}` keeps the matrix value's native type — `base: ${INTERVAL}` with
+  `INTERVAL: 300` stays the integer `300`. Partial interpolation
+  (`.../${NAME}/x`) is always a string.
+- `for_each:` is an exact alias for `matrix:`.
+- A malformed matrix (neither a list nor a mapping of axes, an entry that isn't a
+  variable map, or an axis whose value isn't a list) fails with a
+  `WorkflowMatrixError` naming the template; it lands in the `failed` list (see
+  `GET /health`) instead of aborting startup — valid workflows still load.
+- A **duplicate generated id** — two entries carrying the same explicit `id`/`name`
+  identity (or a var-driven `id:` template that substitutes to the same string) —
+  is likewise a `WorkflowMatrixError` naming the template and the offending id, and
+  lands in `failed` without preventing other files from loading. (A collision that
+  is only a slugification artifact of *distinct* values is disambiguated silently,
+  not rejected.)
+- Matrix fan-out composes **after** `defaults:`/`include:`/`use:` resolution, so a
+  matrix template inherits shared defaults and fragments — see below. Env-only
+  workflows with no `matrix:`/`for_each:` key load exactly as before.
+
+Both `defaults:` and `include:`/`use:` (above) apply to a matrix template exactly
+as they do to a plain job — they're resolved once per template, **before** the
+matrix fans out, so every generated job inherits the shared settings:
+
+```yaml
+defaults:
+  source:
+    kind: http
+    config: { timeout: 30 }
+  schedule: { mode: once }
+jobs:
+  - id: watch-${NAME}
+    matrix:
+      - { NAME: alpha, URL: https://a.example.com }
+      - { NAME: beta,  URL: https://b.example.com }
+    source:
+      config: { url: ${URL} }        # merged with defaults.source.config.timeout
+```
+
+Both expanded jobs (`watch-alpha`, `watch-beta`) get `source.kind: http`,
+`source.config.timeout: 30`, and `schedule.mode: once` from `defaults`, with each
+entry's `url` layered on top. `defaults:` also merges into a single top-level
+`matrix:` template that has no wrapping `jobs:` list (the one-file matrix form).
+See [`examples/workflows/matrix-defaults.yaml`](../examples/workflows/matrix-defaults.yaml)
+for a runnable matrix + defaults example, and
+[`examples/workflows/matrix-status.yaml`](../examples/workflows/matrix-status.yaml)
+for a plain matrix fan-out.
+
 Run it locally without Docker:
 
 ```bash

@@ -24,6 +24,7 @@ Needs the ``jobs`` extra (fastapi, uvicorn, websockets, pydantic, scrape stack).
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import os
 import re
@@ -50,6 +51,13 @@ log = logging.getLogger("ujin.jobs.app")
 # with no default expands to "" (and logs once), mirroring shell semantics.
 _ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
+# A value that is *exactly* one ``${VAR}`` reference and nothing else. When such a
+# whole-scalar reference resolves to a typed matrix variable (an int/float/bool),
+# the native type is preserved instead of being stringified — so ``base: ${IVL}``
+# with ``IVL: 300`` stays the integer ``300``. Partial refs (``.../${NAME}/x``)
+# still interpolate as strings via :data:`_ENV_REF`.
+_WHOLE_REF = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}$")
+
 
 def _expand_env(text: str) -> str:
     """Expand ``${VAR}`` / ``${VAR:-default}`` in *text* from os.environ."""
@@ -73,6 +81,20 @@ class WorkflowIncludeError(Exception):
     directive. The directory loader catches this (logs + skips the file); the
     explicit ``--config`` preload path lets it propagate (fail fast on a typo).
     """
+
+
+class WorkflowMatrixError(ValueError):
+    """A workflow's ``matrix:`` / ``for_each:`` block is malformed.
+
+    Raised (naming the offending template) when the block is neither a list nor a
+    mapping of axes, an entry is not a mapping of variable names to values, or an
+    axis value is not a list. Callers that load a directory catch it and surface
+    it in ``GET /health`` ``workflows.failed``.
+    """
+
+
+# The keys that turn a single workflow template into a fan-out over var maps.
+_MATRIX_KEYS = ("matrix", "for_each")
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -181,12 +203,19 @@ def _file_directives(data):
 
     Returns ``(defaults, includes, remaining)``. A non-mapping file (a bare list
     of jobs) carries no file-level directives. The remaining mapping still holds
-    the job body / ``jobs:`` list.
+    the job body / ``jobs:`` list. A non-mapping ``defaults:`` is a clear, named
+    error routed through ``workflows.failed`` rather than failing deep inside the
+    merge.
     """
     if not isinstance(data, dict):
         return {}, [], data
     data = dict(data)
     defaults = data.pop("defaults", None) or {}
+    if not isinstance(defaults, dict):
+        raise WorkflowIncludeError(
+            f"defaults: must be a mapping of shared job settings, "
+            f"got {type(defaults).__name__}"
+        )
     includes = _pop_includes(data)
     return defaults, includes, data
 
@@ -205,6 +234,181 @@ def _resolve_job(raw, defaults: dict, file_includes: list, including_file) -> di
     for ref in (*file_includes, *job_includes):
         merged = _deep_merge(merged, _load_fragment(ref, including_file, []))
     return _deep_merge(merged, job)
+
+
+def _resolve_ref(name: str, default: str | None, vars: dict[str, Any]) -> str:
+    """Resolve one ``${VAR}`` reference against matrix *vars*, then os.environ.
+
+    With an empty *vars* map this reproduces :func:`_expand_env` exactly (env,
+    then ``:-default``, then empty-with-a-warning), so routing a file through the
+    tree substituter keeps non-matrix ``${VAR}`` semantics byte-for-byte.
+    """
+    if name in vars:
+        return str(vars[name])
+    val = os.environ.get(name)
+    if val is not None:
+        return val
+    if default is not None:
+        return default
+    log.warning("workflow env var %s unset; expanding to empty", name)
+    return ""
+
+
+def _subst_tree(node: Any, vars: dict[str, Any]) -> Any:
+    """Recursively substitute ``${VAR}``/``${VAR:-default}`` in a parsed tree.
+
+    Strings are expanded from *vars* (falling back to the environment); dicts and
+    lists are walked; every other scalar is returned unchanged.
+    """
+    if isinstance(node, str):
+        whole = _WHOLE_REF.match(node)
+        if whole is not None and whole.group(1) in vars:
+            # Whole-scalar reference to a matrix var: keep its native type so a
+            # numeric value stays int/float rather than becoming a string.
+            return vars[whole.group(1)]
+        return _ENV_REF.sub(
+            lambda m: _resolve_ref(m.group(1), m.group(2), vars), node
+        )
+    if isinstance(node, dict):
+        return {k: _subst_tree(v, vars) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_subst_tree(v, vars) for v in node]
+    return node
+
+
+def _slugify(value: str) -> str:
+    """Lowercase, collapse non-alphanumerics to single dashes, trim dashes."""
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
+def _entry_slug(entry: dict[str, Any], index: int) -> str:
+    """A deterministic, readable token for a matrix entry.
+
+    Prefers a conventional identity variable (``id``/``name``, case-insensitive)
+    so the common case reads cleanly (``<template>-<name>``); otherwise falls back
+    to a slug of all the entry's values, then the positional index. Collisions are
+    disambiguated by the caller so ids stay distinct.
+    """
+    lowered = {k.lower(): v for k, v in entry.items()}
+    for key in ("id", "name"):
+        if key in lowered:
+            slug = _slugify(str(lowered[key]))
+            if slug:
+                return slug
+    parts = [_slugify(str(v)) for v in entry.values()]
+    slug = "-".join(p for p in parts if p)
+    return slug or str(index)
+
+
+def _cartesian(axes: dict[str, Any], tid: str, key: str) -> list[dict[str, Any]]:
+    """Expand a mapping of axes into the cartesian product of variable maps.
+
+    ``{REGION: [us, eu], ENV: [prod, dev]}`` becomes four rows
+    (``{REGION: us, ENV: prod}``, ``{REGION: us, ENV: dev}``, ...) in a stable
+    axis-declaration order. Each axis value must be a list.
+    """
+    names = list(axes)
+    value_lists = []
+    for name in names:
+        values = axes[name]
+        if not isinstance(values, list):
+            raise WorkflowMatrixError(
+                f"workflow {tid!r}: {key} axis {name!r} must be a list of "
+                f"values, got {type(values).__name__}"
+            )
+        value_lists.append(values)
+    return [dict(zip(names, combo)) for combo in itertools.product(*value_lists)]
+
+
+def _has_matrix(peek: Any) -> bool:
+    """Whether the parsed file contains any ``matrix:``/``for_each:`` template."""
+    def _m(d: Any) -> bool:
+        return isinstance(d, dict) and any(k in d for k in _MATRIX_KEYS)
+
+    if isinstance(peek, dict) and "jobs" not in peek:
+        return _m(peek)
+    raw = peek.get("jobs", peek) if isinstance(peek, dict) else peek
+    return any(_m(e) for e in (raw or []) if isinstance(e, dict))
+
+
+def _expand_matrix(template: dict, stem: str, index: int | None) -> list:
+    """Expand one resolved workflow *template* dict into a list of job dicts.
+
+    *template* has already gone through ``defaults:``/``include:``/``use:``
+    resolution (:func:`_resolve_job`), so shared settings are already merged in
+    before the matrix fans out. Without a ``matrix:``/``for_each:`` key this is a
+    single job (``${VAR}`` substituted from the environment). With one, the value
+    is either a list of variable maps (taken verbatim) or a mapping of axes
+    (expanded to the cartesian product); each resulting map produces one job with
+    its vars substituted into the whole tree (source/transforms/sinks/schedule)
+    and a distinct, deterministic id derived from the template id + the entry.
+    """
+    base_id = stem if index is None else f"{stem}-{index}"
+    matrix = None
+    key = None
+    for k in _MATRIX_KEYS:
+        if k in template:
+            matrix, key = template[k], k
+            break
+
+    if matrix is None:
+        d = _subst_tree(template, {})
+        d.setdefault("id", base_id)
+        d.setdefault("name", d["id"])
+        return [d]
+
+    tid = template.get("id") or base_id
+    if isinstance(matrix, dict):
+        # Mapping-of-axes form: fan out over the cartesian product of the axes.
+        matrix = _cartesian(matrix, tid, key)
+    if not isinstance(matrix, list):
+        raise WorkflowMatrixError(
+            f"workflow {tid!r}: {key}: must be a list of variable maps or a "
+            f"mapping of axes, got {type(matrix).__name__}"
+        )
+
+    id_tmpl = template.get("id")
+    var_driven = id_tmpl is not None and bool(_ENV_REF.search(id_tmpl))
+    body = {k: v for k, v in template.items() if k not in _MATRIX_KEYS}
+    jobs: list = []
+    seen: set[str] = set()
+    seen_identity: set[str] = set()
+    for i, entry in enumerate(matrix):
+        if not isinstance(entry, dict) or not all(
+            isinstance(k, str) for k in entry
+        ):
+            raise WorkflowMatrixError(
+                f"workflow {tid!r}: {key}[{i}] must be a variable map "
+                f"(mapping of names to values), got {type(entry).__name__}"
+            )
+        d = _subst_tree(body, entry)
+        # Distinguish a genuine author duplicate (same explicit identity twice)
+        # from a slugification artifact (distinct values collapsing to one slug).
+        # The former is a config error worth surfacing; the latter is disambiguated
+        # silently so distinct entries always yield distinct ids.
+        if var_driven:
+            # The template opted into a var-driven id (e.g. ``id: watch-${NAME}``).
+            jid = _subst_tree(id_tmpl, entry)
+            identity = jid
+        else:
+            jid = f"{tid}-{_entry_slug(entry, i)}"
+            lowered = {k.lower(): v for k, v in entry.items()}
+            identity = next(
+                (str(lowered[k]) for k in ("id", "name") if k in lowered), None
+            )
+        if identity is not None and identity in seen_identity:
+            raise WorkflowMatrixError(
+                f"workflow {tid!r}: {key} produced a duplicate job id {jid!r}"
+            )
+        if identity is not None:
+            seen_identity.add(identity)
+        if jid in seen:  # distinct entries slugged the same -> keep ids distinct
+            jid = f"{jid}-{i}"
+        seen.add(jid)
+        d["id"] = jid
+        d.setdefault("name", jid)
+        jobs.append(d)
+    return jobs
 
 
 def _preload_specs(path: str) -> list:
@@ -237,7 +441,10 @@ def _specs_from_workflow_file(path) -> list:
     the **workflow id** (and default name) so the same file maps to the same
     workflow across restarts/redeploys — unless the file sets an explicit ``id``.
     A file may also hold a list / ``{jobs: [...]}``; entries without an ``id``
-    fall back to ``<stem>-<index>`` to stay deterministic.
+    fall back to ``<stem>-<index>`` to stay deterministic. A template carrying a
+    ``matrix:``/``for_each:`` block fans out into one job per entry, composed
+    *after* ``defaults:``/``include:``/``use:`` resolution so a matrix template
+    inherits shared defaults and fragments.
     """
     import yaml
 
@@ -247,7 +454,15 @@ def _specs_from_workflow_file(path) -> list:
 
     path = Path(path)
     stem = path.stem
-    data = yaml.safe_load(_expand_env(open(path, encoding="utf-8").read())) or {}
+    raw_text = open(path, encoding="utf-8").read()
+
+    # A matrix template's per-entry `${VAR}` refs must survive to tree-level
+    # substitution (which falls back to the environment on its own), so detect
+    # matrix on the *un-expanded* text and skip the blanket env-expansion pass
+    # below for such files. Env-only files take the byte-for-byte legacy path.
+    peek = yaml.safe_load(raw_text) or {}
+    has_matrix = _has_matrix(peek)
+    data = peek if has_matrix else (yaml.safe_load(_expand_env(raw_text)) or {})
 
     # File-level `defaults:` + `include:`/`use:` (deep-merged under every job).
     defaults, file_includes, data = _file_directives(data)
@@ -255,6 +470,8 @@ def _specs_from_workflow_file(path) -> list:
     # Single-job mapping (no top-level `jobs:` list) -> the whole file is one job.
     if isinstance(data, dict) and "jobs" not in data:
         d = _resolve_job(data, defaults, file_includes, path)
+        if has_matrix:
+            return [JobSpec.from_dict(j) for j in _expand_matrix(d, stem, None)]
         d.setdefault("id", stem)
         d.setdefault("name", stem)
         return [JobSpec.from_dict(d)]
@@ -264,6 +481,10 @@ def _specs_from_workflow_file(path) -> list:
     specs = []
     for i, entry in enumerate(raw):
         d = _resolve_job(entry, defaults, file_includes, path)
+        if has_matrix:
+            idx = None if len(raw) == 1 else i
+            specs.extend(JobSpec.from_dict(j) for j in _expand_matrix(d, stem, idx))
+            continue
         d.setdefault("id", stem if len(raw) == 1 else f"{stem}-{i}")
         d.setdefault("name", d["id"])
         specs.append(JobSpec.from_dict(d))
