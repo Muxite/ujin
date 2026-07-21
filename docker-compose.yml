@@ -18,6 +18,12 @@ services:
     command: ["api", "--host", "0.0.0.0", "--port", "8900"]
     ports:
       - "8900:8900"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8900/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   # Rich scrape HTTP service — /scrape /feed /sitemap /discover /social/* ...
@@ -35,6 +41,12 @@ services:
     ports:
       - "8901:8901"
     init: true            # reap any obscura/browser <defunct> subprocesses
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8901/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   # Unified job control plane — /jobs CRUD + transforms + sinks + plugins (:8902).
@@ -58,6 +70,12 @@ services:
     ports:
       - "8902:8902"
     init: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8902/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   # Opt-in (profile "browser"): the unified jobs control plane on the heavy
@@ -87,6 +105,12 @@ services:
     ports:
       - "8902:8902"
     init: true            # reap zombie chromium subprocesses
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8902/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
 
   # Opt-in (profile "browser"): the scrape HTTP service on the browser image,
@@ -107,6 +131,12 @@ services:
     ports:
       - "8911:8901"
     init: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8901/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
 
   # Opt-in: scrape service WITH the obscura renderer baked in (slow first build:
@@ -124,6 +154,12 @@ services:
     ports:
       - "8912:8901"
     init: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8901/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
 volumes:

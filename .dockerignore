@@ -2,7 +2,6 @@
 __pycache__
 *.pyc
 .pytest_cache
-cv.tex
 dist/
 build/
 *.egg-info/
@@ -11,3 +10,20 @@ build/
 # IS sent, because the ujin-full target's Rust stage compiles it.)
 ujin/obscura/target/
 **/target/
+
+# Not COPY'd into any image target — excluding them keeps the build context
+# small and every `docker build` invocation fast.
+tests/
+docs/
+examples/
+orchestrator/
+benchmarks/
+.claude/
+.idea/
+.github/
+.coverage
+.coverage.*
+.benchmarks/
+ujin-jobs.db
+uv.lock
+CHANGELOG.md

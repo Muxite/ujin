@@ -38,13 +38,18 @@ RUN rm -rf ujin/obscura \
 
 # Mount points for the unified job control plane: operator plugins (capabilities),
 # the workflow definition files, and the durable jobstore. All are typically bind-
-# or volume-mounted by compose.
-RUN mkdir -p /plugins /data /workflows
+# or volume-mounted by compose. Owned by a non-root user for defense in depth —
+# a named volume mounted here inherits this ownership on first creation; a bind
+# mount still depends on the host directory's own permissions.
+RUN mkdir -p /plugins /data /workflows \
+    && useradd --create-home --uid 1000 --shell /usr/sbin/nologin ujin \
+    && chown -R ujin:ujin /app /plugins /data /workflows
 ENV UJIN_PLUGINS_DIR=/plugins \
     UJIN_WORKFLOWS_DIR=/workflows \
     UJIN_JOBS_DB=/data/ujin-jobs.db
 
 EXPOSE 8900 8901 8902
+USER ujin
 ENTRYPOINT ["ujin"]
 # Default to the scrape HTTP service; override for the poller (`api`), the
 # unified jobs control plane (`jobs-serve`), or `watch`.
@@ -55,6 +60,7 @@ CMD ["scrape-serve", "--host", "0.0.0.0", "--port", "8901"]
 # Built on top of the slim `ujin` stage so the default image is untouched. This
 # image is large (~1.5GB+): Chromium + its runtime libs + the Playwright browser.
 FROM ujin AS ujin-browser
+USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        chromium chromium-driver fonts-liberation ca-certificates \
@@ -66,14 +72,20 @@ RUN apt-get update \
 # Setting it afterwards would install to ~/.cache and the runtime lookup at
 # /ms-playwright would miss the binary.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN pip install --no-cache-dir ".[browser]" \
-    && python -m playwright install --with-deps chromium
+RUN mkdir -p /ms-playwright \
+    && pip install --no-cache-dir ".[browser]" \
+    && python -m playwright install --with-deps chromium \
+    && chown -R ujin:ujin /ms-playwright
 ENV UJIN_BROWSER_ENABLED=1 \
     UJIN_BROWSER_ENGINE=playwright \
     UJIN_BROWSER_HEADLESS=1 \
     UJIN_CHROMEDRIVER=/usr/bin/chromedriver
+USER ujin
 
 # ---- ujin + bundled obscura binary (slow build) ----
 FROM ujin AS ujin-full
+USER root
 COPY --from=obscura-build /build/target/release/obscura /usr/local/bin/obscura
+RUN chmod +x /usr/local/bin/obscura
 ENV OBSCURA_BIN=/usr/local/bin/obscura
+USER ujin
