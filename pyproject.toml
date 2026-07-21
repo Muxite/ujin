@@ -1,6 +1,6 @@
 [project]
 name = "ujin"
-version = "0.48.0"
+version = "0.49.0"
 description = "The ultimate scraper-poller: adaptive multi-role poller with jitter, a rich scrape HTTP service (HTTP→obscura→sitemap→RSS fallback chain), site-change detection, social/trends sources, and a bundled headless renderer."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -87,8 +87,10 @@ omit = [
 branch = true
 
 [tool.coverage.report]
-# Ratcheted per cycle: 60 (Cycle 0) -> 80 (Gate 1) -> 85 (Gate 3).
-fail_under = 85
+# Ratcheted per cycle: 60 (Cycle 0) -> 80 (Gate 1) -> 85 (Gate 3) -> 90 (orchestrator
+# ratchet, orchestrator/state/cov_floor.txt) — kept in sync so a human `make gate`
+# run enforces the same floor the autonomous orchestrator does.
+fail_under = 90
 show_missing = true
 exclude_also = [
     "if TYPE_CHECKING:",
