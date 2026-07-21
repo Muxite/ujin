@@ -128,7 +128,11 @@ curl -X POST localhost:8902/jobs -H 'content-type: application/json' -d '{
 Prefer files over API calls? Drop workflow definitions into the mounted
 `./workflows` directory — each file is one workflow, the **filename stem is its
 id**, and ujin sets it up on startup, runs it, and hands back what it obtained at
-`GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). See
+`GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). Share
+boilerplate across jobs with a top-level `defaults:` block (deep-merged into every
+job, per-job keys win) and reusable fragments via `include:`/`use:` (a shared sink,
+transform pipeline, or schedule; resolved against `$UJIN_WORKFLOWS_DIR` then the
+file's directory, with nested-include + cycle-guard support). See
 [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
 Declaring a whole batch at once? Mount a single **ingest plan** and pass
@@ -209,7 +213,8 @@ Three FastAPI apps — run any combination. Full reference in
   `GET/DELETE /jobs/{id}`, `/jobs/{id}/run|pause|resume|runs|events`,
   `/jobs/{id}/content` + `/jobs/{id}/results` (hand out obtained data), `WS /jobs/events`,
   `/kinds`, `/metrics`, `POST /plugins/reload`. Durable + plugin-extensible.
-  File-driven workflows load from `./workflows` — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
+  File-driven workflows load from `./workflows`, with shared `defaults:` and
+  `include:`/`use:` fragments — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 - **Poller control** (`:8900`): `GET /health /metrics /targets`,
   `GET /content?key=…` (reuse the body ujin last fetched), `POST /targets`,
   `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.

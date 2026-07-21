@@ -4,6 +4,22 @@
 
 - **External ingest plans** — a new generic loader (`ujin/jobs/plan.py`: `load_plan` / `parse_plan` / `PlanError`) lets one mounted file declare a whole batch of jobs at once, sharing config through `defaults` (deep-merged into every job), named `templates` (opted into with `use:`), and a per-entry `matrix` (cartesian expansion with type-preserving `${VAR}` / `${VAR:-default}` substitution). The path comes from a new `--plan` flag on `ujin jobs-serve` or `$UJIN_INGEST_PLAN` (mirroring `$UJIN_MARKETPLACE_PROFILES`); `create_jobs_app`/`serve` load it alongside the existing config-path and workflows-dir paths, which are unchanged. A bad or missing plan is non-fatal — logged and surfaced on `/health` under a new `plan` block (`path`/`loaded`/`failed`/`error`), just like a bad workflow file. Ships `examples/ingest-plan.yaml` and `docs/INGEST_PLAN.md`; the loader carries no consumer-specific identifiers. Documented in `README.md`.
 
+### Added (workflow defaults + includes)
+- Workflow/job files now support a top-level `defaults:` block (deep-merged into
+  every resulting job, with per-job keys winning recursively over nested maps like
+  `source`/`transforms`/`sinks`/`schedule`) and an `include:`/`use:` directive —
+  usable both file-level and per-job — that pulls in reusable fragment files (a
+  shared sink, transform pipeline, or schedule). Fragment paths resolve against
+  `$UJIN_WORKFLOWS_DIR` first, then the including file's directory; nested includes
+  are supported with a cycle guard, and precedence is `defaults < included-fragment
+  < inline-job-keys`. A missing or cyclic fragment raises a clear
+  `ujin.jobs.app.WorkflowIncludeError`; the directory loader logs and skips a bad
+  file (now also surfaced in `GET /health` `workflows.failed`) instead of crashing.
+  Applied consistently to both the workflows-dir loader and the `--config` preload
+  path. Ships `examples/workflows/site-feeds.yaml` + `fragments/sqlite-sink.yaml`
+  and is documented in `docs/WORKFLOWS.md`. Files without `defaults:`/`include:`
+  parse exactly as before, and `${VAR}`/`${VAR:-default}` substitution is unchanged.
+
 ### Added (test coverage)
 - Added offline, deterministic tests to `tests/test_robots.py` and `tests/test_diff.py` covering previously-uncovered paths: repeated-agent parse branch (`55->57`), unknown-directive skip (`75->37`), empty-pattern `_match` short-circuit (line 131), `re.error` guard (lines 144–145), full `_http_fetcher` body (lines 161–171, via aiohttp mock/import-failure), and `extract_regions` empty-selectors early return (region.py line 30); lifting `ujin/robots.py` and `ujin/diff/region.py` to 100% line and branch coverage.
 - Added 8 offline, deterministic tests to `tests/test_extract_contacts.py` covering previously-uncovered edge paths in `ujin/extract/contacts.py`: empty/whitespace-only `href` anchor (line 153), empty `mailto:` and `tel:` address/number branches (lines 158, 162), and the three exception-guard fallbacks in `_is_social_href`, `_resolve`, and `extract_contacts` (lines 85–86, 94–95, 123–124), lifting the module to 100% line and branch coverage.
