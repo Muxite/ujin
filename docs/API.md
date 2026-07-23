@@ -16,19 +16,36 @@ schema at `/openapi.json`.
 
 Build the app with `create_scrape_app(config: ScrapeConfig, *, scorer=None)` or run
 `ujin scrape-serve`. Configuration is read from the environment
-(`ScrapeConfig.from_env()`) — see [Configuration](#configuration).
+(`ScrapeConfig.from_env()`) — see [Configuration](#configuration). Like the
+jobs control plane, this app loads operator plugins from `UJIN_PLUGINS_DIR` at
+startup (see [PLUGINS.md](PLUGINS.md#scorer-plugins-also-work-on-the-scrape-app-8901))
+— today the one capability it consumes from a plugin is `scorer`, via
+`ScrapeConfig.scorer_kind` / `UJIN_SCORER_KIND` (see
+[Scoring](#scoring--news-trading-mode)).
 
 ### `GET /health`
-Liveness + renderer/cache state. Never fails.
+Liveness + renderer/cache/plugin state. Never fails.
 
 ```json
 { "ok": true, "status": "ok", "service": "ujin-scrape",
   "obscura_available": false,
-  "cache": { "entries": 0, "max": 2048, "ttl_secs": 120 } }
+  "cache": { "entries": 0, "max": 2048, "ttl_secs": 120 },
+  "plugins": { "loaded": [], "failed": [] },
+  "scorer_error": null }
 ```
 `obscura_available` is `false` when no renderer is reachable; the service still
 works (HTTP + altpath only). As of 0.4.0 every ujin service returns the same
-`ok` / `status` / `service` trio.
+`ok` / `status` / `service` trio. `plugins` mirrors `ujin-jobs`' `/health`
+(module stems imported from `UJIN_PLUGINS_DIR`, `{loaded, failed}`).
+`scorer_error` is non-null only when `scorer_kind` was set but didn't resolve
+in the registry — the service still started, scoring with a neutral
+`NullScorer` instead of crashing on a bad config value.
+
+### `POST /plugins/reload`
+Clears plugin-contributed registry kinds and re-imports `UJIN_PLUGINS_DIR`.
+Response: `{loaded: [...], failed: [...]}`. Mirrors the jobs app's endpoint of
+the same name/shape (see [PLUGINS.md](PLUGINS.md)); a scorer already resolved
+at startup keeps running unchanged until the app restarts.
 
 ### `GET /capabilities`
 The fetch-backend capability matrix (http / obscura / playwright / selenium)
@@ -279,6 +296,8 @@ curl -X POST localhost:8900/targets -H 'content-type: application/json' \
 | `UJIN_STRATEGY_DB` | — | SQLite path for `StrategyFeedback` (empty = ephemeral `:memory:`; requires `UJIN_LEARN_STRATEGY=1`) |
 | `UJIN_BREAKING_SCORER` | `0` | wire the news-trading scorer (below) |
 | `CORROBORATION_*`, `TIER_W_*`, `BREAKING_THRESHOLD` | — | scorer tuning |
+| `UJIN_SCORER_KIND` | — | resolve a `scorer` kind from the registry (built-in or plugin) instead — ignored when `UJIN_BREAKING_SCORER=1` or an explicit `scorer=` is passed to `create_scrape_app` (below) |
+| `UJIN_PLUGINS_DIR` | `/plugins` | operator plugin directory (same var/behavior as `ujin-jobs`) — see [PLUGINS.md](PLUGINS.md) |
 
 ### The fallback chain
 For a links-mode page the scrape service walks: **HTTP fast path** → (too few
@@ -291,7 +310,19 @@ By default a `NullScorer` yields neutral `tier`/`breaking_score` and a generic
 churn-based `next_poll_hint_secs`. Set `UJIN_BREAKING_SCORER=1` to wire a
 `BreakingScorer` (source tier + lede markers + recency + cross-source
 corroboration + X-trend overlap) plus a background X-trends refresh loop and a
-corroboration store. The wire shape is identical either way.
+corroboration store — built by `ujin.trends.wiring.wire_breaking_scorer(cfg,
+overrides)`, not inline in `create_scrape_app`. The wire shape is identical
+either way.
+
+For any *other* scorer, set `scorer_kind` (`UJIN_SCORER_KIND`) to a kind
+registered with `ujin.registry.register` — most usefully one an operator
+drops into `UJIN_PLUGINS_DIR` as `@register.scorer("my_scorer")`, resolved
+with zero edits to this tree (see
+[PLUGINS.md](PLUGINS.md#scorer-plugins-also-work-on-the-scrape-app-8901)).
+Resolution order: an explicit `scorer=` passed to `create_scrape_app` wins,
+then `UJIN_BREAKING_SCORER=1`, then `scorer_kind`, else `NullScorer`. An
+unresolvable `scorer_kind` doesn't fail startup — it falls back to
+`NullScorer` and the problem is reported on `GET /health`'s `scorer_error`.
 
 ---
 

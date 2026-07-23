@@ -11,6 +11,7 @@ from __future__ import annotations
 from .corroboration import Cluster, CorroborationStore, jaccard, shingleset
 from .scorer import BreakingScorer
 from .tier import Weights, breaking_score, tier_of
+from .wiring import BreakingScorerWiring, wire_breaking_scorer
 
 __all__ = [
     "CorroborationStore",
@@ -21,4 +22,6 @@ __all__ = [
     "breaking_score",
     "tier_of",
     "BreakingScorer",
+    "BreakingScorerWiring",
+    "wire_breaking_scorer",
 ]

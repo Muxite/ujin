@@ -39,12 +39,14 @@ router = APIRouter()
 
 @router.get("/health", response_model=HealthResponse)
 async def health(request: Request) -> HealthResponse:
-    """Liveness probe with cache and renderer availability."""
+    """Liveness probe with cache, renderer, and plugin/scorer availability."""
     cache = request.app.state.cache.stats()
     return HealthResponse(
         status="ok",
         obscura_available=obscura_available(),
         cache=cache,
+        plugins=getattr(request.app.state, "plugins", {"loaded": [], "failed": []}),
+        scorer_error=getattr(request.app.state, "scorer_error", None),
     )
 
 

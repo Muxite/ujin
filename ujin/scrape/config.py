@@ -66,6 +66,13 @@ class ScrapeConfig:
     # default — the generic app uses NullScorer.
     enable_breaking_scorer: bool = False
 
+    # A registry `scorer` kind to resolve instead (built-in or, more likely,
+    # operator/foreign code loaded from UJIN_PLUGINS_DIR — see ujin.plugins).
+    # Ignored when `enable_breaking_scorer` is set or an explicit `scorer=` is
+    # passed to `create_scrape_app` (both take precedence). Empty (default)
+    # means: fall through to NullScorer, same as today.
+    scorer_kind: str = ""
+
     # Adaptive strategy learning (opt-in). When enabled, the scrape service
     # constructs a durable ujin.adapt.StrategyFeedback: the 'auto' backend
     # order is biased per host by the proven-best (backend, render_mode), and
@@ -114,6 +121,7 @@ class ScrapeConfig:
         "nitter_pool_path": "NITTER_POOL_PATH",
         "x_allow_brave": "X_ALLOW_BRAVE",
         "enable_breaking_scorer": "UJIN_BREAKING_SCORER",
+        "scorer_kind": "UJIN_SCORER_KIND",
         "learn_strategy": "UJIN_LEARN_STRATEGY",
         "strategy_db": "UJIN_STRATEGY_DB",
         "corroboration_window_secs": "CORROBORATION_WINDOW_SECS",

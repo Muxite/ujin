@@ -840,6 +840,25 @@ class HealthResponse(BaseModel):
         ),
         examples=[{"entries": 42, "hits": 318, "misses": 17, "evictions": 0}],
     )
+    plugins: dict[str, list[str]] = Field(
+        default_factory=lambda: {"loaded": [], "failed": []},
+        description=(
+            "Operator plugins imported from `UJIN_PLUGINS_DIR` at startup "
+            "(or the last `POST /plugins/reload`) — `{loaded, failed}` "
+            "module-stem lists. Mirrors `ujin-jobs`' `/health`."
+        ),
+        examples=[{"loaded": ["my_scorer"], "failed": []}],
+    )
+    scorer_error: Optional[str] = Field(
+        None,
+        description=(
+            "Set when `ScrapeConfig.scorer_kind` was configured but did not "
+            "resolve in the registry (typo, or the plugin that would supply "
+            "it failed to load) — the service still started, scoring with "
+            "the neutral `NullScorer` instead. `None` otherwise."
+        ),
+        examples=[None, "unknown scorer kind 'my_scorer'; available: (none)"],
+    )
 
 
 class MetricsResponse(BaseModel):

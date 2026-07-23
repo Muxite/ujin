@@ -52,6 +52,7 @@ class there is usually enough; `_install_builtins` registers every entry.
 | **source** | `key: str` + `async poll(prev: PollResult \| None) -> PollResult`. Set `fingerprint` for change detection; `payload` is whatever downstream wants (and what `GET /jobs/{id}/content` hands out). |
 | **transform** | `async apply(event: dict) -> dict \| list[dict] \| None` (`None` drops; a list fans out). |
 | **sink** | `async emit(event: dict) -> None`. |
+| **scorer** | `score_links(links, *, base_url) -> None` (annotate each link in place, e.g. `_tier`/`_breaking_score`) + `poll_hint(links, *, base_url, prior_unchanged) -> float \| None`. Consumed by `ujin.scrape.app.create_scrape_app` via `ScrapeConfig.scorer_kind` — a plugin registering `@register.scorer(...)` needs no in-tree edit at all; see [PLUGINS.md](PLUGINS.md#scorer-plugins-also-work-on-the-scrape-app-8901). |
 | **action** | browser recipe step: `async handler(page, **params)`. |
 
 A factory taking a **second parameter** receives a `BuildContext`

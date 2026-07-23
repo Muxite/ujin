@@ -1,10 +1,17 @@
 """FastAPI app factory for the scrape service.
 
 ``create_scrape_app(config)`` wires the fetch/cache/policy/metrics layer plus a
-:class:`ScrapeService` and mounts the route surface. Everything trading-specific
-(corroboration store, nitter pool, x-trends loop, BreakingScorer) is optional
-and wired by :mod:`ujin.scrape.app` only when the relevant config is present —
-the default app is a generic scraper.
+:class:`ScrapeService` and mounts the route surface — this is the generic,
+low-level scraper. News-trading semantics (corroboration store, x-trends loop,
+``BreakingScorer``) are opt-in and built by :mod:`ujin.trends.wiring`, not
+inline here; this module just folds that wiring's pieces into its own
+``app.state``/teardown when ``cfg.enable_breaking_scorer`` is set.
+
+For anything else, this app never has to know a scorer's implementation:
+``cfg.scorer_kind`` resolves any `scorer` kind registered with
+:data:`ujin.registry.register`, including one an operator drops into
+``UJIN_PLUGINS_DIR`` as foreign code (see :mod:`ujin.plugins`) — the same
+mechanism :mod:`ujin.jobs.app` already uses for sources/transforms/sinks.
 
 This is independent of the poller control service in :mod:`ujin.service`; run
 either or both.
@@ -12,9 +19,7 @@ either or both.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
@@ -37,7 +42,15 @@ def create_scrape_app(
 
     ``scorer`` defaults to :class:`NullScorer`. Pass ``ujin.trends.BreakingScorer``
     (with a corroboration store + trend-terms provider) to recover news-trading
-    semantics — see :mod:`ujin.trends`.
+    semantics — see :mod:`ujin.trends`. Setting ``cfg.enable_breaking_scorer``
+    has this factory wire that up for you (see :mod:`ujin.trends.wiring`).
+
+    For any other scorer, set ``cfg.scorer_kind`` to a kind registered with
+    :data:`ujin.registry.register` — a built-in, or (more likely) one an
+    operator dropped into ``UJIN_PLUGINS_DIR`` as foreign code with zero edits
+    to this tree; see :mod:`ujin.plugins`. Plugins are loaded before the
+    scorer is resolved, so a plugin may supply the very kind ``scorer_kind``
+    names.
     """
     try:
         from fastapi import FastAPI
@@ -60,7 +73,18 @@ def create_scrape_app(
         metrics = comps.metrics
         overrides = comps.overrides
 
-        # Optional nitter pool for the X chain's free leg.
+        # Load operator plugins BEFORE resolving the scorer below, so a
+        # mounted plugin registering `cfg.scorer_kind` is available in time
+        # (mirrors ujin.jobs.app's "plugins before anything that might
+        # reference one" ordering).
+        from ujin.plugins import load_plugins
+
+        plugin_status = load_plugins()
+        app.state.plugins = plugin_status
+
+        # Optional nitter pool for the X chain's free leg. This is independent
+        # of the scorer resolved below — routes_social.py's /social endpoints
+        # use it regardless of whether a BreakingScorer is wired.
         nitter_pool = None
         if cfg.nitter_pool_path:
             from ..sources.social import NitterPool
@@ -69,55 +93,41 @@ def create_scrape_app(
             logger.info("nitter pool: %d mirrors", len(nitter_pool.mirrors))
 
         # Resolve the scorer. An explicit `scorer` wins; otherwise wire a
-        # BreakingScorer (+ corroboration store + x-trends loop) when enabled,
-        # else stay generic with NullScorer.
-        corroboration = None
-        trends_task: Optional[asyncio.Task] = None
+        # BreakingScorer (+ corroboration store + x-trends loop) when enabled;
+        # otherwise resolve `scorer_kind` via the plugin/built-in registry
+        # (foreign code, no ujin-tree edit needed); else stay generic with
+        # NullScorer.
+        wiring = None
+        scorer_error: Optional[str] = None
         the_scorer: Scorer
         if scorer is not None:
             the_scorer = scorer
         elif cfg.enable_breaking_scorer:
-            from ..sources.social import fetch_x_trends
-            from ..trends import BreakingScorer, CorroborationStore, Weights
+            from ..trends.wiring import wire_breaking_scorer
 
-            corroboration = CorroborationStore(
-                window_secs=cfg.corroboration_window_secs,
-                max_entries=cfg.headline_ring_max,
-                min_hosts_for_corroboration=cfg.corroboration_min_hosts,
-                max_hosts_for_full_score=cfg.corroboration_max_hosts_for_full_score,
-            )
-            trends_state = {"terms": [], "fetched_at": 0.0}
+            wiring = wire_breaking_scorer(cfg, overrides)
+            the_scorer = wiring.scorer
+        elif cfg.scorer_kind:
+            from dataclasses import asdict
 
-            async def _refresh_trends_loop():
-                while True:
-                    try:
-                        result = await fetch_x_trends("united-states", 30)
-                        trends_state["terms"] = [
-                            t.tag.lstrip("#") for t in result.items if t.tag
-                        ]
-                        trends_state["fetched_at"] = time.time()
-                        logger.info(
-                            "x-trends refreshed: %d terms via %s",
-                            len(trends_state["terms"]), result.source,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.debug("x-trends refresh failed: %s", exc)
-                    await asyncio.sleep(300.0)
+            from ..registry import BuildContext, register
 
-            trends_task = asyncio.create_task(_refresh_trends_loop())
-            the_scorer = BreakingScorer(
-                overrides=overrides,
-                corroboration=corroboration,
-                trend_terms_provider=lambda: list(trends_state["terms"]),
-                weights=Weights(
-                    source_rank=cfg.tier_weight_source_rank,
-                    lede_marker=cfg.tier_weight_lede_marker,
-                    recency=cfg.tier_weight_recency,
-                    corroboration=cfg.tier_weight_corroboration,
-                    trend_overlap=cfg.tier_weight_trend_overlap,
-                ),
-                breaking_threshold=cfg.breaking_threshold,
-            )
+            try:
+                the_scorer = register.build_scorer(
+                    cfg.scorer_kind, asdict(cfg), BuildContext()
+                )
+            except KeyError as exc:
+                # A mistyped/missing scorer_kind is a config error, not a
+                # reason to refuse to serve the rest of the app — degrade to
+                # NullScorer (same as leaving scorer_kind unset) and report it
+                # on /health, mirroring how a bad workflow file or ingest plan
+                # degrades in ujin.jobs.app rather than crashing startup.
+                scorer_error = str(exc)
+                logger.warning(
+                    "scorer_kind %r not resolvable (%s); falling back to "
+                    "NullScorer", cfg.scorer_kind, exc,
+                )
+                the_scorer = NullScorer()
         else:
             the_scorer = NullScorer()
 
@@ -146,18 +156,15 @@ def create_scrape_app(
         app.state.service = service
         app.state.disk_cache = disk
         app.state.nitter_pool = nitter_pool
-        app.state.corroboration = corroboration
+        app.state.corroboration = wiring.corroboration if wiring is not None else None
+        app.state.scorer_error = scorer_error
 
         logger.info("ujin scrape service ready")
         try:
             yield
         finally:
-            if trends_task is not None:
-                trends_task.cancel()
-                try:
-                    await trends_task
-                except (asyncio.CancelledError, Exception):
-                    pass
+            if wiring is not None:
+                await wiring.aclose()
             await close_scrape_components(comps)
             logger.info("ujin scrape service stopped")
 
@@ -168,6 +175,23 @@ def create_scrape_app(
     mount_api_key(app)
     app.include_router(core_router)
     app.include_router(social_router)
+
+    @app.post("/plugins/reload")
+    def plugins_reload() -> dict[str, Any]:
+        """Re-scan `UJIN_PLUGINS_DIR`: clear plugin-contributed kinds, re-import.
+
+        Mirrors `ujin.jobs.app`'s endpoint of the same name/shape. An
+        already-built scorer/service keeps running unchanged — this only
+        refreshes what the registry can resolve for future config/reload.
+        """
+        from ujin.plugins import load_plugins
+        from ujin.registry import register
+
+        register.clear_plugins()
+        status = load_plugins()
+        app.state.plugins = status
+        return status
+
     return app
 
 

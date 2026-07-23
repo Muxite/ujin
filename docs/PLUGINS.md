@@ -100,3 +100,35 @@ def make(cfg, ctx):                 # ctx: ujin.registry.BuildContext
 `examples/plugins/hello_sink.py` registers a `hello` sink and a `ticker` source.
 Mount it, `POST /plugins/reload`, then create a job with
 `{"source":{"kind":"plugin:ticker"}, "sinks":[{"kind":"plugin:hello"}]}`.
+
+## `scorer` plugins also work on the scrape app (`:8901`)
+
+Everything above is written from the jobs control plane's point of view, but
+plugin loading isn't jobs-specific — `ujin.scrape.app.create_scrape_app` loads
+the same `UJIN_PLUGINS_DIR` at startup and exposes `{loaded, failed}` on its
+own `GET /health`, plus the same `POST /plugins/reload`. The one capability
+the scrape app actually *consumes* from a plugin today is `scorer`:
+
+```python
+# /plugins/my_scorer.py
+from ujin import register
+
+@register.scorer("my_scorer")            # usable via scorer_kind="my_scorer"
+def make_scorer(cfg: dict):
+    class _Scorer:
+        def score_links(self, links, *, base_url):
+            ...                           # annotate link._tier / ._breaking_score
+        def poll_hint(self, links, *, base_url, prior_unchanged):
+            return None                   # or a float seconds hint
+    return _Scorer()
+```
+
+Point `ScrapeConfig.scorer_kind` (or `UJIN_SCORER_KIND`) at the registered
+name and the app resolves it — no ujin-tree edit, no `plugin:` prefix required
+(bare names resolve the same as `plugin:`-prefixed ones). An unresolvable
+`scorer_kind` (typo, or the plugin that would supply it failed to load) is
+logged and reported on `GET /health` as `scorer_error`; the app still starts
+and scores with the neutral `NullScorer` rather than refusing to serve. See
+[API.md](API.md#scrape-service-8901) for the full config knob and
+`ujin.trends.wiring.wire_breaking_scorer` for how the built-in `BreakingScorer`
+(`UJIN_BREAKING_SCORER=1`) is wired the same way, just without a plugin.
