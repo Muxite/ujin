@@ -550,6 +550,7 @@ def create_jobs_app(
     from ujin.engine import PollEngine
     from ujin.service import _Hub
 
+    from .build import build_job_manager
     from .manager import JobManager, UnknownKind
     from .store import JobStore
 
@@ -561,22 +562,34 @@ def create_jobs_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        store = JobStore(db_path)
         hub = _Hub()
-        engine = PollEngine()
 
-        # Shared scrape stack for `scrape` sources (optional — degrade if extras
-        # or network stack are unavailable).
-        scrape_service = None
-        scrape_close = None
+        # Build the store/engine/manager (+ shared scrape stack for `scrape`
+        # sources) via the same factory a headless in-process consumer uses —
+        # see ujin.jobs.build for the wiring. Env-based config resolution is
+        # this app's own choice (the generic factory takes a plain config, it
+        # doesn't hardcode from_env()); a failure resolving *that* config
+        # (e.g. a malformed env var) degrades exactly like a scrape-backend
+        # build failure would: no scrape stack, a warning, nothing fatal.
         try:
-            from ujin.scrape.build import build_scrape_service
             from ujin.scrape.config import ScrapeConfig
 
             cfg = scrape_config or ScrapeConfig.from_env()
-            scrape_service, _comps, scrape_close = await build_scrape_service(cfg)
+            manager, store, _scrape_service, aclose_stack = await build_job_manager(
+                db_path, scrape_config=cfg, hub=hub
+            )
+            engine = manager.engine
         except Exception as exc:  # noqa: BLE001
             log.warning("scrape source backend unavailable: %s", exc)
+            store = JobStore(db_path)
+            engine = PollEngine()
+            manager = JobManager(engine, store, hub=hub, scrape_service=None)
+
+            async def aclose_stack() -> None:
+                try:
+                    store.close()
+                except Exception as close_exc:  # noqa: BLE001
+                    log.warning("job store close failed: %s", close_exc)
 
         # Load operator plugins BEFORE reloading jobs, so persisted jobs that
         # reference plugin:* kinds resolve.
@@ -585,7 +598,6 @@ def create_jobs_app(
         plugin_status = load_plugins()
         app.state.plugins = plugin_status
 
-        manager = JobManager(engine, store, hub=hub, scrape_service=scrape_service)
         manager.load_from_store()
         if config_path:
             for spec in _preload_specs(config_path):
@@ -647,12 +659,7 @@ def create_jobs_app(
                     await t
                 except asyncio.CancelledError:
                     pass
-            if scrape_close is not None:
-                try:
-                    await scrape_close()
-                except Exception:  # noqa: BLE001
-                    pass
-            store.close()
+            await aclose_stack()  # closes the scrape stack (if any) + the store
 
     app = FastAPI(title="ujin-jobs", version="0.4.0", lifespan=lifespan)
 
