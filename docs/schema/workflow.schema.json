@@ -1,0 +1,408 @@
+{
+  "$defs": {
+    "fleet": {
+      "additionalProperties": false,
+      "properties": {
+        "defaults": {
+          "$ref": "#/$defs/job"
+        },
+        "fragments": {
+          "additionalProperties": {
+            "$ref": "#/$defs/job"
+          },
+          "type": "object"
+        },
+        "include": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "jobs": {
+          "items": {
+            "$ref": "#/$defs/job"
+          },
+          "type": "array"
+        },
+        "templates": {
+          "additionalProperties": {
+            "$ref": "#/$defs/job"
+          },
+          "type": "object"
+        },
+        "use": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "required": [
+        "jobs"
+      ],
+      "type": "object"
+    },
+    "job": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "type": "number"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "for_each": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "type": "array"
+              },
+              "type": "object"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "include": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "matrix": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "type": "array"
+              },
+              "type": "object"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "schedule": {
+          "$ref": "#/$defs/schedule"
+        },
+        "sinks": {
+          "items": {
+            "$ref": "#/$defs/sink"
+          },
+          "type": "array"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "transforms": {
+          "items": {
+            "$ref": "#/$defs/transform"
+          },
+          "type": "array"
+        },
+        "use": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "schedule": {
+      "additionalProperties": false,
+      "properties": {
+        "base": {
+          "default": 60.0,
+          "type": "number"
+        },
+        "cron": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "grow": {
+          "default": 1.6,
+          "type": "number"
+        },
+        "jitter": {
+          "default": "decorrelated",
+          "type": "string"
+        },
+        "max": {
+          "default": 3600.0,
+          "type": "number"
+        },
+        "min": {
+          "default": 5.0,
+          "type": "number"
+        },
+        "mode": {
+          "default": "adaptive",
+          "enum": [
+            "adaptive",
+            "cron",
+            "once"
+          ],
+          "type": "string"
+        },
+        "shrink": {
+          "default": 0.4,
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "sink": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "type": "object"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "csv",
+                "file",
+                "forward",
+                "jsonl",
+                "sqlite",
+                "stdout",
+                "webhook",
+                "ws"
+              ]
+            },
+            {
+              "pattern": "^plugin:.+$",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "source": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "type": "object"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "amazon_category",
+                "amazon_search",
+                "api",
+                "browser",
+                "command",
+                "graphql",
+                "http",
+                "marketplace_search",
+                "rss",
+                "scrape",
+                "site"
+              ]
+            },
+            {
+              "pattern": "^plugin:.+$",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "transform": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "type": "object"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "aggregate",
+                "chunk",
+                "dedupe",
+                "fill",
+                "filter",
+                "flatten",
+                "limit",
+                "regex",
+                "rename",
+                "select",
+                "sort",
+                "template",
+                "unique"
+              ]
+            },
+            {
+              "pattern": "^plugin:.+$",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "workflow": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "type": "number"
+        },
+        "defaults": {
+          "$ref": "#/$defs/job"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "for_each": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "type": "array"
+              },
+              "type": "object"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "include": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "matrix": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "type": "array"
+              },
+              "type": "object"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "schedule": {
+          "$ref": "#/$defs/schedule"
+        },
+        "sinks": {
+          "items": {
+            "$ref": "#/$defs/sink"
+          },
+          "type": "array"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "transforms": {
+          "items": {
+            "$ref": "#/$defs/transform"
+          },
+          "type": "array"
+        },
+        "use": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/workflow"
+    },
+    {
+      "$ref": "#/$defs/fleet"
+    },
+    {
+      "items": {
+        "$ref": "#/$defs/job"
+      },
+      "type": "array"
+    }
+  ],
+  "title": "ujin workflow / ingest plan"
+}

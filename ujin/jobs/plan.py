@@ -267,6 +267,24 @@ def _build_spec(
     *local* is the combination index within this entry; *seq* is the running
     position across the whole plan (used only for the no-id fallback).
     """
+    body = _build_body(merged, combo, has_matrix, local, seq, stem)
+    job_id = body["id"]
+
+    src = body.get("source")
+    if not isinstance(src, dict) or not src.get("kind"):
+        raise PlanError(
+            _pfx(source) + f"job {job_id!r} needs a 'source' with a 'kind'"
+        )
+    try:
+        return JobSpec.from_dict(body)
+    except Exception as exc:  # noqa: BLE001 -- surfaced as an actionable PlanError
+        raise PlanError(
+            _pfx(source) + f"job {job_id!r} is invalid: {exc}"
+        ) from None
+
+
+def _build_body(merged, combo, has_matrix, local, seq, stem) -> dict:
+    """Resolve one plan combination before constructing its JobSpec."""
     body = _expand_env_tree(_subst_matrix_scalar(copy.deepcopy(merged), combo))
 
     raw_id = merged.get("id")
@@ -281,14 +299,4 @@ def _build_spec(
     body["id"] = job_id
     body.setdefault("name", job_id)
 
-    src = body.get("source")
-    if not isinstance(src, dict) or not src.get("kind"):
-        raise PlanError(
-            _pfx(source) + f"job {job_id!r} needs a 'source' with a 'kind'"
-        )
-    try:
-        return JobSpec.from_dict(body)
-    except Exception as exc:  # noqa: BLE001 -- surfaced as an actionable PlanError
-        raise PlanError(
-            _pfx(source) + f"job {job_id!r} is invalid: {exc}"
-        ) from None
+    return body

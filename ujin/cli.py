@@ -553,6 +553,15 @@ def main(argv: list[str] | None = None) -> int:
     p_scrape.add_argument("--port", type=int, default=8901, help="port (default: 8901)")
     p_scrape.set_defaults(func=_cmd_scrape_serve)
 
+    from ujin.jobs.validate import _cmd_validate
+
+    p_validate = sub.add_parser("validate", help="check workflow/job YAML without running jobs")
+    p_validate.add_argument("paths", nargs="*", metavar="PATH")
+    p_validate.add_argument("--plugins", metavar="DIR", help="import plugin registrations from DIR")
+    p_validate.add_argument("--format", choices=("text", "json"), default="text")
+    p_validate.add_argument("--print-schema", action="store_true", help="print the editor JSON Schema")
+    p_validate.set_defaults(func=_cmd_validate)
+
     p_jobs = sub.add_parser(
         "jobs-serve", help="serve the unified job control plane (/jobs ...) (:8902)",
         description="Run the durable job control plane (source->transforms->sinks->"
