@@ -453,7 +453,6 @@ def _specs_from_workflow_file(path) -> list:
     from pathlib import Path
 
     path = Path(path)
-    stem = path.stem
     raw_text = open(path, encoding="utf-8").read()
 
     # A matrix template's per-entry `${VAR}` refs must survive to tree-level
@@ -467,28 +466,37 @@ def _specs_from_workflow_file(path) -> list:
     # File-level `defaults:` + `include:`/`use:` (deep-merged under every job).
     defaults, file_includes, data = _file_directives(data)
 
-    # Single-job mapping (no top-level `jobs:` list) -> the whole file is one job.
-    if isinstance(data, dict) and "jobs" not in data:
-        d = _resolve_job(data, defaults, file_includes, path)
-        if has_matrix:
-            return [JobSpec.from_dict(j) for j in _expand_matrix(d, stem, None)]
-        d.setdefault("id", stem)
-        d.setdefault("name", stem)
-        return [JobSpec.from_dict(d)]
+    return [JobSpec.from_dict(body) for _, body in
+            _workflow_bodies(data, defaults, file_includes, path, has_matrix)]
 
-    raw = data.get("jobs", data) if isinstance(data, dict) else data
-    raw = raw or []
-    specs = []
+
+def _workflow_bodies(data, defaults, file_includes, path, has_matrix, *, on_error=None):
+    """Resolve workflow entries; optionally report errors and continue siblings.
+
+    Shared by the server loader and the offline validator. The callback receives
+    the entry index and exception; without it loading retains fail-fast behavior.
+    """
+    single = isinstance(data, dict) and "jobs" not in data
+    raw = [data] if single else (data.get("jobs", data) if isinstance(data, dict) else data)
+    raw = raw or []  # a bare `jobs:` (null) loads zero jobs, as before the refactor
+    if not isinstance(raw, list):
+        raise ValueError("jobs must be a list of mappings")
     for i, entry in enumerate(raw):
-        d = _resolve_job(entry, defaults, file_includes, path)
-        if has_matrix:
-            idx = None if len(raw) == 1 else i
-            specs.extend(JobSpec.from_dict(j) for j in _expand_matrix(d, stem, idx))
-            continue
-        d.setdefault("id", stem if len(raw) == 1 else f"{stem}-{i}")
-        d.setdefault("name", d["id"])
-        specs.append(JobSpec.from_dict(d))
-    return specs
+        try:
+            d = _resolve_job(entry, defaults, file_includes, path)
+            if has_matrix:
+                idx = None if len(raw) == 1 else i
+                bodies = _expand_matrix(d, path.stem, idx)
+            else:
+                d.setdefault("id", path.stem if len(raw) == 1 else f"{path.stem}-{i}")
+                d.setdefault("name", path.stem if single else d["id"])
+                bodies = [d]
+            for body in bodies:
+                yield i, body
+        except Exception as exc:
+            if on_error is None:
+                raise
+            on_error(i, exc)
 
 
 def _load_workflows_dir(path: str, *, failed: list | None = None) -> list:

@@ -289,3 +289,38 @@ the registry. Two ways to extend the menu:
 poll), and `site-feeds.yaml` — which demonstrates `defaults:` plus an `include:`
 of the shared `fragments/sqlite-sink.yaml` fragment. Copy them into your mounted
 `./workflows` directory (fragments and all) to try them.
+
+## Validating a workflow
+
+Check files before starting the server (requires the `yaml` extra):
+
+```sh
+ujin validate examples/workflows examples/jobs.crossref.yaml
+ujin validate my-workflow.yaml --plugins ./plugins --format json
+ujin validate --print-schema
+```
+
+Validation exits 0 when every file is valid, or 1 with `path:line: message`
+diagnostics. JSON output is a list of `{path, line, message}` objects (empty on
+success). Directories use the server's top-level YAML glob; fragments in
+subdirectories are loaded through includes. Defaults, includes, templates and
+matrix expansion use the server loaders. Files declaring named `templates` or
+`fragments` use ingest-plan semantics; other files use workflow semantics.
+Validation checks resolved job structure, schedule modes and registered source,
+transform and sink kinds without building or running their factories. It does
+not test URLs, credentials or factory-specific configuration. `--plugins`
+imports the directory's Python modules to register their kinds, as at startup.
+
+For editor autocomplete, associate YAML files with
+[`schema/workflow.schema.json`](schema/workflow.schema.json), for example with a
+YAML language server modeline (adjust the relative path for your file):
+
+```yaml
+# yaml-language-server: $schema=../../docs/schema/workflow.schema.json
+```
+
+The schema permits partial job entries because defaults and fragments can
+supply required fields; the CLI checks those fields after resolution. Diagnostic
+lines use original YAML marks, with best-effort lookup for inherited or expanded
+values. Regenerate the committed schema with
+`ujin validate --print-schema > docs/schema/workflow.schema.json`.
