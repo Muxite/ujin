@@ -14,7 +14,10 @@ dependencies = []
 # HTTP + parsing toolkit (fetch/extract/cache/sources).
 web = [
     "aiohttp>=3.10",
-    "selectolax>=0.3",
+    # <1: selectolax 1.0 removed the Modest backend (selectolax.parser) that ujin
+    # imports; an unbounded spec makes every fresh install crash on import.
+    # Migrating to selectolax.lexbor is a separate follow-up.
+    "selectolax>=0.3,<1",
     "trafilatura>=1.12",
     "feedparser>=6.0",
 ]
