@@ -279,6 +279,7 @@ curl -X POST localhost:8900/targets -H 'content-type: application/json' \
 | env var | default | meaning |
 |---|---|---|
 | `HTTP_TIMEOUT_SECS` | 15 | per-request HTTP timeout |
+| `UJIN_COMBINED_HTML_TIMEOUT_SECS` | 10 | `mode=combined`: total budget (s) before the HTML leg is abandoned once a pinned `rss_url` has items |
 | `FETCH_TIMEOUT_SECS` | 30 | obscura render timeout |
 | `SCRAPER_USER_AGENT` | ujin UA | User-Agent header |
 | `PER_HOST_CONCURRENCY` | 2 | concurrent requests per host |

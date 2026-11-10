@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Feed dates are now ISO-8601 UTC.** `parse_feed` used to pass the feed's raw string through (RFC-2822 for RSS), contradicting the documented "ISO-8601 when parseable"; consumers calling `datetime.fromisoformat` silently lost every date. It now converts feedparser's parsed time to UTC ISO-8601 and falls back to the raw string only when a date can't be parsed. `/feed` items also carry `published_at` (same value as `published`) and combined-mode links get the ISO value in `published`.
+- **`mode=combined` no longer waits on a slow homepage when a feed pin exists.** With a per-host `rss_url`, the feed is collected first and the HTML leg is abandoned once `combined_html_timeout_secs` (default 10, a total budget from request start, env `UJIN_COMBINED_HTML_TIMEOUT_SECS`); on timeout the response is the feed items with `html_err=TimeoutError` in `note`. Without a pin behaviour is unchanged.
+- **`ujin validate`** — offline validation of workflow/job/ingest-plan YAML with `file:line` errors, plus a published JSON Schema at `docs/schema/workflow.schema.json` (`--print-schema`).
+- **Dependency:** `selectolax` capped `<1` (1.0 removed `selectolax.parser`, crashing fresh installs).
+
 ## 0.49.0 — 2026-07-21
 
 - **Workflow `defaults:` deep-merge + reusable fragments** — a top-level `defaults:` block in a workflow file is deep-merged into every job (per-job keys win, nested maps merge recursively); `include:` (alias `use:`) pulls in a reusable fragment file — a partial job mapping shared across jobs — resolved against `$UJIN_WORKFLOWS_DIR` first then the including file's directory, with nested-include support and a cycle guard (`WorkflowIncludeError`). Precedence: `defaults < file-level include < per-job include < inline job keys`. A missing fragment, cyclic include, or malformed directive is non-fatal for a workflows-directory file — logged and surfaced under `GET /health` `workflows.failed` — and fatal (fail-fast) for an explicit `--config` file. Existing single-file workflows with no `defaults`/`include` keys are unaffected. Ships `examples/workflows/site-feeds.yaml` + `examples/workflows/fragments/sqlite-sink.yaml`. Documented in `docs/WORKFLOWS.md` and `README.md`.

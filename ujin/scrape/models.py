@@ -639,7 +639,12 @@ class FeedItemModel(BaseModel):
     )
     published: Optional[str] = Field(
         None,
-        description="Publication date as published in the feed (ISO-8601 when parseable).",
+        description="Publication date, normalized to ISO-8601 UTC (the feed's raw string only if unparseable).",
+        examples=["2024-11-21T03:14:00+00:00"],
+    )
+    published_at: Optional[str] = Field(
+        None,
+        description="Alias of `published` (same value), for consumers that expect this key.",
         examples=["2024-11-21T03:14:00+00:00"],
     )
 

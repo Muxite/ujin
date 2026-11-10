@@ -312,7 +312,8 @@ async def feed(req: FeedRequest) -> FeedResponse:
     return FeedResponse(
         items=[
             FeedItemModel(
-                url=i.url, title=i.title, summary=i.summary, published=i.published
+                url=i.url, title=i.title, summary=i.summary,
+                published=i.published, published_at=i.published,
             )
             for i in items
         ]

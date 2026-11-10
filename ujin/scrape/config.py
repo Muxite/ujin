@@ -26,6 +26,10 @@ class ScrapeConfig:
     obscura_bin: str = "obscura"
     fetch_timeout_secs: int = 30
     http_timeout_secs: int = 15
+    # mode=combined: total time (from request start) before the HTML leg is abandoned
+    # once a pinned RSS leg has items, so a slow or bot-walled homepage can't hold back
+    # feed items already in hand.
+    combined_html_timeout_secs: int = 10
     user_agent: str = "Mozilla/5.0 (compatible; ujin-scrape/0.3)"
 
     # Browser automation (Playwright/Selenium). Off unless explicitly enabled and
@@ -103,6 +107,7 @@ class ScrapeConfig:
         "obscura_bin": "OBSCURA_BIN",
         "fetch_timeout_secs": "FETCH_TIMEOUT_SECS",
         "http_timeout_secs": "HTTP_TIMEOUT_SECS",
+        "combined_html_timeout_secs": "UJIN_COMBINED_HTML_TIMEOUT_SECS",
         "user_agent": "SCRAPER_USER_AGENT",
         "browser_enabled": "UJIN_BROWSER_ENABLED",
         "browser_engine": "UJIN_BROWSER_ENGINE",

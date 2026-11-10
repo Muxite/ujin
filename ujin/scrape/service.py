@@ -730,13 +730,9 @@ class ScrapeService:
         if override.rss_url:
             rss_task = asyncio.create_task(parse_feed(override.rss_url))
 
-        html_result: Optional[ScrapeResult] = None
-        html_err: Optional[Exception] = None
-        try:
-            html_result = await html_task
-        except Exception as exc:  # noqa: BLE001
-            html_err = exc
-
+        # With a pinned feed, collect it first and cap the HTML leg: the feed is the
+        # reliable source and must not wait on a slow/bot-walled homepage. Without a
+        # pin the HTML leg is the only source, so it gets the full normal wait.
         rss_items: list = []
         rss_err: Optional[Exception] = None
         if rss_task is not None:
@@ -744,6 +740,21 @@ class ScrapeService:
                 rss_items = await rss_task
             except Exception as exc:  # noqa: BLE001
                 rss_err = exc
+
+        html_result: Optional[ScrapeResult] = None
+        html_err: Optional[Exception] = None
+        try:
+            if rss_items:
+                # The cap is a budget from the start of the request, not a fresh
+                # allowance after a slow feed.
+                budget = self._config.combined_html_timeout_secs - (time.monotonic() - loop_start)
+                html_result = await asyncio.wait_for(html_task, timeout=max(0.0, budget))
+            else:
+                html_result = await html_task
+        except asyncio.TimeoutError as exc:
+            html_err = exc  # wait_for already cancelled html_task
+        except Exception as exc:  # noqa: BLE001
+            html_err = exc
 
         # 2. Merge by canonical URL. RSS wins on metadata (summary,
         # published); we union the seen_in tuple.
