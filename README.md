@@ -1,381 +1,232 @@
 # ujin
 
-The **ultimate scraper-poller**. Two halves that share one toolkit:
+**A config-driven scraper platform.** Describe what to fetch in YAML, or tell the
+HTTP API; ujin handles scheduling, politeness, fallbacks and delivery. You never
+edit ujin's code to point it at something new.
 
-1. **Adaptive multi-role poller** — poll *anything* (HTTP pages, RSS, JSON APIs,
-   GraphQL endpoints, shell commands, Python callables, scoped page regions, or
-   browser-driven interaction recipes, or profile-driven marketplace product
-   searches) on a cadence that **adapts** to change,
-   with **jitter** so aggregate load stays smooth.
-2. **Rich scrape service** — one-shot rendering + extraction with an
-   HTTP → obscura → sitemap → RSS fallback chain, per-host cooldown,
-   fingerprinted change detection, structured-data + HTML-table + image +
-   head-metadata + feed-URL + contact extraction, and optional social/trends sources —
-   all behind a small HTTP API.
+```yaml
+# workflows/crossref.yaml: one file is one job, the filename is its id
+source:
+  kind: api
+  config:
+    url: https://api.crossref.org/works?query=quantum&rows=50
+    json_path: message.items
+transforms:
+  - {kind: select, config: {where: {type: journal-article}, fields: [DOI, title]}}
+  - {kind: dedupe, config: {key: DOI}}
+sinks:
+  - {kind: jsonl, config: {path: /data/crossref.jsonl}}
+schedule: {mode: adaptive, base: 3600, min: 600, max: 86400}
+```
 
-It bundles the [obscura](https://github.com/Muxite/obscura) headless renderer as
-a submodule, and stays a **pure-python pip install** (the renderer is built
-separately, never at install time).
+Drop that file in `./workflows`, run `docker compose up`, and the latest data is
+at `GET /jobs/crossref/content`. Check a file before you deploy it with
+`ujin validate workflows/` (errors come back as `file:line: message`).
 
-## Why
+## What it does
 
-Naive pollers are either too slow (fixed long interval) or too aggressive (fixed
-short interval), and fixed-interval pollers drift into phase and produce periodic
-load spikes. ujin backs off targets that aren't changing, speeds up ones that
-are, retreats on errors/429s, and spreads work with jitter + a global token
-bucket. The scrape side adds everything you actually need to get clean content
-out of hostile real-world pages.
+ujin is two halves that share one toolkit:
 
-## Quick start — 60 seconds
+| | |
+|---|---|
+| **Adaptive poller** | Polls HTTP pages, RSS, JSON APIs, GraphQL, shell commands, Python callables, page regions and browser recipes. The interval **adapts** (backs off when nothing changes, speeds up when it does, retreats on 429s), with **jitter** and a global token bucket so load stays smooth. |
+| **Scrape service** | One-shot fetch and extraction with an HTTP → headless renderer → sitemap → RSS fallback chain, per-host cooldown and change fingerprints. Extracts links, articles, structured data, tables, images, metadata, feeds and contacts behind a small HTTP API. |
+
+On top sits a **jobs control plane**: *source → transforms → sinks → schedule*,
+durable across restarts, configured by YAML files or REST, extensible with
+Python plugins when the built-ins aren't enough.
+
+## Quick start
+
+**Container (recommended)**
 
 ```bash
-pip install -e ".[web]"      # HTTP/RSS/API roles + scrape toolkit
-ujin doctor                  # what's installed and what each backend unlocks
-ujin init                    # writes a commented starter targets.yaml
-ujin sweep targets.yaml      # one pass; prints which targets changed
-```
-
-`ujin init` scaffolds a ready-to-run `targets.yaml` (HTTP page, RSS feed, JSON
-API, shell command). `ujin sweep` polls them once and exits; `ujin serve` runs
-the same file as an adaptive, jittered daemon. `ujin --help` lists every command;
-each subcommand's `--help` carries usage examples.
-
-## Quick start — the poller
-
-```python
-import asyncio
-from ujin import PollEngine, HttpPollable, CallablePollable, CommandPollable
-
-engine = PollEngine()                       # smoothing token bucket built in
-engine.add(HttpPollable("https://example.com"), base=300, on_change=on_change)
-engine.add(CommandPollable(["git", "ls-remote", url]), base=600)
-engine.add(CallablePollable(lambda: db.count(), key="rows"), base=30)
-
-await engine.run()           # long-running daemon (adaptive + jittered)
-# or: results = await engine.sweep()   # one pass — cron-friendly
-
-# Opt-in learned pacing: per-host interval + concurrency that calibrate from
-# observed status/latency and survive a restart (default off, in-process store):
-#   PollEngine(adaptive=True)                       # in-memory SiteStore
-#   PollEngine(adaptive=True, site_store_path="state.db")  # persist + warm-restart
-#
-# Opt-in robots.txt auto-respect (requires adaptive=True):
-#   PollEngine(adaptive=True, respect_robots=True)
-#     — builds a RobotsCache; Crawl-delay floors the learned per-host interval;
-#       any URL whose path is Disallow-ed is silently skipped (not a failure).
-#   robots_ttl=3600.0   configures the robots.txt cache TTL (default 1 h)
-#   robots_fetcher=fn   inject an async fetcher for fully-offline tests
-```
-
-## Quick start — scraping
-
-```python
-from ujin.scrape.service import ScrapeService
-# or just run the HTTP service:  ujin scrape-serve   (POST /scrape, /feed, ...)
-```
-```bash
-curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
-  -d '{"url":"https://apnews.com","mode":"links"}'
-
-# multi-extract: fetch once, get several modes back under `extracts`
-# (`tables` parses every <table> into header-keyed row dicts in `tables`;
-#  `images` parses every <img> into normalized dicts in `images`;
-#  `metadata` returns a flat head-metadata summary in `metadata`;
-#  `feeds` returns declared <link rel="alternate"> feed URLs in `feeds`;
-#  `contacts` returns emails, phones, and social/profile links in `contacts`)
-curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
-  -d '{"url":"https://apnews.com","modes":["links","structured","tables","images","metadata","feeds","contacts","html"]}'
-
-# multi-URL batch: scrape many URLs concurrently, one result per URL under `batch`
-curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
-  -d '{"urls":["https://apnews.com","https://www.reuters.com/world/"],"mode":"links"}'
-```
-
-## Watch a page for change
-
-```bash
-ujin watch https://example.com --selector main --webhook https://hooks/me
-```
-Fingerprints only the regions matched by your selectors, so cosmetic churn
-elsewhere doesn't trip the watcher. Drives the same adaptive engine.
-
-## Jobs — configure almost any task over REST
-
-The unified control plane turns "watch this source, filter it, send it somewhere,
-on a timer" into a single durable, restart-surviving job — **source → transforms →
-sinks → schedule** — with no code for the common cases. See [docs/JOBS.md](docs/JOBS.md).
-
-```bash
-ujin jobs-serve                              # :8902, durable sqlite jobstore
-ujin jobs-serve examples/jobs.crossref.yaml  # preload jobs from YAML
-```
-
-```bash
-# Poll the Crossref API for new papers — filtered, deduped, jittered. Pure config.
-curl -X POST localhost:8902/jobs -H 'content-type: application/json' -d '{
-  "name": "crossref",
-  "source": {"kind": "api", "config": {
-    "url": "https://api.crossref.org/works?query=quantum&rows=50",
-    "json_path": "message.items"}},
-  "transforms": [{"kind": "select", "config": {"where": {"type": "journal-article"},
-                                               "fields": ["DOI","title"]}},
-                 {"kind": "dedupe", "config": {"key": "DOI"}}],
-  "sinks": [{"kind": "jsonl", "config": {"path": "/data/crossref.jsonl"}}],
-  "schedule": {"mode": "adaptive", "base": 3600, "min": 600, "max": 86400}
-}'
-```
-
-Prefer files over API calls? Drop workflow definitions into the mounted
-`./workflows` directory — each file is one workflow, the **filename stem is its
-id**, and ujin sets it up on startup, runs it, and hands back what it obtained at
-`GET /jobs/{id}/content` (latest) and `/jobs/{id}/results` (recent buffer). Share
-boilerplate across jobs with a top-level `defaults:` block (deep-merged into every
-job, per-job keys win) and reusable fragments via `include:`/`use:` (a shared sink,
-transform pipeline, or schedule; resolved against `$UJIN_WORKFLOWS_DIR` then the
-file's directory, with nested-include + cycle-guard support). A `matrix:` (alias
-`for_each:`) key fans **one template out into one job per entry** — a list of
-variable maps, or a mapping of axes expanded to the cartesian product —
-substituting each entry's `${VAR}` variables into the source/transforms/sinks/
-schedule with distinct, deterministic ids (a whole-scalar `${VAR}` keeps its
-numeric type), composing after `defaults:`/`include:` resolution. A malformed
-matrix or a duplicate generated id is reported non-fatally under `GET /health`
-`workflows.failed` while the rest keep loading. See
-[docs/WORKFLOWS.md](docs/WORKFLOWS.md).
-
-Declaring a whole batch at once? Mount a single **ingest plan** and pass
-`--plan <file>` (or set `$UJIN_INGEST_PLAN`, mirroring `$UJIN_MARKETPLACE_PROFILES`).
-One file declares many jobs, sharing config through `defaults` (deep-merged into
-every job) and a `matrix` (cartesian expansion), so `ujin jobs-serve --plan
-examples/ingest-plan.yaml` registers the whole topology on startup. A bad or
-missing plan is logged and surfaced on `/health` (never fatal). See
-[docs/INGEST_PLAN.md](docs/INGEST_PLAN.md).
-
-Need something the built-ins don't cover? Drop a Python file into the mounted
-`/plugins` volume and it becomes a `plugin:<name>` source/transform/sink — see
-[docs/PLUGINS.md](docs/PLUGINS.md). Sibling projects can also extend ujin in-tree
-with first-class kinds — see [docs/CAPABILITIES.md](docs/CAPABILITIES.md).
-
-## Browser automation — click "Load more" until it runs out
-
-JS-driven pages, infinite scroll, and "Load more" buttons need a real browser.
-A `browser` source runs a declarative **interaction recipe** (Playwright default,
-Selenium alternate), then feeds the fully-loaded HTML to the same extractors. The
-`load_more` action clicks until the list is exhausted — so you harvest *everything*,
-not just page one. Pair it with the `chunk` transform to hand an LLM digestible
-bites. Full guide: [docs/BROWSER.md](docs/BROWSER.md) + [recipes](docs/recipes/README.md).
-
-```bash
-docker compose --profile browser up ujin-jobs-browser   # browsers baked into ujin-browser image
-```
-
-```jsonc
-// harvest every publication behind a "Load 20 more" button, 25 per LLM call
-{ "name": "fels-pubs",
-  "source": { "kind": "browser", "config": {
-    "url": "https://www.ece.ubc.ca/~ssfels/",
-    "actions": [ { "action": "load_more", "button": "button.load-more",
-                   "results": ".publication-item", "max_clicks": 200 } ],
-    "extract": "links" } },
-  "transforms": [ { "kind": "chunk", "config": { "size": 25 } } ],
-  "sinks": [ { "kind": "forward", "config": { "url": "http://llm/ingest" } } ] }
-```
-
-The scrape service can also pin `render: "browser"` with `actions`, and supports
-`page_size`+`cursor` pagination so callers pull a big result set N items at a time.
-
-## CLI
-
-```bash
-ujin doctor                  # report installed backends/extras + what each unlocks
-ujin init [targets.yaml]     # scaffold a starter targets.yaml (-f to overwrite)
-ujin sweep targets.yaml      # poll all targets once; print what changed
-ujin serve targets.yaml      # run the poll engine as a daemon
-ujin api [targets.yaml]      # poller control service (REST + WS) on :8900
-ujin scrape-serve            # rich scrape HTTP service on :8901
-ujin jobs-serve [jobs.yaml]  # unified job control plane on :8902 (--plan for a batch ingest plan)
-ujin mcp-serve               # MCP server for agents (stdio; --http for HTTP)
-ujin watch URL --selector …  # watch a page's regions for change
-ujin learned site_state.db   # inspect the durable per-host learned state (--json)
-ujin obscura-build           # build the bundled headless renderer (needs cargo)
-ujin --version               # print the installed version
-```
-
-`ujin learned <db>` opens an existing `SiteStore` database read-only and prints,
-per host, the learned adaptive state — recommended interval, concurrency factor,
-health/cooldown/rate-limited, last observed status/latency, and any observed
-`Crawl-delay`. Add `--host HOST` to focus one host, `--strategy-db PATH` to also
-show the recommended `(backend, render_mode)`, and `--json` for machine-readable
-output. See [docs/ADAPTIVE.md](docs/ADAPTIVE.md#inspecting-learned-state-ujin-learned).
-
-Every command has examples in its `--help`. Config errors are actionable: a
-missing/invalid `targets.yaml` names the file (and line), an unknown source kind
-lists the valid ones, and a missing required key (e.g. `url`) names it.
-
-## HTTP services
-
-Three FastAPI apps — run any combination. Full reference in
-[docs/API.md](docs/API.md) and [docs/JOBS.md](docs/JOBS.md); interactive docs at `/docs` on each.
-
-- **Jobs control plane** (`:8902`): `POST /jobs` (source→transforms→sinks→schedule),
-  `GET/DELETE /jobs/{id}`, `/jobs/{id}/run|pause|resume|runs|events`,
-  `/jobs/{id}/content` + `/jobs/{id}/results` (hand out obtained data), `WS /jobs/events`,
-  `/kinds`, `/metrics`, `POST /plugins/reload`. Durable + plugin-extensible.
-  File-driven workflows load from `./workflows`, with shared `defaults:` and
-  `include:`/`use:` fragments — see [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
-- **Poller control** (`:8900`): `GET /health /metrics /targets`,
-  `GET /content?key=…` (reuse the body ujin last fetched), `POST /targets`,
-  `DELETE /targets/{key}`, `POST /sweep`, `WS /ws`.
-- **Scrape** (`:8901`): `POST /scrape` (modes `links|article|auto|combined|structured|tables|images|metadata|feeds|contacts`,
-  or a `modes` list for multi-extract — several modes over one fetch, results in
-  `extracts`; or a `urls` list to scrape many URLs concurrently — one result per
-  URL in `batch`), `/scrape:batch`, `/feed`, `/sitemap`, `/discover`, `/capabilities`,
-  `/metrics`, plus optional `/social/*` and `/trends/*`.
-
-Set `UJIN_API_KEY` to require `X-API-Key`/Bearer auth on every service
-(`/health` stays open).
-
-## MCP — ujin as an agent tool
-
-`ujin mcp-serve` (extra: `ujin[mcp]`) exposes scraping and the job control
-plane as MCP tools — `scrape_url`, `discover_site`, `get_capabilities`,
-`create_job`, `run_job`, `get_job_results`, … — over stdio for Claude Code /
-Claude Desktop or any MCP client: `claude mcp add ujin -- ujin mcp-serve`.
-See [docs/MCP.md](docs/MCP.md).
-
-## Docker
-
-```bash
-docker compose up --build                   # poller :8900 + scrape :8901 + jobs :8902 (pure-python, fast)
-docker compose --profile browser up --build # jobs+scrape on the browser image (:8902 / :8911)
-docker compose --profile render up --build  # also build the obscura-enabled service on :8912 (slow)
-```
-The default `ujin` image is pure-python and builds in seconds (the Rust stage is
-skipped). The `ujin-jobs` service mounts `./workflows` (file-driven workflow
-definitions), `./plugins` (drop-in custom code), and a named volume for its
-durable jobstore. The **`ujin-browser`** image (profile
-`browser`) bakes in Playwright + Chromium + Selenium/chromedriver for
-interaction-driven scraping (~1.5GB). The `ujin-full` target bakes the obscura
-renderer in for JS-heavy / anti-bot pages — its first build compiles V8 (~15–20 min).
-
-```bash
+docker compose up --build        # poller :8900 · scrape :8901 · jobs :8902
 curl localhost:8901/health
 curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
   -d '{"url":"https://example.com","mode":"structured"}'
 ```
 
-## How it works
+Mount points: `./workflows` (one YAML per job), `./plugins` (drop-in Python), and a
+named volume for the job store. The default image is pure Python and builds in
+seconds. Variants: `ujin-browser` (Playwright/Chromium, ~1.5 GB) and `ujin-full`
+(adds the obscura headless renderer; the first build compiles V8, ~15–20 min).
 
-- **Roles** (`ujin.poll`): `HttpPollable`, `RssPollable`, `ApiPollable`,
-  `GraphQLPollable` (POST a GraphQL query; narrows to a dotted `data_path`),
-  `CommandPollable`, `CallablePollable`, `SitePollable` (selector-scoped
-  change), and `BrowserPollable` (runs a declarative interaction recipe via
-  Playwright/Selenium, then feeds the loaded HTML to the extractors —
-  see [docs/BROWSER.md](docs/BROWSER.md)). `MultiPollable` fans out over N
-  child pollables and merges their results (used by `amazon_search` when
-  multiple `terms` are given); `MarketplaceSearchPollable` sweeps any site
-  via an externally-supplied profile (`$UJIN_MARKETPLACE_PROFILES` /
-  `profiles_path` / inline `profiles` — see
-  [docs/MARKETPLACE.md](docs/MARKETPLACE.md)). Each returns a `PollResult`
-  with a content fingerprint.
-- **Adaptive** (`ujin.adapt`): `AdaptiveInterval` grows/shrinks the interval;
-  full/equal/decorrelated **jitter**; `TokenBucket` + AIMD smoothing;
-  exponential `Backoff` (honors `Retry-After`) and a `CircuitBreaker`.
-  `SiteStore`/`HostRecord` persist per-host observations to SQLite; the pure
-  `derive_signals(record)` function converts a record into a frozen `PolicySignals`
-  struct (recommended interval, health score, cooldown, concurrency factor);
-  `SignalAdvisor` is a read-only bridge from store to signals. `StrategyFeedback`
-  tracks per-host `(backend, render_mode)` outcome rates for adaptive backend
-  selection (opt-in in the scrape service, below). `LearnedRateLimiter` composes all of the above + `ujin.robots`
-  `Crawl-delay` into a self-calibrating per-host rate/concurrency governor
-  (see [docs/ADAPTIVE.md](docs/ADAPTIVE.md) and [docs/ROBOTS.md](docs/ROBOTS.md)).
-  Pass `PollEngine(adaptive=True)` to wire it into the live engine: each host is
-  paced by its learned interval and a 429 durably backs it off
-  (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). Off by default — a no-config
-  engine is byte-identical to before.
-- **Scrape** (`ujin.scrape`): `ScrapeService` orchestrates fetch + cache +
-  extract + the fallback chain; a pluggable `Scorer` ranks links and paces polls
-  (`NullScorer` by default, `ujin.trends.BreakingScorer` for news-trading).
-  Set `ScrapeConfig(learn_strategy=True, strategy_db="strategy.db")` (env:
-  `UJIN_LEARN_STRATEGY` / `UJIN_STRATEGY_DB`) to close the adaptive loop: the
-  `auto` backend path biases its first `(backend, render_mode)` toward each host's
-  proven-best `StrategyFeedback.recommend()`, skips `is_penalized()` strategies,
-  and records every fetch outcome to a durable store (empty `strategy_db` →
-  ephemeral `:memory:`). Off by default — a no-config scrape is byte-identical
-  to before (see [docs/ADAPTIVE.md](docs/ADAPTIVE.md)).
-- **Toolkit**: `ujin.fetch` (HTTP + obscura + altpath), `ujin.extract`
-  (article/links/profile/**structured** JSON-LD·OG·microdata/**tables**/**images**/**metadata**/**feeds** `<link rel=alternate>`/**contacts** emails·phones·social links), `ujin.cache`
-  (LRU+TTL, SQLite, per-host cooldown), `ujin.sources` (RSS/sitemap/discover +
-  `social/`), `ujin.diff` (region diff + webhook sinks), `ujin.session`
-  (cookies), `ujin.proxy` (rotation).
+**Local**
 
-The engine takes injectable `clock`/`rng`/`sleep` for deterministic tests.
+```bash
+pip install -e ".[web]"
+ujin doctor                  # what's installed, and what each backend unlocks
+ujin init                    # writes a commented starter targets.yaml
+ujin sweep targets.yaml      # poll once, print what changed
+```
+
+## Configure it, don't code it
+
+| You want | You write |
+|---|---|
+| Poll a source on a schedule, filter it, send it somewhere | a workflow file in `./workflows` ([docs/WORKFLOWS.md](docs/WORKFLOWS.md)) |
+| Share boilerplate across jobs | `defaults:` and `include:` fragments |
+| One template, many jobs | `matrix:` fan-out (list of variable maps, or cartesian axes) |
+| A whole batch from one file | an ingest plan, `ujin jobs-serve --plan` ([docs/INGEST_PLAN.md](docs/INGEST_PLAN.md)) |
+| Tell ujin how one site behaves | `per_host.yaml`: pin a strategy, a feed or sitemap URL, or CSS selectors for a host |
+| Create jobs at runtime | `POST /jobs` ([docs/JOBS.md](docs/JOBS.md)) |
+| Something the built-ins don't cover | a Python file in `./plugins` ([docs/PLUGINS.md](docs/PLUGINS.md)) |
+| Use it from an agent | `ujin mcp-serve` ([docs/MCP.md](docs/MCP.md)) |
+
+**Validate before you deploy.** `ujin validate PATH...` loads files through the
+same resolver the server uses (defaults, includes, matrix and templates included),
+checks every source, transform and sink kind, and reports `file:line` errors. For
+editor completion, `ujin validate --print-schema` emits the JSON Schema committed
+at [docs/schema/workflow.schema.json](docs/schema/workflow.schema.json).
+
+**Per-host tuning is also config.** Sites differ: one has a clean feed, one is
+bot-walled, one needs a renderer. A `per_host.yaml` (set `PER_HOST_CONFIG_PATH`)
+records that once per host:
+
+```yaml
+hosts:
+  npr.org:
+    strategy: auto
+    rss_url: https://feeds.npr.org/1001/rss.xml   # combined mode uses this feed
+```
+
+## The scrape API
+
+```bash
+# links, several extractors over one fetch, or many URLs concurrently
+curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
+  -d '{"url":"https://example.com","modes":["links","structured","tables","metadata"]}'
+curl -X POST localhost:8901/scrape -H 'content-type: application/json' \
+  -d '{"urls":["https://a.example","https://b.example"],"mode":"links"}'
+
+# a feed, parsed; dates are ISO-8601 UTC
+curl -X POST localhost:8901/feed -H 'content-type: application/json' \
+  -d '{"url":"https://feeds.bbci.co.uk/news/world/rss.xml"}'
+```
+
+`mode=combined` fetches a homepage and its feed in parallel and merges them. When
+a feed is pinned, the feed's items are returned even if the homepage is slow or
+bot-walled (`UJIN_COMBINED_HTML_TIMEOUT_SECS`, default 10).
+
+Modes: `links · article · auto · combined · structured · tables · images · metadata · feeds · contacts`.
+Also `/scrape:batch`, `/sitemap`, `/discover`, `/capabilities`, `/metrics`, and
+optional `/social/*` and `/trends/*`. Interactive docs are at `/docs` on each
+service; the full reference is [docs/API.md](docs/API.md).
+
+Set `UJIN_API_KEY` to require `X-API-Key` or Bearer auth everywhere (`/health`
+stays open).
+
+## Poller as a library
+
+```python
+from ujin import PollEngine, HttpPollable, CommandPollable, CallablePollable
+
+engine = PollEngine(adaptive=True, site_store_path="state.db")  # learned pacing, survives restarts
+engine.add(HttpPollable("https://example.com"), base=300, on_change=on_change)
+engine.add(CommandPollable(["git", "ls-remote", url]), base=600)
+engine.add(CallablePollable(lambda: db.count(), key="rows"), base=30)
+
+await engine.run()                 # daemon: adaptive + jittered
+# results = await engine.sweep()   # or one pass, cron-friendly
+```
+
+Opt-in `respect_robots=True` honors `Crawl-delay` and skips disallowed paths.
+Details: [docs/ADAPTIVE.md](docs/ADAPTIVE.md), [docs/ROBOTS.md](docs/ROBOTS.md).
+
+Other things worth knowing about: page-region change watching
+(`ujin watch URL --selector main --webhook …`), browser recipes that click
+"Load more" until a list is exhausted ([docs/BROWSER.md](docs/BROWSER.md)), and
+marketplace search driven by external profiles ([docs/MARKETPLACE.md](docs/MARKETPLACE.md)).
+
+## CLI
+
+```
+ujin doctor                  installed backends and extras
+ujin init [targets.yaml]     scaffold a starter file
+ujin validate PATH...        check workflow/job/plan files (--print-schema, --format json)
+ujin sweep | serve FILE      poll once | run the adaptive daemon
+ujin api                     poller control service       :8900
+ujin scrape-serve            scrape HTTP service          :8901
+ujin jobs-serve [FILE]       job control plane            :8902 (--plan for a batch)
+ujin mcp-serve               MCP server for agents
+ujin watch URL --selector …  watch regions of a page
+ujin learned site_state.db   inspect learned per-host state
+ujin obscura-build           build the bundled renderer (needs cargo)
+```
+
+## In practice: the nexus trading pipeline
+
+ujin is the shared scraping service for [nexus](https://github.com/Muxite/nexus),
+a news-driven trading research project: two consumers call `POST /feed` and
+`POST /scrape` against it. Pointing ujin at nexus's real sources found real bugs,
+which is why the suite is run against live sources, not just fixtures. A pass over
+nexus's 91 sources (59 feeds, 32 homepages):
+
+- Feeds were reliable: 57 of 59 answered, median 0.16 s.
+- Homepages were the hard part. 19 of 32 returned links with no site-specific
+  config; pinning per-host strategies and feeds in `per_host.yaml` recovered most
+  of the rest with no code change.
+- The run exposed two defects, now fixed: feed dates were returned as raw RFC-2822
+  strings instead of ISO-8601, and `combined` mode waited on a slow homepage even
+  when a pinned feed had already answered.
+- Still unsolved: `apnews.com` and `reuters.com` block automated clients and
+  returned nothing, even through the bundled renderer. Config can't fix a site
+  that refuses to be read.
+
+Raw results live in `bench/real/results/`.
+
+## Layout and extension points
+
+- `ujin.poll`: poll roles (HTTP, RSS, API, GraphQL, command, callable, site, browser, marketplace), each returning a `PollResult` with a content fingerprint.
+- `ujin.adapt`: adaptive intervals, jitter, token bucket, backoff, circuit breaker, and the persisted per-host `SiteStore`.
+- `ujin.scrape`: `ScrapeService` (fetch + cache + extract + fallback chain), pluggable `Scorer`, per-host overrides.
+- `ujin.jobs`: job model, store, pipeline, workflow/plan loaders, `validate`.
+- Toolkit: `ujin.fetch`, `ujin.extract`, `ujin.cache`, `ujin.sources`, `ujin.diff`, `ujin.session`, `ujin.proxy`.
+
+The engine takes injectable `clock`/`rng`/`sleep`, so the offline suite is
+deterministic. The obscura renderer is a submodule excluded from the wheel:
+`pip install ujin` never triggers a Rust build.
 
 ## Install
 
 ```bash
-pip install -e .              # core: engine + adapt + callable/command roles (no deps)
+pip install -e .              # core: engine + adaptive + callable/command roles (no dependencies)
 pip install -e ".[web]"       # + HTTP/RSS/API roles and the scrape toolkit
-pip install -e ".[scrape]"    # + the rich scrape HTTP service
-pip install -e ".[mcp]"       # + the MCP server for agents
-pip install -e ".[all]"       # everything (web, service, scrape, social, diff, sessions, jobs, browser, mcp)
-```
-Core is dependency-free; heavier features pull `aiohttp`/`selectolax`/
-`trafilatura`/`feedparser`/`fastapi` lazily behind extras. The obscura submodule
-is **excluded from the wheel** — `pip install ujin` never triggers a Rust build.
-
-```bash
-git submodule update --init --recursive   # fetch the obscura renderer source
-ujin obscura-build                         # build it (optional; needs cargo)
+pip install -e ".[scrape]"    # + the scrape HTTP service
+pip install -e ".[mcp]"       # + the MCP server
+pip install -e ".[all]"       # everything
 ```
 
 ## Development
 
 ```bash
 make install-dev   # editable install with everything
-make cov           # the CI gate: full offline suite + coverage (fail_under=85)
-make bench         # benchmarks vs the committed baseline
+make cov           # the CI gate: offline suite + coverage (floor 90%)
+make bench         # benchmarks against the committed baseline
 ```
 
-Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [ADAPTIVE](docs/ADAPTIVE.md) ·
-[ROBOTS](docs/ROBOTS.md) · [TESTING](docs/TESTING.md) ·
-[BACKENDS](docs/BACKENDS.md) (aiohttp vs obscura vs playwright vs selenium) ·
-[PERFORMANCE](docs/PERFORMANCE.md) · [CONSUMERS](docs/CONSUMERS.md)
-(downstream submodule contracts) · [API](docs/API.md) · [JOBS](docs/JOBS.md) ·
-[WORKFLOWS](docs/WORKFLOWS.md) · [INGEST_PLAN](docs/INGEST_PLAN.md) · [PLUGINS](docs/PLUGINS.md) ·
-[LIST_TRANSFORMS](docs/LIST_TRANSFORMS.md) (filter/flatten/sort/limit/rename/aggregate/unique/fill/csv) ·
-[MARKETPLACE](docs/MARKETPLACE.md) (generic engine; site profiles supplied externally) ·
-[BROWSER](docs/BROWSER.md) · [MCP](docs/MCP.md) · [CHANGELOG](CHANGELOG.md)
+## Docs
+
+[ARCHITECTURE](docs/ARCHITECTURE.md) · [ADAPTIVE](docs/ADAPTIVE.md) · [ROBOTS](docs/ROBOTS.md) ·
+[BACKENDS](docs/BACKENDS.md) · [PERFORMANCE](docs/PERFORMANCE.md) · [TESTING](docs/TESTING.md) ·
+[API](docs/API.md) · [JOBS](docs/JOBS.md) · [WORKFLOWS](docs/WORKFLOWS.md) ·
+[INGEST_PLAN](docs/INGEST_PLAN.md) · [PLUGINS](docs/PLUGINS.md) · [CAPABILITIES](docs/CAPABILITIES.md) ·
+[LIST_TRANSFORMS](docs/LIST_TRANSFORMS.md) · [MARKETPLACE](docs/MARKETPLACE.md) ·
+[BROWSER](docs/BROWSER.md) · [MCP](docs/MCP.md) · [CONSUMERS](docs/CONSUMERS.md) · [CHANGELOG](CHANGELOG.md)
 
 ## Troubleshooting
 
-Run **`ujin doctor`** first — it shows which fetch backends and Python extras are
-installed and the exact `pip install` to enable each missing one.
+Run `ujin doctor` first. Then:
 
-- **`ModuleNotFoundError: aiohttp` (or `fastapi`, `selectolax`, …)** — a feature
-  needs an optional extra. `ujin doctor` lists what's missing; install it, e.g.
-  `pip install -e ".[web]"` for HTTP/RSS/API roles or `".[scrape]"` for the
-  scrape service. Core is dependency-free by design.
-- **`ujin: targets file not found`** — pass a real path, or run `ujin init` to
-  scaffold one.
-- **`ujin: invalid YAML in targets.yaml (line N, column M)`** — a YAML syntax
-  error at that location (usually indentation or an unclosed `{`). Each target is
-  a single-key mapping: `- http: { url: https://… }`.
-- **`unknown source kind 'x'; available: …`** — the kind isn't registered. Use
-  one of the listed built-ins, or load your plugin (see docs/PLUGINS.md) and
-  reference it as `plugin:<name>`.
-- **`missing required config key 'url'`** — that source needs the named key in
-  its `config` block.
-- **`render: "browser"` / `kind: browser` does nothing** — browser automation is
-  off unless `ujin[browser]` is installed and the engine is available
-  (`ujin doctor` shows playwright/selenium status). See docs/BROWSER.md.
-- **Auth: every service returns 401** — `UJIN_API_KEY` is set, so all endpoints
-  except `/health` require `X-API-Key`/`Bearer`. Unset it to run open.
+- **`ModuleNotFoundError: aiohttp` / `fastapi` / `selectolax`**: a feature needs an extra; `ujin doctor` prints the exact `pip install`.
+- **A workflow isn't loading**: `ujin validate <file>` names the line; load failures also show under `GET /health` → `workflows.failed`.
+- **`unknown source kind 'x'`**: use a listed built-in, or load your plugin and write `plugin:<name>`.
+- **`kind: browser` does nothing**: needs `ujin[browser]` and an available engine (`ujin doctor`).
+- **Every request returns 401**: `UJIN_API_KEY` is set. Send `X-API-Key`, or unset it.
 
 ## Lineage
 
-Formerly `scraperv2`, extracted from jennie's scraper-v2. The poller (`poll/`,
-`adapt/`, `engine.py`) was built fresh; the scrape service reaches feature/
-endpoint parity with scraper-v2 so jennie's irene pipeline can migrate onto ujin.
-News-trading scoring (tiering/corroboration/breaking score) stays optional behind
-`ujin.trends.BreakingScorer`. Consumed by awork, hct-site, and wordle-max as a
-submodule — see [docs/CONSUMERS.md](docs/CONSUMERS.md) before breaking anything.
+Formerly `scraperv2`, extracted from the scraper in the author's earlier
+trading pipeline. Used as a submodule by sibling projects; see
+[docs/CONSUMERS.md](docs/CONSUMERS.md) before changing a documented contract.
