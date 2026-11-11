@@ -1,8 +1,41 @@
-# ujin
+<h1 align="center">ujin</h1>
 
-**A config-driven scraper platform.** Describe what to fetch in YAML, or tell the
-HTTP API; ujin handles scheduling, politeness, fallbacks and delivery. You never
-edit ujin's code to point it at something new.
+<p align="center"><b>Point it at the web with YAML. Get clean data back.</b><br>
+A config-driven scraper platform: scheduling, politeness, fallbacks and delivery are
+handled for you, and you never edit ujin's code to aim it at something new.</p>
+
+<p align="center">
+  <img alt="python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white">
+  <img alt="docker ready" src="https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white">
+  <img alt="config driven" src="https://img.shields.io/badge/config-YAML%20%2B%20REST-7C3AED">
+  <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-green">
+</p>
+
+## The problem, and the answer
+
+Scraping real sites is rarely "fetch a URL". Every new target brings the same chores,
+and the usual fix is another one-off script.
+
+| The usual pain | What ujin does instead |
+|---|---|
+| A new source means a new script | One YAML file per source: **source → transforms → sinks → schedule** |
+| Fixed intervals hammer quiet sites and miss fast ones | The interval **adapts**: backs off when nothing changes, speeds up when it does, retreats on 429s |
+| Every site is a special case in your code | A per-host config pins a strategy, a feed or sitemap URL, or selectors, once |
+| One blocked fetch and you get nothing | A fallback chain: HTTP → headless renderer → sitemap → RSS |
+| Typos surface at 3 a.m. | `ujin validate` reports `file:line` errors before you deploy |
+| Results end up scattered | Sinks (JSONL, SQLite, webhooks, forward) and `GET /jobs/{id}/content` |
+
+```mermaid
+flowchart LR
+    Y["YAML files<br/>or POST /jobs"] --> J["Jobs control plane<br/>durable, restart-safe"]
+    J --> C["Adaptive scheduler<br/>jitter + token bucket"]
+    C --> S["Source<br/>API, RSS, page, command, browser"]
+    S --> T["Transforms<br/>select, dedupe, chunk, ..."]
+    T --> K["Sinks<br/>JSONL, SQLite, webhook, forward"]
+    K --> D[("Your data<br/>GET /jobs/id/content")]
+    S -. "scrape sources" .-> F["Fallback chain<br/>HTTP, renderer, sitemap, RSS"]
+    H["per_host.yaml<br/>one-time site knowledge"] -.-> F
+```
 
 ```yaml
 # workflows/crossref.yaml: one file is one job, the filename is its id
