@@ -96,7 +96,7 @@ workloads and is only justified for sustained crawl bursts.**
   pages/sec** for full-extraction mode (dominated by trafilatura's ~6.8 ms/page)
   or **~815 pages/sec** for links-only mode.
 - **Polling workload** (typical): 1 000 targets at 60 s intervals ≈ 17 pages/sec
-  — **14× below** the full-extraction ceiling. Extraction is idle >99% of the
+  — **about 8× below** the full-extraction ceiling (140 / 17 ≈ 8.2). Extraction is idle >99% of the
   time. A single process is the bottleneck nowhere; the network and rate-limiter
   always dominate. → **NO-GO.**
 - **Crawl workload**: ≥100 parallel HTTP connections × ~0.7 s avg fetch ≈ 140
