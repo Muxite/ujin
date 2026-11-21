@@ -17,7 +17,7 @@ services:
     image: ujin:latest
     command: ["api", "--host", "0.0.0.0", "--port", "8900"]
     ports:
-      - "8900:8900"
+      - "127.0.0.1:8900:8900"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8900/health', timeout=3)"]
       interval: 30s
@@ -39,7 +39,7 @@ services:
       - UJIN_BREAKING_SCORER=${UJIN_BREAKING_SCORER:-}
       - SEARCH_API_KEY=${SEARCH_API_KEY:-}
     ports:
-      - "8901:8901"
+      - "127.0.0.1:8901:8901"
     init: true            # reap any obscura/browser <defunct> subprocesses
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8901/health', timeout=3)"]
@@ -68,7 +68,7 @@ services:
       - ./workflows:/workflows    # workflow definition files (id = file stem)
       - ujin-jobs-data:/data      # durable jobstore (survives restarts)
     ports:
-      - "8902:8902"
+      - "127.0.0.1:8905:8902"
     init: true
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8902/health', timeout=3)"]
@@ -103,7 +103,7 @@ services:
       - ujin-jobs-data:/data
       - ujin-browser-cache:/ms-playwright   # cache the downloaded browser binary
     ports:
-      - "8902:8902"
+      - "127.0.0.1:8902:8902"
     init: true            # reap zombie chromium subprocesses
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8902/health', timeout=3)"]
@@ -129,7 +129,7 @@ services:
     volumes:
       - ujin-browser-cache:/ms-playwright
     ports:
-      - "8911:8901"
+      - "127.0.0.1:8911:8901"
     init: true
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8901/health', timeout=3)"]
@@ -152,7 +152,7 @@ services:
       - UJIN_BREAKING_SCORER=${UJIN_BREAKING_SCORER:-}
       - SEARCH_API_KEY=${SEARCH_API_KEY:-}
     ports:
-      - "8912:8901"
+      - "127.0.0.1:8912:8901"
     init: true
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8901/health', timeout=3)"]
