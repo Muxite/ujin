@@ -1,0 +1,18 @@
+# eBay 3090 Watcher
+# Workflow id = `ebay-3090`
+
+source:
+  kind: http
+  config:
+    url: "https://www.ebay.ca/sch/i.html?_nkw=3090&_sacat=0&_from=R40&_trksid=p4624852.m570.l1313"
+    # eBay often requires a real User-Agent to avoid 403s
+    headers:
+      User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+sinks:
+  - kind: sqlite          # record change events durably
+  - kind: stdout          # log to container output for visibility
+
+schedule:
+  mode: fixed
+  interval: 43200           # 12 hours in seconds
